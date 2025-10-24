@@ -51,17 +51,18 @@ jobs:
             try {
               // Debug: Check if passphrase is set
               console.log('Passphrase provided:', process.env.SFTP_PASSPHRASE ? 'YES' : 'NO');
+              console.log('Private key length:', process.env.SFTP_PRIVATE_KEY?.length || 0);
               console.log('Connecting to SFTP...');
               
               const connectConfig = {
                 host: process.env.SFTP_HOST,
                 port: parseInt(process.env.SFTP_PORT),
                 username: process.env.SFTP_USERNAME,
-                privateKey: process.env.SFTP_PRIVATE_KEY,
+                privateKey: Buffer.from(process.env.SFTP_PRIVATE_KEY, 'utf-8'),
                 readyTimeout: 30000,
               };
               
-              // Only add passphrase if it exists
+              // Add passphrase if it exists
               if (process.env.SFTP_PASSPHRASE) {
                 connectConfig.passphrase = process.env.SFTP_PASSPHRASE;
               }
