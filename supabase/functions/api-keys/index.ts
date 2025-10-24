@@ -7,13 +7,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-function generateApiKey(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let result = 'mbk_'; // modis bridge key prefix
-  for (let i = 0; i < 32; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
+async function hashKey(key: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(key);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 serve(async (req) => {
@@ -25,97 +24,116 @@ serve(async (req) => {
   const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  const url = new URL(req.url);
-  const pathParts = url.pathname.split('/').filter(Boolean);
-
   try {
-    // POST /api-keys - Create new API key
-    if (req.method === 'POST' && pathParts.length === 2) {
-      const body = await req.json();
-      const keyName = body.name || 'Unnamed Key';
-      
-      const apiKey = generateApiKey();
-
-      const { data, error } = await supabase
-        .from('api_keys')
-        .insert({
-          name: keyName,
-          key_hash: apiKey, // In production, hash this with bcrypt
-          created_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
-
-      if (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      return new Response(JSON.stringify({ 
-        id: data.id,
-        name: data.name,
-        key: apiKey, // Only returned once
-        created_at: data.created_at,
-      }), {
-        status: 201,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // DELETE /api-keys/:id
-    if (req.method === 'DELETE' && pathParts.length === 3) {
-      const keyId = pathParts[2];
-
-      const { error } = await supabase
-        .from('api_keys')
-        .delete()
-        .eq('id', keyId);
-
-      if (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      return new Response(JSON.stringify({ success: true }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // GET /api-keys - List all keys
-    if (req.method === 'GET' && pathParts.length === 2) {
+    // GET - List all API keys (without showing actual keys)
+    if (req.method === 'GET') {
       const { data, error } = await supabase
         .from('api_keys')
         .select('id, name, created_at, last_used_at')
         .order('created_at', { ascending: false });
 
       if (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        console.error('Error fetching API keys:', error);
+        return new Response(
+          JSON.stringify({ error: error.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
 
-      return new Response(JSON.stringify({ keys: data }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify(data || []),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    return new Response(JSON.stringify({ error: 'Not found' }), {
-      status: 404,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    // POST - Generate new API key
+    if (req.method === 'POST') {
+      const { name } = await req.json();
+
+      if (!name) {
+        return new Response(
+          JSON.stringify({ error: 'Name is required' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Generate random API key
+      const randomBytes = new Uint8Array(32);
+      crypto.getRandomValues(randomBytes);
+      const apiKey = Array.from(randomBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+      const hash = await hashKey(apiKey);
+
+      const { data, error } = await supabase
+        .from('api_keys')
+        .insert({
+          name,
+          key_hash: hash,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error creating API key:', error);
+        return new Response(
+          JSON.stringify({ error: error.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      console.log(`API key created: ${name}`);
+
+      return new Response(
+        JSON.stringify({ 
+          ...data,
+          key: apiKey, // Only returned once during creation
+        }),
+        { status: 201, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // DELETE - Remove API key
+    if (req.method === 'DELETE') {
+      const url = new URL(req.url);
+      const id = url.pathname.split('/').pop();
+
+      if (!id) {
+        return new Response(
+          JSON.stringify({ error: 'API key ID is required' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const { error } = await supabase
+        .from('api_keys')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error deleting API key:', error);
+        return new Response(
+          JSON.stringify({ error: error.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      console.log(`API key deleted: ${id}`);
+
+      return new Response(
+        JSON.stringify({ success: true }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({ error: 'Method not allowed' }),
+      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
 
   } catch (error: any) {
-    console.error('Error in api-keys:', error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    console.error('Error in api-keys endpoint:', error);
+    return new Response(
+      JSON.stringify({ error: error.message }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 });

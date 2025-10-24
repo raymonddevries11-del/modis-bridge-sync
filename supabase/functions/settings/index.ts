@@ -16,117 +16,97 @@ serve(async (req) => {
   const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  const url = new URL(req.url);
-  const pathParts = url.pathname.split('/').filter(Boolean);
-
   try {
-    // POST /settings/sftp
-    if (req.method === 'POST' && pathParts[2] === 'sftp') {
-      const body = await req.json();
-      
-      const { error } = await supabase
-        .from('config')
-        .upsert({
-          key: 'sftp',
-          value: {
-            host: body.host,
-            port: body.port,
-            username: body.username,
-            inboundPath: body.inboundPath,
-            outboundPath: body.outboundPath,
-          },
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'key' });
+    const url = new URL(req.url);
+    const pathParts = url.pathname.split('/').filter(Boolean);
+    const endpoint = pathParts[pathParts.length - 1]; // Get last part (e.g., 'woocommerce' or 'sftp')
 
-      if (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
+    console.log(`Settings endpoint: ${endpoint}, method: ${req.method}`);
 
-      return new Response(JSON.stringify({ success: true }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // POST /settings/woocommerce
-    if (req.method === 'POST' && pathParts[2] === 'woocommerce') {
-      const body = await req.json();
-      
-      const { error } = await supabase
-        .from('config')
-        .upsert({
-          key: 'woocommerce',
-          value: {
-            url: body.url,
-            consumerKey: body.consumerKey,
-            consumerSecret: body.consumerSecret,
-          },
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'key' });
-
-      if (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      return new Response(JSON.stringify({ success: true }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // GET /settings/:key
-    if (req.method === 'GET' && pathParts.length === 3) {
-      const key = pathParts[2];
-      
+    // GET requests - retrieve config
+    if (req.method === 'GET') {
       const { data, error } = await supabase
         .from('config')
         .select('value')
-        .eq('key', key)
+        .eq('key', endpoint)
         .maybeSingle();
 
       if (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        console.error('Error fetching config:', error);
+        return new Response(
+          JSON.stringify({ error: error.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
 
-      if (!data) {
-        return new Response(JSON.stringify({ value: null }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      // Mask sensitive data
-      let maskedValue = { ...data.value };
-      if (key === 'woocommerce') {
-        if (maskedValue.consumerKey) maskedValue.consumerKey = maskedValue.consumerKey.substring(0, 8) + '***';
-        if (maskedValue.consumerSecret) maskedValue.consumerSecret = '***';
-      }
-
-      return new Response(JSON.stringify({ value: maskedValue }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify(data?.value || null),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    return new Response(JSON.stringify({ error: 'Not found' }), {
-      status: 404,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    // POST requests - save config
+    if (req.method === 'POST') {
+      const body = await req.json();
+      
+      // Mask sensitive data for logging
+      const maskedBody = { ...body };
+      if (maskedBody.consumerSecret) maskedBody.consumerSecret = '***';
+      console.log('Saving config:', endpoint, maskedBody);
+
+      const { error } = await supabase
+        .from('config')
+        .upsert({
+          key: endpoint,
+          value: body,
+          updated_at: new Date().toISOString(),
+        });
+
+      if (error) {
+        console.error('Error saving config:', error);
+        return new Response(
+          JSON.stringify({ error: error.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ success: true }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // DELETE requests - remove config
+    if (req.method === 'DELETE') {
+      const { error } = await supabase
+        .from('config')
+        .delete()
+        .eq('key', endpoint);
+
+      if (error) {
+        console.error('Error deleting config:', error);
+        return new Response(
+          JSON.stringify({ error: error.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ success: true }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({ error: 'Method not allowed' }),
+      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
 
   } catch (error: any) {
-    console.error('Error in settings:', error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    console.error('Error in settings endpoint:', error);
+    return new Response(
+      JSON.stringify({ error: error.message }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 });
