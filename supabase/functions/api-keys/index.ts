@@ -25,8 +25,12 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    // GET - List all API keys (without showing actual keys)
-    if (req.method === 'GET') {
+    const { action, name, id } = await req.json();
+
+    console.log(`API Keys: action=${action}`);
+
+    // LIST - Get all API keys
+    if (action === 'list') {
       const { data, error } = await supabase
         .from('api_keys')
         .select('id, name, created_at, last_used_at')
@@ -46,10 +50,8 @@ serve(async (req) => {
       );
     }
 
-    // POST - Generate new API key
-    if (req.method === 'POST') {
-      const { name } = await req.json();
-
+    // CREATE - Generate new API key
+    if (action === 'create') {
       if (!name) {
         return new Response(
           JSON.stringify({ error: 'Name is required' }),
@@ -92,10 +94,7 @@ serve(async (req) => {
     }
 
     // DELETE - Remove API key
-    if (req.method === 'DELETE') {
-      const url = new URL(req.url);
-      const id = url.pathname.split('/').pop();
-
+    if (action === 'delete') {
       if (!id) {
         return new Response(
           JSON.stringify({ error: 'API key ID is required' }),
@@ -125,8 +124,8 @@ serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ error: 'Method not allowed' }),
-      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ error: 'Invalid action' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error: any) {

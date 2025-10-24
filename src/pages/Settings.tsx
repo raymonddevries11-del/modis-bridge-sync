@@ -61,14 +61,14 @@ const Settings = () => {
   useQuery({
     queryKey: ['settings', 'sftp'],
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke('settings/sftp', {
-        method: 'GET',
+      const { data, error } = await supabase.functions.invoke('settings', {
+        body: { action: 'get', key: 'sftp' },
       });
       if (error) throw error;
-      if (data?.value) {
-        sftpForm.reset(data.value);
+      if (data) {
+        sftpForm.reset(data);
       }
-      return data?.value;
+      return data;
     },
   });
 
@@ -76,14 +76,14 @@ const Settings = () => {
   useQuery({
     queryKey: ['settings', 'woocommerce'],
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke('settings/woocommerce', {
-        method: 'GET',
+      const { data, error } = await supabase.functions.invoke('settings', {
+        body: { action: 'get', key: 'woocommerce' },
       });
       if (error) throw error;
-      if (data?.value) {
-        wooForm.reset(data.value);
+      if (data) {
+        wooForm.reset(data);
       }
-      return data?.value;
+      return data;
     },
   });
 
@@ -92,19 +92,18 @@ const Settings = () => {
     queryKey: ['api-keys'],
     queryFn: async () => {
       const { data, error } = await supabase.functions.invoke('api-keys', {
-        method: 'GET',
+        body: { action: 'list' },
       });
       if (error) throw error;
-      return data?.keys || [];
+      return data || [];
     },
   });
 
   // Save SFTP settings
   const saveSftpMutation = useMutation({
     mutationFn: async (data: SftpFormData) => {
-      const { error } = await supabase.functions.invoke('settings/sftp', {
-        method: 'POST',
-        body: data,
+      const { error } = await supabase.functions.invoke('settings', {
+        body: { action: 'save', key: 'sftp', value: data },
       });
       if (error) throw error;
     },
@@ -120,9 +119,8 @@ const Settings = () => {
   // Save WooCommerce settings
   const saveWooMutation = useMutation({
     mutationFn: async (data: WooCommerceFormData) => {
-      const { error } = await supabase.functions.invoke('settings/woocommerce', {
-        method: 'POST',
-        body: data,
+      const { error } = await supabase.functions.invoke('settings', {
+        body: { action: 'save', key: 'woocommerce', value: data },
       });
       if (error) throw error;
     },
@@ -159,8 +157,8 @@ const Settings = () => {
   // Delete API key
   const deleteApiKeyMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.functions.invoke(`api-keys/${id}`, {
-        method: 'DELETE',
+      const { error } = await supabase.functions.invoke('api-keys', {
+        body: { action: 'delete', id },
       });
       if (error) throw error;
     },

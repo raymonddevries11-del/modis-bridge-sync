@@ -17,18 +17,16 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    const url = new URL(req.url);
-    const pathParts = url.pathname.split('/').filter(Boolean);
-    const endpoint = pathParts[pathParts.length - 1]; // Get last part (e.g., 'woocommerce' or 'sftp')
+    const { action, key, value } = await req.json();
+    
+    console.log(`Settings: action=${action}, key=${key}`);
 
-    console.log(`Settings endpoint: ${endpoint}, method: ${req.method}`);
-
-    // GET requests - retrieve config
-    if (req.method === 'GET') {
+    // GET - retrieve config
+    if (action === 'get') {
       const { data, error } = await supabase
         .from('config')
         .select('value')
-        .eq('key', endpoint)
+        .eq('key', key)
         .maybeSingle();
 
       if (error) {
@@ -45,20 +43,18 @@ serve(async (req) => {
       );
     }
 
-    // POST requests - save config
-    if (req.method === 'POST') {
-      const body = await req.json();
-      
+    // SAVE - save config
+    if (action === 'save') {
       // Mask sensitive data for logging
-      const maskedBody = { ...body };
-      if (maskedBody.consumerSecret) maskedBody.consumerSecret = '***';
-      console.log('Saving config:', endpoint, maskedBody);
+      const maskedValue = { ...value };
+      if (maskedValue.consumerSecret) maskedValue.consumerSecret = '***';
+      console.log('Saving config:', key, maskedValue);
 
       const { error } = await supabase
         .from('config')
         .upsert({
-          key: endpoint,
-          value: body,
+          key: key,
+          value: value,
           updated_at: new Date().toISOString(),
         });
 
@@ -76,30 +72,9 @@ serve(async (req) => {
       );
     }
 
-    // DELETE requests - remove config
-    if (req.method === 'DELETE') {
-      const { error } = await supabase
-        .from('config')
-        .delete()
-        .eq('key', endpoint);
-
-      if (error) {
-        console.error('Error deleting config:', error);
-        return new Response(
-          JSON.stringify({ error: error.message }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({ success: true }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
     return new Response(
-      JSON.stringify({ error: 'Method not allowed' }),
-      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ error: 'Invalid action' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error: any) {
