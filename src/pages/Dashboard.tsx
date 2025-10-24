@@ -10,16 +10,27 @@ const Dashboard = () => {
   const { data: stats } = useQuery({
     queryKey: ["dashboard-stats"],
     queryFn: async () => {
-      const [products, orders, jobs] = await Promise.all([
+      const [products, orders, jobs, configResult] = await Promise.all([
         supabase.from("products").select("id", { count: "exact", head: true }),
         supabase.from("orders").select("id", { count: "exact", head: true }),
-        supabase.from("jobs").select("state", { count: "exact" }),
+        supabase.from("jobs").select("state,type,updated_at", { count: "exact" }),
+        supabase.from("config").select("value").eq("key", "woocommerce").maybeSingle(),
       ]);
+
+      const config = configResult.data;
 
       const jobsByState = jobs.data?.reduce((acc, job) => {
         acc[job.state] = (acc[job.state] || 0) + 1;
         return acc;
       }, {} as Record<string, number>) || {};
+
+      // Find last successful WooCommerce sync
+      const syncJobs = jobs.data?.filter((j) => j.type === "SYNC_TO_WOO" && j.state === "done") || [];
+      const lastSync = syncJobs.length > 0 
+        ? syncJobs.reduce((latest, job) => 
+            new Date(job.updated_at) > new Date(latest.updated_at) ? job : latest
+          ).updated_at
+        : null;
 
       return {
         totalProducts: products.count || 0,
@@ -28,6 +39,8 @@ const Dashboard = () => {
         processingJobs: jobsByState.processing || 0,
         failedJobs: jobsByState.error || 0,
         completedJobs: jobsByState.done || 0,
+        wooCommerceConnected: !!config?.value,
+        lastWooCommerceSync: lastSync,
       };
     },
     refetchInterval: 5000,
@@ -93,7 +106,7 @@ const Dashboard = () => {
           />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           <Card>
             <CardHeader>
               <CardTitle>Job Queue Status</CardTitle>
@@ -128,6 +141,29 @@ const Dashboard = () => {
                 </div>
                 <span className="text-2xl font-bold">{stats?.failedJobs || 0}</span>
               </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>WooCommerce Sync</CardTitle>
+              <CardDescription>Integration status</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Status</span>
+                <Badge variant={stats?.wooCommerceConnected ? "default" : "secondary"}>
+                  {stats?.wooCommerceConnected ? "Connected" : "Not configured"}
+                </Badge>
+              </div>
+              {stats?.lastWooCommerceSync && (
+                <div className="space-y-1">
+                  <span className="text-sm font-medium">Last Sync</span>
+                  <p className="text-xs text-muted-foreground">
+                    {new Date(stats.lastWooCommerceSync).toLocaleString()}
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
 

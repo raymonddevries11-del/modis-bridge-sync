@@ -1,14 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useState } from "react";
-import { Search } from "lucide-react";
+import { Search, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 
 const Products = () => {
   const [searchTerm, setSearchTerm] = useState("");
+  const queryClient = useQueryClient();
 
   const { data: products, isLoading } = useQuery({
     queryKey: ["products", searchTerm],
@@ -33,6 +36,22 @@ const Products = () => {
     },
   });
 
+  const syncToWooCommerce = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke("woocommerce-sync");
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`WooCommerce sync started: ${data.processed} jobs queued`);
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+    onError: (error: any) => {
+      toast.error(`Sync failed: ${error.message}`);
+    },
+  });
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -53,6 +72,14 @@ const Products = () => {
               className="pl-9"
             />
           </div>
+          <Button
+            onClick={() => syncToWooCommerce.mutate()}
+            disabled={syncToWooCommerce.isPending}
+            variant="outline"
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${syncToWooCommerce.isPending ? "animate-spin" : ""}`} />
+            Sync to WooCommerce
+          </Button>
         </div>
 
         {isLoading ? (
