@@ -2,11 +2,15 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
 import { StatCard } from "@/components/StatCard";
-import { Package, ShoppingCart, Activity, AlertCircle, CheckCircle2, Clock, Server } from "lucide-react";
+import { Package, ShoppingCart, Activity, AlertCircle, CheckCircle2, Clock, Server, Settings as SettingsIcon } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useNavigate } from "react-router-dom";
 
 const Dashboard = () => {
+  const navigate = useNavigate();
+
   const { data: stats } = useQuery({
     queryKey: ["dashboard-stats"],
     queryFn: async () => {
@@ -75,11 +79,17 @@ const Dashboard = () => {
   return (
     <Layout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground">
-            Monitor your Modis Bridge integration status
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+            <p className="text-muted-foreground">
+              Monitor your Modis Bridge integration status
+            </p>
+          </div>
+          <Button onClick={() => navigate("/settings")} size="lg">
+            <SettingsIcon className="h-4 w-4" />
+            Configure SFTP & WooCommerce
+          </Button>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
