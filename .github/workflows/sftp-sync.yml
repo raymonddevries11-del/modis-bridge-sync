@@ -29,7 +29,7 @@ jobs:
           npm init -y
           npm install ssh2-sftp-client node-fetch
 
-      - name: Sync SFTP files
+      - name: Debug and Sync SFTP files
         env:
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
           SFTP_PORT: ${{ secrets.SFTP_PORT }}
@@ -49,15 +49,24 @@ jobs:
             const sftp = new SftpClient();
             
             try {
+              // Debug: Check if passphrase is set
+              console.log('Passphrase provided:', process.env.SFTP_PASSPHRASE ? 'YES' : 'NO');
               console.log('Connecting to SFTP...');
-              await sftp.connect({
+              
+              const connectConfig = {
                 host: process.env.SFTP_HOST,
                 port: parseInt(process.env.SFTP_PORT),
                 username: process.env.SFTP_USERNAME,
                 privateKey: process.env.SFTP_PRIVATE_KEY,
-                passphrase: process.env.SFTP_PASSPHRASE,
                 readyTimeout: 30000,
-              });
+              };
+              
+              // Only add passphrase if it exists
+              if (process.env.SFTP_PASSPHRASE) {
+                connectConfig.passphrase = process.env.SFTP_PASSPHRASE;
+              }
+              
+              await sftp.connect(connectConfig);
               
               console.log('Connected to SFTP');
               
