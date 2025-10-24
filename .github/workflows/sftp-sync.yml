@@ -42,7 +42,7 @@ jobs:
         run: |
           node << 'EOF'
           const SftpClient = require('ssh2-sftp-client');
-          const fetch = require('node-fetch');
+          const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
           const fs = require('fs').promises;
 
           async function syncSftp() {
