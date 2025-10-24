@@ -1,6 +1,7 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { SftpClient } from "../_shared/sftp-client.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -17,84 +18,143 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    // Check database connectivity
-    const { error: dbError } = await supabase
-      .from('jobs')
-      .select('id')
-      .limit(1);
+    console.log('Running health check...');
 
-    if (dbError) {
-      return new Response(JSON.stringify({ 
-        status: 'unhealthy',
-        database: 'disconnected',
-        error: dbError.message 
-      }), {
-        status: 503,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Get job queue status
-    const { data: jobStats } = await supabase
-      .from('jobs')
-      .select('state')
-      .in('state', ['ready', 'processing', 'error']);
-
-    const queueStatus = {
-      ready: 0,
-      processing: 0,
-      failed: 0,
+    const health = {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      checks: {} as Record<string, any>,
     };
 
-    jobStats?.forEach(job => {
-      if (job.state === 'ready') queueStatus.ready++;
-      else if (job.state === 'processing') queueStatus.processing++;
-      else if (job.state === 'error') queueStatus.failed++;
-    });
+    // Check database connection
+    try {
+      const { error: dbError } = await supabase
+        .from('config')
+        .select('key')
+        .limit(1);
+      
+      health.checks.database = dbError ? { status: 'unhealthy', error: dbError.message } : { status: 'healthy' };
+    } catch (error: any) {
+      health.checks.database = { status: 'unhealthy', error: error.message };
+    }
 
-    // Get last successful job run
-    const { data: lastJob } = await supabase
-      .from('jobs')
-      .select('updated_at, type')
-      .eq('state', 'done')
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // Check SFTP configuration
+    try {
+      const { data: configData, error: configError } = await supabase
+        .from('config')
+        .select('value')
+        .eq('key', 'sftp')
+        .single();
 
-    // Get SFTP status from config
-    const { data: sftpConfig } = await supabase
-      .from('config')
-      .select('value')
-      .eq('key', 'sftp_last_connection')
-      .maybeSingle();
+      if (configError || !configData) {
+        health.checks.sftp_config = { status: 'not_configured' };
+      } else {
+        const privateKey = Deno.env.get('SFTP_PRIVATE_KEY');
+        if (!privateKey) {
+          health.checks.sftp_config = { status: 'missing_key' };
+        } else {
+          health.checks.sftp_config = { status: 'configured' };
+          
+          // Test SFTP connection
+          try {
+            const sftpConfig = configData.value;
+            const sftpClient = new SftpClient();
+            await sftpClient.connect({
+              host: sftpConfig.host,
+              port: sftpConfig.port,
+              username: sftpConfig.username,
+              privateKey: privateKey,
+            });
+            await sftpClient.disconnect();
+            health.checks.sftp_connection = { status: 'healthy' };
+          } catch (error: any) {
+            health.checks.sftp_connection = { status: 'unhealthy', error: error.message };
+          }
+        }
+      }
+    } catch (error: any) {
+      health.checks.sftp_config = { status: 'error', error: error.message };
+    }
 
-    const sftpLastConnection = sftpConfig?.value?.timestamp || null;
+    // Check WooCommerce configuration
+    try {
+      const { data: wooConfig } = await supabase
+        .from('config')
+        .select('value')
+        .eq('key', 'woocommerce')
+        .single();
 
-    return new Response(JSON.stringify({
-      status: 'healthy',
-      database: 'connected',
-      queue: queueStatus,
-      last_job: lastJob ? {
-        type: lastJob.type,
-        completed_at: lastJob.updated_at,
-      } : null,
-      sftp: {
-        last_connection: sftpLastConnection,
-      },
-      timestamp: new Date().toISOString(),
-    }), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+      health.checks.woocommerce = wooConfig?.value ? { status: 'configured' } : { status: 'not_configured' };
+    } catch (error: any) {
+      health.checks.woocommerce = { status: 'error', error: error.message };
+    }
+
+    // Check job queue statistics
+    try {
+      const { data: jobs } = await supabase
+        .from('jobs')
+        .select('state,type')
+        .limit(1000);
+
+      const stats = jobs?.reduce((acc, job) => {
+        acc[job.state] = (acc[job.state] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>) || {};
+
+      health.checks.job_queue = {
+        status: 'healthy',
+        stats: stats,
+      };
+    } catch (error: any) {
+      health.checks.job_queue = { status: 'error', error: error.message };
+    }
+
+    // Check table counts
+    try {
+      const [products, orders, variants] = await Promise.all([
+        supabase.from('products').select('id', { count: 'exact', head: true }),
+        supabase.from('orders').select('id', { count: 'exact', head: true }),
+        supabase.from('variants').select('id', { count: 'exact', head: true }),
+      ]);
+
+      health.checks.data_stats = {
+        products: products.count || 0,
+        orders: orders.count || 0,
+        variants: variants.count || 0,
+      };
+    } catch (error: any) {
+      health.checks.data_stats = { status: 'error', error: error.message };
+    }
+
+    // Overall health status
+    const hasUnhealthy = Object.values(health.checks).some(
+      (check: any) => check.status === 'unhealthy' || check.status === 'error'
+    );
+    
+    if (hasUnhealthy) {
+      health.status = 'degraded';
+    }
+
+    console.log('Health check complete:', health.status);
+
+    return new Response(
+      JSON.stringify(health),
+      { 
+        status: health.status === 'healthy' ? 200 : 503,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      }
+    );
 
   } catch (error: any) {
     console.error('Error in health check:', error);
-    return new Response(JSON.stringify({ 
-      status: 'unhealthy',
-      error: error.message 
-    }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    
+    return new Response(
+      JSON.stringify({ 
+        status: 'unhealthy',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 });

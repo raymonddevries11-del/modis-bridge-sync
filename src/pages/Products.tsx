@@ -5,30 +5,63 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useState } from "react";
-import { Search, RefreshCw } from "lucide-react";
+import { Search, RefreshCw, Calendar } from "lucide-react";
 import { toast } from "sonner";
 
 const Products = () => {
   const [searchTerm, setSearchTerm] = useState("");
+  const [brandFilter, setBrandFilter] = useState<string>("all");
+  const [supplierFilter, setSupplierFilter] = useState<string>("all");
   const queryClient = useQueryClient();
 
+  const { data: brands } = useQuery({
+    queryKey: ["brands"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("brands")
+        .select("id, name")
+        .order("name");
+      return data || [];
+    },
+  });
+
+  const { data: suppliers } = useQuery({
+    queryKey: ["suppliers"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("suppliers")
+        .select("id, name")
+        .order("name");
+      return data || [];
+    },
+  });
+
   const { data: products, isLoading } = useQuery({
-    queryKey: ["products", searchTerm],
+    queryKey: ["products", searchTerm, brandFilter, supplierFilter],
     queryFn: async () => {
       let query = supabase
         .from("products")
         .select(`
           *,
-          brands(name),
-          suppliers(name),
+          brands(id, name),
+          suppliers(id, name),
           product_prices(*),
           variants(*)
         `)
-        .order("created_at", { ascending: false });
+        .order("updated_at", { ascending: false });
 
       if (searchTerm) {
         query = query.or(`sku.ilike.%${searchTerm}%,title.ilike.%${searchTerm}%`);
+      }
+
+      if (brandFilter !== "all") {
+        query = query.eq("brand_id", brandFilter);
+      }
+
+      if (supplierFilter !== "all") {
+        query = query.eq("supplier_id", supplierFilter);
       }
 
       const { data } = await query.limit(50);
@@ -62,7 +95,7 @@ const Products = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -72,6 +105,35 @@ const Products = () => {
               className="pl-9"
             />
           </div>
+
+          <Select value={brandFilter} onValueChange={setBrandFilter}>
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="Filter by brand" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Brands</SelectItem>
+              {brands?.map((brand) => (
+                <SelectItem key={brand.id} value={brand.id}>
+                  {brand.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={supplierFilter} onValueChange={setSupplierFilter}>
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="Filter by supplier" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Suppliers</SelectItem>
+              {suppliers?.map((supplier) => (
+                <SelectItem key={supplier.id} value={supplier.id}>
+                  {supplier.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           <Button
             onClick={() => syncToWooCommerce.mutate()}
             disabled={syncToWooCommerce.isPending}
@@ -118,6 +180,10 @@ const Products = () => {
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Variants:</span>
                     <Badge>{product.variants?.length || 0}</Badge>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground pt-2 border-t">
+                    <Calendar className="h-3 w-3" />
+                    <span>Updated: {new Date(product.updated_at).toLocaleDateString()}</span>
                   </div>
                 </CardContent>
               </Card>
