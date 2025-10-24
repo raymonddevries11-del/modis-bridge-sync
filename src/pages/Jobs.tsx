@@ -1,16 +1,21 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useState } from "react";
+import { RotateCw } from "lucide-react";
+import { toast } from "sonner";
 
 const Jobs = () => {
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
+  const queryClient = useQueryClient();
 
   const { data: jobs, isLoading } = useQuery({
-    queryKey: ["jobs", statusFilter],
+    queryKey: ["jobs", statusFilter, typeFilter],
     queryFn: async () => {
       let query = supabase
         .from("jobs")
@@ -21,10 +26,37 @@ const Jobs = () => {
         query = query.eq("state", statusFilter as "ready" | "processing" | "done" | "error");
       }
 
+      if (typeFilter !== "all") {
+        query = query.eq("type", typeFilter);
+      }
+
       const { data } = await query.limit(100);
       return data || [];
     },
     refetchInterval: 5000,
+  });
+
+  const retryJobMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      const { error } = await supabase
+        .from("jobs")
+        .update({
+          state: "ready",
+          attempts: 0,
+          error: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", jobId);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Job queued for retry");
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+    onError: (error: any) => {
+      toast.error(`Failed to retry job: ${error.message}`);
+    },
   });
 
   const getJobStateColor = (state: string) => {
@@ -63,6 +95,18 @@ const Jobs = () => {
               <SelectItem value="error">Error</SelectItem>
             </SelectContent>
           </Select>
+
+          <Select value={typeFilter} onValueChange={setTypeFilter}>
+            <SelectTrigger className="w-[220px]">
+              <SelectValue placeholder="Filter by type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Types</SelectItem>
+              <SelectItem value="IMPORT_ARTICLES_XML">Article Import</SelectItem>
+              <SelectItem value="EXPORT_ORDER_XML">Order Export</SelectItem>
+              <SelectItem value="SYNC_TO_WOO">WooCommerce Sync</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {isLoading ? (
@@ -74,29 +118,45 @@ const Jobs = () => {
             {jobs.map((job: any) => (
               <Card key={job.id}>
                 <CardContent className="pt-6">
-                  <div className="grid md:grid-cols-5 gap-4">
-                    <div>
-                      <p className="text-sm font-medium text-muted-foreground">Type</p>
-                      <p className="font-semibold">{job.type}</p>
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="grid md:grid-cols-5 gap-4 flex-1">
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Type</p>
+                        <p className="font-semibold">{job.type}</p>
+                        {job.payload?.filename && (
+                          <p className="text-xs text-muted-foreground mt-1">{job.payload.filename}</p>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">State</p>
+                        <Badge className={getJobStateColor(job.state)} variant="outline">
+                          {job.state}
+                        </Badge>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Attempts</p>
+                        <p className="text-sm">{job.attempts}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Created</p>
+                        <p className="text-sm">{new Date(job.created_at).toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Updated</p>
+                        <p className="text-sm">{new Date(job.updated_at).toLocaleString()}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-muted-foreground">State</p>
-                      <Badge className={getJobStateColor(job.state)} variant="outline">
-                        {job.state}
-                      </Badge>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-muted-foreground">Attempts</p>
-                      <p className="text-sm">{job.attempts}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-muted-foreground">Created</p>
-                      <p className="text-sm">{new Date(job.created_at).toLocaleString()}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-muted-foreground">Updated</p>
-                      <p className="text-sm">{new Date(job.updated_at).toLocaleString()}</p>
-                    </div>
+                    {job.state === 'error' && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => retryJobMutation.mutate(job.id)}
+                        disabled={retryJobMutation.isPending}
+                      >
+                        <RotateCw className="h-4 w-4 mr-2" />
+                        Retry
+                      </Button>
+                    )}
                   </div>
                   {job.error && (
                     <div className="mt-4 pt-4 border-t">

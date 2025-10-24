@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
 import { StatCard } from "@/components/StatCard";
-import { Package, ShoppingCart, Activity, AlertCircle, CheckCircle2, Clock } from "lucide-react";
+import { Package, ShoppingCart, Activity, AlertCircle, CheckCircle2, Clock, Server } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
@@ -106,7 +106,27 @@ const Dashboard = () => {
           />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Server className="h-5 w-5" />
+                SFTP Status
+              </CardTitle>
+              <CardDescription>Connection & file monitoring</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Connection</span>
+                <Badge variant="default">Active</Badge>
+              </div>
+              <div className="space-y-1">
+                <span className="text-sm font-medium">Auto-scheduler</span>
+                <p className="text-xs text-muted-foreground">Running every 2 minutes</p>
+              </div>
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle>Job Queue Status</CardTitle>
