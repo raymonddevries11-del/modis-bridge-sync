@@ -18,8 +18,22 @@ Deno.serve(async (req) => {
   try {
     console.log('WooCommerce webhook received');
 
-    // Parse the order data from WooCommerce
-    const wooOrder = await req.json();
+    // Parse the request body
+    const contentType = req.headers.get('content-type') || '';
+    let wooOrder;
+
+    if (contentType.includes('application/json')) {
+      // JSON payload (actual webhooks)
+      wooOrder = await req.json();
+    } else {
+      // Test webhook or other format - return success
+      const bodyText = await req.text();
+      console.log('Non-JSON webhook received:', bodyText);
+      return new Response(
+        JSON.stringify({ message: 'Webhook endpoint ready' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
     
     const orderNumber = String(wooOrder.number || wooOrder.id);
     console.log(`Processing order ${orderNumber} from webhook`);
