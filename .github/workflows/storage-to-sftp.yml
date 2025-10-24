@@ -89,8 +89,8 @@ jobs:
               
               // Ensure wp-to-modis directory exists
               try {
-                await sftp.mkdir('/wp-to-modis', true);
-                console.log('✓ Directory ensured: /wp-to-modis');
+                await sftp.mkdir('/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis', true);
+                console.log('✓ Directory ensured: /home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis');
               } catch (e) {
                 console.log('Directory already exists or error:', e.message);
               }
@@ -101,7 +101,7 @@ jobs:
               for (const file of files) {
                 if (file.name === '.emptyFolderPlaceholder') continue;
                 
-                const remotePath = `/wp-to-modis/${file.name}`;
+                const remotePath = `/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis/${file.name}`;
                 
                 try {
                   // Check if file already exists on SFTP
