@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.woocommerce-sync]
 verify_jwt = false
+
+[functions.update-woo-prices]
+verify_jwt = false

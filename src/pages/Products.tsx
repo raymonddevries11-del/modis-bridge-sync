@@ -69,6 +69,20 @@ const Products = () => {
     },
   });
 
+  const updatePrices = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke("update-woo-prices");
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`Prijzen bijgewerkt: ${data.updated} producten. ${data.notFound} niet gevonden in WooCommerce.`);
+    },
+    onError: (error: any) => {
+      toast.error(`Update mislukt: ${error.message}`);
+    },
+  });
+
   const syncToWooCommerce = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.functions.invoke("trigger-woocommerce-sync");
@@ -76,12 +90,12 @@ const Products = () => {
       return data;
     },
     onSuccess: (data) => {
-      toast.success(`WooCommerce sync started: ${data.productsQueued} products queued`);
+      toast.success(`WooCommerce sync gestart: ${data.productsQueued} producten in wachtrij`);
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
     onError: (error: any) => {
-      toast.error(`Sync failed: ${error.message}`);
+      toast.error(`Sync mislukt: ${error.message}`);
     },
   });
 
@@ -135,12 +149,21 @@ const Products = () => {
           </Select>
 
           <Button
+            onClick={() => updatePrices.mutate()}
+            disabled={updatePrices.isPending}
+            variant="default"
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${updatePrices.isPending ? "animate-spin" : ""}`} />
+            Update Prijzen
+          </Button>
+
+          <Button
             onClick={() => syncToWooCommerce.mutate()}
             disabled={syncToWooCommerce.isPending}
             variant="outline"
           >
             <RefreshCw className={`h-4 w-4 mr-2 ${syncToWooCommerce.isPending ? "animate-spin" : ""}`} />
-            Sync to WooCommerce
+            Sync Nieuwe Producten
           </Button>
         </div>
 
