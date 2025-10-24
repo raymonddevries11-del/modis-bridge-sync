@@ -17,3 +17,9 @@ verify_jwt = false
 
 [functions.update-woo-prices]
 verify_jwt = false
+
+[functions.export-orders]
+verify_jwt = false
+
+[functions.import-woocommerce-orders]
+verify_jwt = false

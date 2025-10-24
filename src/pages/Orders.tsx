@@ -1,14 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Search, Download, RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 const Orders = () => {
   const [searchTerm, setSearchTerm] = useState("");
+  const queryClient = useQueryClient();
 
   const { data: orders, isLoading } = useQuery({
     queryKey: ["orders", searchTerm],
@@ -27,6 +30,37 @@ const Orders = () => {
 
       const { data } = await query.limit(50);
       return data || [];
+    },
+  });
+
+  const importOrders = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke('import-woocommerce-orders');
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`Orders geïmporteerd: ${data.imported} nieuwe, ${data.skipped} overgeslagen`);
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+    },
+    onError: (error: Error) => {
+      toast.error(`Import gefaald: ${error.message}`);
+    },
+  });
+
+  const exportOrder = useMutation({
+    mutationFn: async (orderNumber: string) => {
+      const { data, error } = await supabase.functions.invoke('export-orders', {
+        body: { orderNumber }
+      });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`Order ${data.orderNumber} geëxporteerd naar XML`);
+    },
+    onError: (error: Error) => {
+      toast.error(`Export gefaald: ${error.message}`);
     },
   });
 
@@ -64,6 +98,13 @@ const Orders = () => {
               className="pl-9"
             />
           </div>
+          <Button 
+            onClick={() => importOrders.mutate()}
+            disabled={importOrders.isPending}
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${importOrders.isPending ? 'animate-spin' : ''}`} />
+            Importeer Orders
+          </Button>
         </div>
 
         {isLoading ? (
@@ -75,27 +116,38 @@ const Orders = () => {
             {orders.map((order: any) => (
               <Card key={order.order_number}>
                 <CardContent className="pt-6">
-                  <div className="grid md:grid-cols-4 gap-4">
-                    <div>
-                      <p className="text-sm font-medium text-muted-foreground">Order Number</p>
-                      <p className="font-semibold">{order.order_number}</p>
+                  <div className="flex items-start justify-between">
+                    <div className="grid md:grid-cols-4 gap-4 flex-1">
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Order Number</p>
+                        <p className="font-semibold">{order.order_number}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Status</p>
+                        <Badge className={getStatusColor(order.status)} variant="outline">
+                          {order.status}
+                        </Badge>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Total</p>
+                        <p className="font-semibold">
+                          €{Number(order.totals?.total || 0).toFixed(2)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Created</p>
+                        <p className="text-sm">{new Date(order.created_at).toLocaleString()}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-muted-foreground">Status</p>
-                      <Badge className={getStatusColor(order.status)} variant="outline">
-                        {order.status}
-                      </Badge>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-muted-foreground">Total</p>
-                      <p className="font-semibold">
-                        €{Number(order.totals?.total || 0).toFixed(2)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-muted-foreground">Created</p>
-                      <p className="text-sm">{new Date(order.created_at).toLocaleString()}</p>
-                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => exportOrder.mutate(order.order_number)}
+                      disabled={exportOrder.isPending}
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Export XML
+                    </Button>
                   </div>
                   {order.order_lines && order.order_lines.length > 0 && (
                     <div className="mt-4 pt-4 border-t">
