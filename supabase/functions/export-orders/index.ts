@@ -1,6 +1,6 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.76.1";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -162,26 +162,60 @@ serve(async (req) => {
     xmlContent += '  </order>\n';
     xmlContent += '</orders>';
 
-    // TODO: Implement order export via GitHub Actions or alternative method
-    // For now, just log the XML content
     console.log('Order XML generated:', filename);
     console.log('XML length:', xmlContent.length);
 
-    // Store in a temporary location or return to caller
-    // This can be enhanced to use Supabase Storage or send via webhook
+    // Upload XML to SFTP via Node.js ssh2-sftp-client
+    try {
+      console.log('Uploading to SFTP server...');
+      
+      const sftpUploadUrl = `https://dnllaaspkqqfuuxkvoma.supabase.co/functions/v1/sftp-upload`;
+      const uploadResponse = await fetch(sftpUploadUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${Deno.env.get('SUPABASE_ANON_KEY')!}`,
+        },
+        body: JSON.stringify({
+          filename: `wp-to-modis/${filename}`,
+          content: xmlContent,
+        }),
+      });
 
-    console.log(`Order ${orderNumber} XML generated successfully`);
+      if (!uploadResponse.ok) {
+        const errorText = await uploadResponse.text();
+        throw new Error(`SFTP upload failed: ${errorText}`);
+      }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        filename: filename,
-        orderNumber: orderNumber,
-        xmlContent: xmlContent,
-        message: 'Order export prepared (SFTP upload via GitHub Actions pending)',
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+      const uploadResult = await uploadResponse.json();
+      console.log('SFTP upload successful:', uploadResult);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          filename: filename,
+          orderNumber: orderNumber,
+          remotePath: `wp-to-modis/${filename}`,
+          message: 'Order exported to SFTP successfully',
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    } catch (sftpError) {
+      console.error('SFTP upload failed:', sftpError);
+      
+      // Return XML content even if SFTP fails
+      return new Response(
+        JSON.stringify({
+          success: false,
+          filename: filename,
+          orderNumber: orderNumber,
+          xmlContent: xmlContent,
+          error: sftpError instanceof Error ? sftpError.message : 'SFTP upload failed',
+          message: 'XML generated but SFTP upload failed',
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
   } catch (error: any) {
     console.error('Error in export-orders:', error);

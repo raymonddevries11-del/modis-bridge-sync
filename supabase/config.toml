@@ -23,3 +23,9 @@ verify_jwt = false
 
 [functions.import-woocommerce-orders]
 verify_jwt = false
+
+[functions.woocommerce-webhook]
+verify_jwt = false
+
+[functions.sftp-upload]
+verify_jwt = false
