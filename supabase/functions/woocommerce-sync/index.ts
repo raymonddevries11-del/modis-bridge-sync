@@ -66,11 +66,10 @@ Deno.serve(async (req) => {
     }
 
     const wooConfig = config.value as WooCommerceConfig;
-    const wooAuth = btoa(`${wooConfig.consumerKey}:${wooConfig.consumerSecret}`);
 
     // Process each job
     const results = await Promise.allSettled(
-      jobs.map((job) => processJob(job, wooConfig, wooAuth, supabase))
+      jobs.map((job) => processJob(job, wooConfig, supabase))
     );
 
     const successCount = results.filter((r) => r.status === 'fulfilled').length;
@@ -100,7 +99,6 @@ Deno.serve(async (req) => {
 async function processJob(
   job: SyncJob,
   wooConfig: WooCommerceConfig,
-  wooAuth: string,
   supabase: any
 ) {
   console.log(`Processing job ${job.id}`, job.payload);
@@ -154,7 +152,7 @@ async function processJob(
 
     // Process each product
     for (const product of products) {
-      await syncProductToWooCommerce(product, wooConfig, wooAuth, variantIds);
+      await syncProductToWooCommerce(product, wooConfig, variantIds);
     }
 
     // Mark as done
@@ -203,12 +201,13 @@ async function processJob(
 async function syncProductToWooCommerce(
   product: any,
   wooConfig: WooCommerceConfig,
-  wooAuth: string,
   variantIdsFilter?: string[]
 ) {
-  const { sku, product_prices, variants } = product;
+  const { sku, title, product_prices, variants, images, color, brands } = product;
 
-  // Find WooCommerce product by SKU - use query params for auth instead of Basic Auth
+  console.log(`Syncing product ${sku}`);
+
+  // Find WooCommerce product by SKU
   const searchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
   searchUrl.searchParams.append('sku', sku);
   searchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
@@ -228,15 +227,164 @@ async function syncProductToWooCommerce(
   }
 
   const wooProducts = await searchResponse.json();
+  
+  // If product doesn't exist, create it
   if (!wooProducts || wooProducts.length === 0) {
-    console.log(`Product ${sku} not found in WooCommerce, skipping sync`);
+    console.log(`Product ${sku} not found in WooCommerce, creating new product`);
+    await createProductInWooCommerce(product, wooConfig, variantIdsFilter);
     return;
   }
 
+  // Product exists, update it
   const wooProduct = wooProducts[0];
   const wooProductId = wooProduct.id;
+  console.log(`Found WooCommerce product ID ${wooProductId} for SKU ${sku}, updating`);
 
-  console.log(`Found WooCommerce product ID ${wooProductId} for SKU ${sku}`);
+  await updateProductInWooCommerce(wooProductId, product, wooConfig, variantIdsFilter);
+}
+
+async function createProductInWooCommerce(
+  product: any,
+  wooConfig: WooCommerceConfig,
+  variantIdsFilter?: string[]
+) {
+  const { sku, title, product_prices, variants, images, color, brands, tax_code } = product;
+
+  // Prepare product images
+  const productImages = (images || []).map((img: string) => ({
+    src: img.startsWith('http') ? img : `${wooConfig.url}/wp-content/uploads/${img}`
+  }));
+
+  // Prepare size attribute values from variants
+  const variantsToCreate = variantIdsFilter 
+    ? variants?.filter((v: any) => variantIdsFilter.includes(v.id))
+    : variants;
+
+  const sizeOptions = variantsToCreate?.map((v: any) => v.size_label) || [];
+
+  // Prepare product data
+  const productData: any = {
+    name: title,
+    type: 'variable', // Variable product since we have variants
+    sku: sku,
+    regular_price: product_prices?.regular?.toString() || '0',
+    sale_price: product_prices?.list?.toString() || '',
+    status: 'publish',
+    catalog_visibility: 'visible',
+    images: productImages,
+    attributes: [
+      {
+        name: 'Size',
+        position: 0,
+        visible: true,
+        variation: true,
+        options: sizeOptions
+      }
+    ],
+    tax_class: tax_code || '',
+  };
+
+  // Add color attribute if available
+  if (color?.label) {
+    productData.attributes.push({
+      name: 'Color',
+      position: 1,
+      visible: true,
+      variation: false,
+      options: [color.label]
+    });
+  }
+
+  // Add brand as category if available
+  if (brands?.name) {
+    productData.categories = [{ name: brands.name }];
+  }
+
+  console.log(`Creating product in WooCommerce: ${sku}`);
+
+  const createUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
+  createUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  createUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+  const createResponse = await fetchWithRetry(createUrl.toString(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(productData),
+  });
+
+  if (!createResponse.ok) {
+    const errorText = await createResponse.text();
+    throw new Error(`Failed to create product ${sku}: ${createResponse.status} - ${errorText}`);
+  }
+
+  const createdProduct = await createResponse.json();
+  console.log(`Created product ${sku} with ID ${createdProduct.id}`);
+
+  // Create variations
+  if (variantsToCreate && variantsToCreate.length > 0) {
+    await createVariationsInWooCommerce(createdProduct.id, variantsToCreate, wooConfig);
+  }
+}
+
+async function createVariationsInWooCommerce(
+  wooProductId: number,
+  variants: any[],
+  wooConfig: WooCommerceConfig
+) {
+  console.log(`Creating ${variants.length} variations for product ${wooProductId}`);
+
+  for (const variant of variants) {
+    const variationData: any = {
+      attributes: [
+        {
+          name: 'Size',
+          option: variant.size_label
+        }
+      ],
+      sku: variant.ean || '',
+      manage_stock: true,
+      stock_quantity: variant.stock_totals?.qty || 0,
+      stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
+    };
+
+    // Add EAN to meta_data
+    if (variant.ean) {
+      variationData.meta_data = [
+        { key: 'ean', value: variant.ean }
+      ];
+    }
+
+    const createVariationUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
+    createVariationUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+    createVariationUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+    const createResponse = await fetchWithRetry(createVariationUrl.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(variationData),
+    });
+
+    if (!createResponse.ok) {
+      const errorText = await createResponse.text();
+      console.error(`Failed to create variation ${variant.size_label}: ${errorText}`);
+      continue;
+    }
+
+    console.log(`Created variation ${variant.size_label} for product ${wooProductId}`);
+  }
+}
+
+async function updateProductInWooCommerce(
+  wooProductId: number,
+  product: any,
+  wooConfig: WooCommerceConfig,
+  variantIdsFilter?: string[]
+) {
+  const { sku, product_prices, variants } = product;
 
   // Update product prices
   if (product_prices) {
@@ -280,8 +428,7 @@ async function syncProductToWooCommerce(
       await syncVariantToWooCommerce(
         wooProductId,
         variant,
-        wooConfig,
-        wooAuth
+        wooConfig
       );
     }
   }
@@ -290,8 +437,7 @@ async function syncProductToWooCommerce(
 async function syncVariantToWooCommerce(
   wooProductId: number,
   variant: any,
-  wooConfig: WooCommerceConfig,
-  wooAuth: string
+  wooConfig: WooCommerceConfig
 ) {
   // Find WooCommerce variation by size attribute
   const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
