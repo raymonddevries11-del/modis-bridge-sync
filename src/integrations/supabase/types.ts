@@ -74,6 +74,36 @@ export type Database = {
         }
         Relationships: []
       }
+      export_files: {
+        Row: {
+          created_at: string | null
+          filename: string
+          id: string
+          order_number: string
+          storage_path: string
+          synced_at: string | null
+          synced_to_sftp: boolean | null
+        }
+        Insert: {
+          created_at?: string | null
+          filename: string
+          id?: string
+          order_number: string
+          storage_path: string
+          synced_at?: string | null
+          synced_to_sftp?: boolean | null
+        }
+        Update: {
+          created_at?: string | null
+          filename?: string
+          id?: string
+          order_number?: string
+          storage_path?: string
+          synced_at?: string | null
+          synced_to_sftp?: boolean | null
+        }
+        Relationships: []
+      }
       jobs: {
         Row: {
           attempts: number

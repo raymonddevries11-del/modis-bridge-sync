@@ -181,7 +181,20 @@ serve(async (req) => {
 
     console.log('XML saved to storage:', uploadData.path);
 
-    // Note: The GitHub Actions workflow will sync this to SFTP
+    // Save to export_files table for SFTP sync tracking
+    const { error: trackError } = await supabase
+      .from('export_files')
+      .insert({
+        filename: filename,
+        storage_path: uploadData.path,
+        order_number: orderNumber,
+        synced_to_sftp: false
+      });
+
+    if (trackError) {
+      console.error('Failed to track export file:', trackError);
+    }
+
     console.log(`Order ${orderNumber} XML saved to storage. GitHub Actions will sync to SFTP.`);
 
     return new Response(

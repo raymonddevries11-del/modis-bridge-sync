@@ -36,7 +36,6 @@ jobs:
         run: |
           node << 'EOF'
           const SftpClient = require('ssh2-sftp-client');
-          const { createClient } = require('@supabase/supabase-js');
 
           async function syncToSftp() {
             const sftp = new SftpClient();
@@ -44,26 +43,23 @@ jobs:
             try {
               console.log('=== Syncing Supabase Storage to SFTP ===');
               
-              // Connect to Supabase with anon key (bucket is public)
-              const supabase = createClient(
-                process.env.SUPABASE_URL,
-                process.env.SUPABASE_ANON_KEY
+              // Get list of files from database that haven't been synced yet
+              const response = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/export_files?synced_to_sftp=eq.false&select=*`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_ANON_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
+                  }
+                }
               );
               
-              // List files in order-exports bucket
-              const { data: files, error: listError } = await supabase
-                .storage
-                .from('order-exports')
-                .list('wp-to-modis', {
-                  limit: 100,
-                  sortBy: { column: 'created_at', order: 'desc' }
-                });
-              
-              if (listError) {
-                throw new Error(`Failed to list files: ${listError.message}`);
+              if (!response.ok) {
+                throw new Error(`Failed to fetch export files: ${response.status}`);
               }
               
-              console.log(`Found ${files.length} files in storage`);
+              const files = await response.json();
+              console.log(`Found ${files.length} files to sync`);
               
               if (files.length === 0) {
                 console.log('No files to sync');
@@ -99,23 +95,12 @@ jobs:
               let skipped = 0;
               
               for (const file of files) {
-                if (file.name === '.emptyFolderPlaceholder') continue;
-                
-                const remotePath = `/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis/${file.name}`;
+                const remotePath = `/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis/${file.filename}`;
                 
                 try {
-                  // Check if file already exists on SFTP
-                  const exists = await sftp.exists(remotePath);
-                  
-                  if (exists) {
-                    console.log(`Skipping ${file.name} - already exists on SFTP`);
-                    skipped++;
-                    continue;
-                  }
-                  
                   // Download from Supabase Storage via public URL
-                  const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/order-exports/wp-to-modis/${file.name}`;
-                  console.log(`Downloading from: ${publicUrl}`);
+                  const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/order-exports/${file.storage_path}`;
+                  console.log(`Downloading ${file.filename} from: ${publicUrl}`);
                   
                   const downloadResponse = await fetch(publicUrl);
                   
@@ -129,17 +114,39 @@ jobs:
                   
                   // Upload to SFTP
                   await sftp.put(buffer, remotePath);
-                  console.log(`✓ Uploaded ${file.name} to SFTP`);
+                  console.log(`✓ Uploaded ${file.filename} to SFTP`);
+                  
+                  // Mark as synced in database
+                  const updateResponse = await fetch(
+                    `${process.env.SUPABASE_URL}/rest/v1/export_files?id=eq.${file.id}`,
+                    {
+                      method: 'PATCH',
+                      headers: {
+                        'apikey': process.env.SUPABASE_ANON_KEY,
+                        'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                        'Content-Type': 'application/json',
+                        'Prefer': 'return=minimal'
+                      },
+                      body: JSON.stringify({
+                        synced_to_sftp: true,
+                        synced_at: new Date().toISOString()
+                      })
+                    }
+                  );
+                  
+                  if (!updateResponse.ok) {
+                    console.error(`Failed to mark ${file.filename} as synced`);
+                  }
+                  
                   synced++;
                   
                 } catch (error) {
-                  console.error(`Error syncing ${file.name}:`, error.message);
+                  console.error(`Error syncing ${file.filename}:`, error.message);
                 }
               }
               
               console.log(`\n=== Sync Complete ===`);
               console.log(`Synced: ${synced}`);
-              console.log(`Skipped: ${skipped}`);
               
             } catch (error) {
               console.error('Sync failed:', error);
