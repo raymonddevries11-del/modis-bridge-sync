@@ -1,4 +1,4 @@
-name: SFTP to Supabase Sync
+name: SFTP to Supabase Sync v2
 
 on:
   schedule:
