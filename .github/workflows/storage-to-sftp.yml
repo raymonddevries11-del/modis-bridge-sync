@@ -1,0 +1,156 @@
+name: Supabase Storage to SFTP Sync
+
+on:
+  schedule:
+    # Runs every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  sync-to-sftp:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install ssh2-sftp-client @supabase/supabase-js
+
+      - name: Sync Supabase Storage to SFTP
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          node << 'EOF'
+          const SftpClient = require('ssh2-sftp-client');
+          const { createClient } = require('@supabase/supabase-js');
+
+          async function syncToSftp() {
+            const sftp = new SftpClient();
+            
+            try {
+              console.log('=== Syncing Supabase Storage to SFTP ===');
+              
+              // Connect to Supabase
+              const supabase = createClient(
+                process.env.SUPABASE_URL,
+                process.env.SUPABASE_SERVICE_KEY
+              );
+              
+              // List files in order-exports bucket
+              const { data: files, error: listError } = await supabase
+                .storage
+                .from('order-exports')
+                .list('wp-to-modis', {
+                  limit: 100,
+                  sortBy: { column: 'created_at', order: 'desc' }
+                });
+              
+              if (listError) {
+                throw new Error(`Failed to list files: ${listError.message}`);
+              }
+              
+              console.log(`Found ${files.length} files in storage`);
+              
+              if (files.length === 0) {
+                console.log('No files to sync');
+                return;
+              }
+              
+              // Connect to SFTP
+              const connectConfig = {
+                host: process.env.SFTP_HOST,
+                port: parseInt(process.env.SFTP_PORT),
+                username: process.env.SFTP_USERNAME,
+                privateKey: Buffer.from(process.env.SFTP_PRIVATE_KEY, 'utf-8'),
+                readyTimeout: 30000,
+              };
+              
+              if (process.env.SFTP_PASSPHRASE) {
+                connectConfig.passphrase = process.env.SFTP_PASSPHRASE;
+              }
+              
+              console.log('Connecting to SFTP...');
+              await sftp.connect(connectConfig);
+              console.log('✓ Connected to SFTP');
+              
+              // Ensure wp-to-modis directory exists
+              try {
+                await sftp.mkdir('/wp-to-modis', true);
+                console.log('✓ Directory ensured: /wp-to-modis');
+              } catch (e) {
+                console.log('Directory already exists or error:', e.message);
+              }
+              
+              let synced = 0;
+              let skipped = 0;
+              
+              for (const file of files) {
+                if (file.name === '.emptyFolderPlaceholder') continue;
+                
+                const remotePath = `/wp-to-modis/${file.name}`;
+                
+                try {
+                  // Check if file already exists on SFTP
+                  const exists = await sftp.exists(remotePath);
+                  
+                  if (exists) {
+                    console.log(`Skipping ${file.name} - already exists on SFTP`);
+                    skipped++;
+                    continue;
+                  }
+                  
+                  // Download from Supabase Storage
+                  const { data: fileData, error: downloadError } = await supabase
+                    .storage
+                    .from('order-exports')
+                    .download(`wp-to-modis/${file.name}`);
+                  
+                  if (downloadError) {
+                    throw new Error(`Download failed: ${downloadError.message}`);
+                  }
+                  
+                  // Convert blob to buffer
+                  const arrayBuffer = await fileData.arrayBuffer();
+                  const buffer = Buffer.from(arrayBuffer);
+                  
+                  // Upload to SFTP
+                  await sftp.put(buffer, remotePath);
+                  console.log(`✓ Uploaded ${file.name} to SFTP`);
+                  synced++;
+                  
+                } catch (error) {
+                  console.error(`Error syncing ${file.name}:`, error.message);
+                }
+              }
+              
+              console.log(`\n=== Sync Complete ===`);
+              console.log(`Synced: ${synced}`);
+              console.log(`Skipped: ${skipped}`);
+              
+            } catch (error) {
+              console.error('Sync failed:', error);
+              process.exit(1);
+            } finally {
+              await sftp.end();
+            }
+          }
+
+          syncToSftp().catch(err => {
+            console.error('Fatal error:', err);
+            process.exit(1);
+          });
+          EOF

@@ -165,57 +165,35 @@ serve(async (req) => {
     console.log('Order XML generated:', filename);
     console.log('XML length:', xmlContent.length);
 
-    // Upload XML to SFTP via Node.js ssh2-sftp-client
-    try {
-      console.log('Uploading to SFTP server...');
-      
-      const sftpUploadUrl = `https://dnllaaspkqqfuuxkvoma.supabase.co/functions/v1/sftp-upload`;
-      const uploadResponse = await fetch(sftpUploadUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${Deno.env.get('SUPABASE_ANON_KEY')!}`,
-        },
-        body: JSON.stringify({
-          filename: `wp-to-modis/${filename}`,
-          content: xmlContent,
-        }),
+    // Save XML to Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabase
+      .storage
+      .from('order-exports')
+      .upload(`wp-to-modis/${filename}`, new Blob([xmlContent], { type: 'application/xml' }), {
+        contentType: 'application/xml',
+        upsert: true,
       });
 
-      if (!uploadResponse.ok) {
-        const errorText = await uploadResponse.text();
-        throw new Error(`SFTP upload failed: ${errorText}`);
-      }
-
-      const uploadResult = await uploadResponse.json();
-      console.log('SFTP upload successful:', uploadResult);
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          filename: filename,
-          orderNumber: orderNumber,
-          remotePath: `wp-to-modis/${filename}`,
-          message: 'Order exported to SFTP successfully',
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    } catch (sftpError) {
-      console.error('SFTP upload failed:', sftpError);
-      
-      // Return XML content even if SFTP fails
-      return new Response(
-        JSON.stringify({
-          success: false,
-          filename: filename,
-          orderNumber: orderNumber,
-          xmlContent: xmlContent,
-          error: sftpError instanceof Error ? sftpError.message : 'SFTP upload failed',
-          message: 'XML generated but SFTP upload failed',
-        }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (uploadError) {
+      console.error('Storage upload failed:', uploadError);
+      throw uploadError;
     }
+
+    console.log('XML saved to storage:', uploadData.path);
+
+    // Note: The GitHub Actions workflow will sync this to SFTP
+    console.log(`Order ${orderNumber} XML saved to storage. GitHub Actions will sync to SFTP.`);
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        filename: filename,
+        orderNumber: orderNumber,
+        storagePath: uploadData.path,
+        message: 'Order XML saved. GitHub Actions will sync to SFTP.',
+      }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
 
   } catch (error: any) {
     console.error('Error in export-orders:', error);
