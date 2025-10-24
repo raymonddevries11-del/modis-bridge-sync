@@ -64,7 +64,7 @@ serve(async (req) => {
     
     // Parse XML
     const parser = new DOMParser();
-    const doc = parser.parseFromString(xmlContent, 'text/xml');
+    const doc = parser.parseFromString(xmlContent, 'text/html');
     
     if (!doc) {
       throw new Error('Failed to parse XML');
