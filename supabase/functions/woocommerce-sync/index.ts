@@ -322,11 +322,20 @@ async function createProductInWooCommerce(
   });
 
   if (!createResponse.ok) {
-    const errorData = await createResponse.json();
+    let errorData;
+    try {
+      errorData = await createResponse.json();
+    } catch {
+      const errorText = await createResponse.text();
+      throw new Error(`Failed to create product ${sku}: ${createResponse.status} - ${errorText}`);
+    }
     
-    // If product already exists, try to find and update it instead
-    if (errorData.code === 'woocommerce_rest_product_not_created' && errorData.message?.includes('SKU')) {
-      console.log(`Product ${sku} already exists, searching for it to update`);
+    // If product already exists or image error, try to find and update it instead
+    if ((errorData.code === 'woocommerce_rest_product_not_created' && errorData.message?.includes('SKU')) ||
+        errorData.code === 'woocommerce_product_image_upload_error') {
+      
+      const reason = errorData.code === 'woocommerce_product_image_upload_error' ? 'has image errors' : 'already exists';
+      console.log(`Product ${sku} ${reason}, searching for it to update`);
       
       // Search again but this time search in all products (not just published)
       const searchAllUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
