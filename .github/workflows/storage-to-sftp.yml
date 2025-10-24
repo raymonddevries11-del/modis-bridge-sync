@@ -32,11 +32,9 @@ jobs:
           SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
           SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           node << 'EOF'
           const SftpClient = require('ssh2-sftp-client');
-          const { createClient } = require('@supabase/supabase-js');
 
           async function syncToSftp() {
             const sftp = new SftpClient();
@@ -44,25 +42,17 @@ jobs:
             try {
               console.log('=== Syncing Supabase Storage to SFTP ===');
               
-              // Connect to Supabase
-              const supabase = createClient(
-                process.env.SUPABASE_URL,
-                process.env.SUPABASE_SERVICE_KEY
-              );
+              // List files via public API
+              const listUrl = `${process.env.SUPABASE_URL}/storage/v1/object/list/order-exports/wp-to-modis`;
+              console.log('Fetching file list from:', listUrl);
               
-              // List files in order-exports bucket
-              const { data: files, error: listError } = await supabase
-                .storage
-                .from('order-exports')
-                .list('wp-to-modis', {
-                  limit: 100,
-                  sortBy: { column: 'created_at', order: 'desc' }
-                });
+              const listResponse = await fetch(listUrl);
               
-              if (listError) {
-                throw new Error(`Failed to list files: ${listError.message}`);
+              if (!listResponse.ok) {
+                throw new Error(`Failed to list files: ${listResponse.status} ${listResponse.statusText}`);
               }
               
+              const files = await listResponse.json();
               console.log(`Found ${files.length} files in storage`);
               
               if (files.length === 0) {
@@ -113,18 +103,18 @@ jobs:
                     continue;
                   }
                   
-                  // Download from Supabase Storage
-                  const { data: fileData, error: downloadError } = await supabase
-                    .storage
-                    .from('order-exports')
-                    .download(`wp-to-modis/${file.name}`);
+                  // Download from Supabase Storage via public URL
+                  const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/order-exports/wp-to-modis/${file.name}`;
+                  console.log(`Downloading from: ${publicUrl}`);
                   
-                  if (downloadError) {
-                    throw new Error(`Download failed: ${downloadError.message}`);
+                  const downloadResponse = await fetch(publicUrl);
+                  
+                  if (!downloadResponse.ok) {
+                    throw new Error(`Download failed: ${downloadResponse.status} ${downloadResponse.statusText}`);
                   }
                   
-                  // Convert blob to buffer
-                  const arrayBuffer = await fileData.arrayBuffer();
+                  // Get buffer from response
+                  const arrayBuffer = await downloadResponse.arrayBuffer();
                   const buffer = Buffer.from(arrayBuffer);
                   
                   // Upload to SFTP
