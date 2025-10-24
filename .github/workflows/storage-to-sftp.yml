@@ -112,9 +112,24 @@ jobs:
                   const arrayBuffer = await downloadResponse.arrayBuffer();
                   const buffer = Buffer.from(arrayBuffer);
                   
+                  console.log(`Uploading to: ${remotePath}`);
+                  console.log(`Buffer size: ${buffer.length} bytes`);
+                  
                   // Upload to SFTP
                   await sftp.put(buffer, remotePath);
                   console.log(`✓ Uploaded ${file.filename} to SFTP`);
+                  
+                  // Verify file exists on SFTP
+                  const exists = await sftp.exists(remotePath);
+                  if (!exists) {
+                    throw new Error(`File not found after upload: ${remotePath}`);
+                  }
+                  console.log(`✓ Verified ${file.filename} exists on SFTP`);
+                  
+                  // List the directory to see what's there
+                  const dirPath = '/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis';
+                  const dirList = await sftp.list(dirPath);
+                  console.log(`Files in ${dirPath}:`, dirList.map(f => f.name).join(', '));
                   
                   // Mark as synced in database
                   const updateResponse = await fetch(
