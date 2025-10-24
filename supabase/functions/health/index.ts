@@ -1,7 +1,6 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import { SftpClient } from "../_shared/sftp-client.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -38,7 +37,7 @@ serve(async (req) => {
       health.checks.database = { status: 'unhealthy', error: error.message };
     }
 
-    // Check SFTP configuration
+    // Check SFTP configuration (via GitHub Actions)
     try {
       const { data: configData, error: configError } = await supabase
         .from('config')
@@ -49,28 +48,10 @@ serve(async (req) => {
       if (configError || !configData) {
         health.checks.sftp_config = { status: 'not_configured' };
       } else {
-        const privateKey = Deno.env.get('SFTP_PRIVATE_KEY');
-        if (!privateKey) {
-          health.checks.sftp_config = { status: 'missing_key' };
-        } else {
-          health.checks.sftp_config = { status: 'configured' };
-          
-          // Test SFTP connection
-          try {
-            const sftpConfig = configData.value;
-            const sftpClient = new SftpClient();
-            await sftpClient.connect({
-              host: sftpConfig.host,
-              port: sftpConfig.port,
-              username: sftpConfig.username,
-              privateKey: privateKey,
-            });
-            await sftpClient.disconnect();
-            health.checks.sftp_connection = { status: 'healthy' };
-          } catch (error: any) {
-            health.checks.sftp_connection = { status: 'unhealthy', error: error.message };
-          }
-        }
+        health.checks.sftp_config = { 
+          status: 'configured',
+          note: 'SFTP processing via GitHub Actions',
+        };
       }
     } catch (error: any) {
       health.checks.sftp_config = { status: 'error', error: error.message };

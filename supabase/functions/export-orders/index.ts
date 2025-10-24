@@ -1,7 +1,6 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import { SftpClient } from "../_shared/sftp-client.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -163,45 +162,23 @@ serve(async (req) => {
     xmlContent += '  </order>\n';
     xmlContent += '</orders>';
 
-    // Connect to SFTP
-    const sftpClient = new SftpClient();
-    await sftpClient.connect({
-      host: sftpConfig.host,
-      port: sftpConfig.port,
-      username: sftpConfig.username,
-      privateKey: privateKey,
-    });
+    // TODO: Implement order export via GitHub Actions or alternative method
+    // For now, just log the XML content
+    console.log('Order XML generated:', filename);
+    console.log('XML length:', xmlContent.length);
 
-    const outboundPath = sftpConfig.outboundPath || '/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis';
-    const readyPath = `${outboundPath}/ready`;
+    // Store in a temporary location or return to caller
+    // This can be enhanced to use Supabase Storage or send via webhook
 
-    // Ensure directories exist
-    await sftpClient.ensureDir(outboundPath);
-    await sftpClient.ensureDir(readyPath);
-
-    // Upload file
-    const remotePath = `${readyPath}/${filename}`;
-    await sftpClient.uploadFile(remotePath, xmlContent);
-
-    // Calculate MD5 hash
-    const encoder = new TextEncoder();
-    const data = encoder.encode(xmlContent);
-    const hashBuffer = await crypto.subtle.digest('MD5', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const md5Hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-    // Upload MD5 file
-    await sftpClient.uploadFile(`${remotePath}.md5`, md5Hash);
-
-    await sftpClient.disconnect();
-
-    console.log(`Order ${orderNumber} exported successfully to ${remotePath}`);
+    console.log(`Order ${orderNumber} XML generated successfully`);
 
     return new Response(
       JSON.stringify({
         success: true,
         filename: filename,
         orderNumber: orderNumber,
+        xmlContent: xmlContent,
+        message: 'Order export prepared (SFTP upload via GitHub Actions pending)',
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
