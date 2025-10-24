@@ -71,12 +71,12 @@ const Products = () => {
 
   const syncToWooCommerce = useMutation({
     mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke("woocommerce-sync");
+      const { data, error } = await supabase.functions.invoke("trigger-woocommerce-sync");
       if (error) throw error;
       return data;
     },
     onSuccess: (data) => {
-      toast.success(`WooCommerce sync started: ${data.processed} jobs queued`);
+      toast.success(`WooCommerce sync started: ${data.productsQueued} products queued`);
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
