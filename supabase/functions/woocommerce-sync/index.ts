@@ -7,8 +7,8 @@ const corsHeaders = {
 
 interface WooCommerceConfig {
   url: string;
-  consumer_key: string;
-  consumer_secret: string;
+  consumerKey: string;
+  consumerSecret: string;
 }
 
 interface SyncJob {
@@ -66,7 +66,7 @@ Deno.serve(async (req) => {
     }
 
     const wooConfig = config.value as WooCommerceConfig;
-    const wooAuth = btoa(`${wooConfig.consumer_key}:${wooConfig.consumer_secret}`);
+    const wooAuth = btoa(`${wooConfig.consumerKey}:${wooConfig.consumerSecret}`);
 
     // Process each job
     const results = await Promise.allSettled(
@@ -211,8 +211,8 @@ async function syncProductToWooCommerce(
   // Find WooCommerce product by SKU - use query params for auth instead of Basic Auth
   const searchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
   searchUrl.searchParams.append('sku', sku);
-  searchUrl.searchParams.append('consumer_key', wooConfig.consumer_key);
-  searchUrl.searchParams.append('consumer_secret', wooConfig.consumer_secret);
+  searchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  searchUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
   
   const searchResponse = await fetchWithRetry(searchUrl.toString(), {
     headers: {
@@ -251,8 +251,8 @@ async function syncProductToWooCommerce(
 
     if (Object.keys(priceUpdateData).length > 0) {
       const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
-      updateUrl.searchParams.append('consumer_key', wooConfig.consumer_key);
-      updateUrl.searchParams.append('consumer_secret', wooConfig.consumer_secret);
+      updateUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+      updateUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
       
       const updateResponse = await fetchWithRetry(updateUrl.toString(), {
         method: 'PUT',
@@ -296,8 +296,8 @@ async function syncVariantToWooCommerce(
   // Find WooCommerce variation by size attribute
   const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
   variationsUrl.searchParams.append('per_page', '100');
-  variationsUrl.searchParams.append('consumer_key', wooConfig.consumer_key);
-  variationsUrl.searchParams.append('consumer_secret', wooConfig.consumer_secret);
+  variationsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  variationsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
   
   const variationsResponse = await fetchWithRetry(variationsUrl.toString(), {
     headers: {
@@ -342,8 +342,8 @@ async function syncVariantToWooCommerce(
   }
 
   const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations/${matchingVariation.id}`);
-  updateUrl.searchParams.append('consumer_key', wooConfig.consumer_key);
-  updateUrl.searchParams.append('consumer_secret', wooConfig.consumer_secret);
+  updateUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  updateUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
   
   const updateResponse = await fetchWithRetry(updateUrl.toString(), {
     method: 'PUT',
