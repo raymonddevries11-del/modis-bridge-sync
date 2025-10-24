@@ -4,7 +4,7 @@ on:
   schedule:
     # Runs every 2 minutes
     - cron: '*/2 * * * *'
-  workflow_dispatch: # Allow manual trigger
+  workflow_dispatch: # Allow manual trigger via Actions tab
 
 jobs:
   sync-sftp:
