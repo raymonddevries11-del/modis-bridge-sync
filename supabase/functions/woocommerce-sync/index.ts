@@ -208,11 +208,14 @@ async function syncProductToWooCommerce(
 ) {
   const { sku, product_prices, variants } = product;
 
-  // Find WooCommerce product by SKU
-  const searchUrl = `${wooConfig.url}/wp-json/wc/v3/products?sku=${encodeURIComponent(sku)}`;
-  const searchResponse = await fetchWithRetry(searchUrl, {
+  // Find WooCommerce product by SKU - use query params for auth instead of Basic Auth
+  const searchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
+  searchUrl.searchParams.append('sku', sku);
+  searchUrl.searchParams.append('consumer_key', wooConfig.consumer_key);
+  searchUrl.searchParams.append('consumer_secret', wooConfig.consumer_secret);
+  
+  const searchResponse = await fetchWithRetry(searchUrl.toString(), {
     headers: {
-      'Authorization': `Basic ${wooAuth}`,
       'Content-Type': 'application/json',
     },
   });
@@ -244,11 +247,13 @@ async function syncProductToWooCommerce(
     }
 
     if (Object.keys(priceUpdateData).length > 0) {
-      const updateUrl = `${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`;
-      const updateResponse = await fetchWithRetry(updateUrl, {
+      const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
+      updateUrl.searchParams.append('consumer_key', wooConfig.consumer_key);
+      updateUrl.searchParams.append('consumer_secret', wooConfig.consumer_secret);
+      
+      const updateResponse = await fetchWithRetry(updateUrl.toString(), {
         method: 'PUT',
         headers: {
-          'Authorization': `Basic ${wooAuth}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(priceUpdateData),
@@ -286,10 +291,13 @@ async function syncVariantToWooCommerce(
   wooAuth: string
 ) {
   // Find WooCommerce variation by size attribute
-  const variationsUrl = `${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations?per_page=100`;
-  const variationsResponse = await fetchWithRetry(variationsUrl, {
+  const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
+  variationsUrl.searchParams.append('per_page', '100');
+  variationsUrl.searchParams.append('consumer_key', wooConfig.consumer_key);
+  variationsUrl.searchParams.append('consumer_secret', wooConfig.consumer_secret);
+  
+  const variationsResponse = await fetchWithRetry(variationsUrl.toString(), {
     headers: {
-      'Authorization': `Basic ${wooAuth}`,
       'Content-Type': 'application/json',
     },
   });
@@ -330,11 +338,13 @@ async function syncVariantToWooCommerce(
     ];
   }
 
-  const updateUrl = `${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations/${matchingVariation.id}`;
-  const updateResponse = await fetchWithRetry(updateUrl, {
+  const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations/${matchingVariation.id}`);
+  updateUrl.searchParams.append('consumer_key', wooConfig.consumer_key);
+  updateUrl.searchParams.append('consumer_secret', wooConfig.consumer_secret);
+  
+  const updateResponse = await fetchWithRetry(updateUrl.toString(), {
     method: 'PUT',
     headers: {
-      'Authorization': `Basic ${wooAuth}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(updateData),
