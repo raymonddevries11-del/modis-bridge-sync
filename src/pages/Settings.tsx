@@ -15,7 +15,6 @@ interface SftpFormData {
   host: string;
   port: number;
   username: string;
-  privateKeyPath: string;
   inboundPath: string;
   outboundPath: string;
 }
@@ -36,12 +35,11 @@ const Settings = () => {
 
   const sftpForm = useForm<SftpFormData>({
     defaultValues: {
-      host: "",
-      port: 22,
-      username: "",
-      privateKeyPath: "",
-      inboundPath: "/sftp/modis_to_wp/ready",
-      outboundPath: "/sftp/wp_to_modis/ready",
+      host: "ssh.developmentplatform.nl",
+      port: 18765,
+      username: "u838-cexw8hzuw8l9",
+      inboundPath: "/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/modis-to-wp",
+      outboundPath: "/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis",
     },
   });
 
@@ -219,9 +217,10 @@ const Settings = () => {
                     <Label htmlFor="sftp-username">Username</Label>
                     <Input id="sftp-username" placeholder="modis_user" {...sftpForm.register("username")} />
                   </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="sftp-key">Private Key Path</Label>
-                    <Input id="sftp-key" placeholder="/path/to/private/key" {...sftpForm.register("privateKeyPath")} />
+                  <div className="p-3 border rounded-lg bg-muted/50">
+                    <p className="text-sm text-muted-foreground">
+                      Private key is stored securely as a secret. Configured via Lovable Secrets.
+                    </p>
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="inbound-path">Inbound Path</Label>

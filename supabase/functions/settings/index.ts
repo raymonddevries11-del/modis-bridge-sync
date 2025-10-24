@@ -32,7 +32,6 @@ serve(async (req) => {
             host: body.host,
             port: body.port,
             username: body.username,
-            privateKeyPath: body.privateKeyPath,
             inboundPath: body.inboundPath,
             outboundPath: body.outboundPath,
           },
@@ -107,9 +106,6 @@ serve(async (req) => {
 
       // Mask sensitive data
       let maskedValue = { ...data.value };
-      if (key === 'sftp' && maskedValue.privateKeyPath) {
-        maskedValue.privateKeyPath = '***';
-      }
       if (key === 'woocommerce') {
         if (maskedValue.consumerKey) maskedValue.consumerKey = maskedValue.consumerKey.substring(0, 8) + '***';
         if (maskedValue.consumerSecret) maskedValue.consumerSecret = '***';
