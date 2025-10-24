@@ -32,17 +32,42 @@ Deno.serve(async (req) => {
   try {
     console.log('Starting WooCommerce sync job consumer...');
 
-    // Fetch ready jobs with FOR UPDATE SKIP LOCKED (single consumer pattern)
-    const { data: jobs, error: jobError } = await supabase
-      .from('jobs')
-      .select('*')
-      .eq('type', 'SYNC_TO_WOO')
-      .eq('state', 'ready')
-      .limit(10);
+    // Check if a specific job ID was provided in the request
+    let jobs;
+    const body = await req.json().catch(() => ({}));
+    
+    if (body.jobId) {
+      // Process specific job (called by job-scheduler)
+      console.log(`Processing specific job: ${body.jobId}`);
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('*')
+        .eq('id', body.jobId)
+        .eq('type', 'SYNC_TO_WOO')
+        .in('state', ['ready', 'processing'])
+        .single();
+      
+      if (error || !data) {
+        console.log(`Job ${body.jobId} not found or not processable`);
+        return new Response(JSON.stringify({ message: 'Job not found' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      jobs = [data];
+    } else {
+      // Fetch ready jobs with FOR UPDATE SKIP LOCKED (single consumer pattern)
+      const { data, error: jobError } = await supabase
+        .from('jobs')
+        .select('*')
+        .eq('type', 'SYNC_TO_WOO')
+        .eq('state', 'ready')
+        .limit(10);
 
-    if (jobError) {
-      console.error('Error fetching jobs:', jobError);
-      throw jobError;
+      if (jobError) {
+        console.error('Error fetching jobs:', jobError);
+        throw jobError;
+      }
+      jobs = data || [];
     }
 
     if (!jobs || jobs.length === 0) {
