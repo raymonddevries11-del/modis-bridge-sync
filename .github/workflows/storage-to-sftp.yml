@@ -32,9 +32,11 @@ jobs:
           SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
           SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           node << 'EOF'
           const SftpClient = require('ssh2-sftp-client');
+          const { createClient } = require('@supabase/supabase-js');
 
           async function syncToSftp() {
             const sftp = new SftpClient();
@@ -42,17 +44,25 @@ jobs:
             try {
               console.log('=== Syncing Supabase Storage to SFTP ===');
               
-              // List files via public API
-              const listUrl = `${process.env.SUPABASE_URL}/storage/v1/object/list/order-exports/wp-to-modis`;
-              console.log('Fetching file list from:', listUrl);
+              // Connect to Supabase with anon key (bucket is public)
+              const supabase = createClient(
+                process.env.SUPABASE_URL,
+                process.env.SUPABASE_ANON_KEY
+              );
               
-              const listResponse = await fetch(listUrl);
+              // List files in order-exports bucket
+              const { data: files, error: listError } = await supabase
+                .storage
+                .from('order-exports')
+                .list('wp-to-modis', {
+                  limit: 100,
+                  sortBy: { column: 'created_at', order: 'desc' }
+                });
               
-              if (!listResponse.ok) {
-                throw new Error(`Failed to list files: ${listResponse.status} ${listResponse.statusText}`);
+              if (listError) {
+                throw new Error(`Failed to list files: ${listError.message}`);
               }
               
-              const files = await listResponse.json();
               console.log(`Found ${files.length} files in storage`);
               
               if (files.length === 0) {
