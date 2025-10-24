@@ -274,8 +274,6 @@ async function createProductInWooCommerce(
     name: title,
     type: 'variable', // Variable product since we have variants
     sku: sku,
-    regular_price: product_prices?.regular?.toString() || '0',
-    sale_price: product_prices?.list?.toString() || '',
     status: 'publish',
     catalog_visibility: 'visible',
     images: productImages,
@@ -368,13 +366,14 @@ async function createProductInWooCommerce(
 
   // Create variations
   if (variantsToCreate && variantsToCreate.length > 0) {
-    await createVariationsInWooCommerce(createdProduct.id, variantsToCreate, wooConfig);
+    await createVariationsInWooCommerce(createdProduct.id, variantsToCreate, product_prices, wooConfig);
   }
 }
 
 async function createVariationsInWooCommerce(
   wooProductId: number,
   variants: any[],
+  product_prices: any,
   wooConfig: WooCommerceConfig
 ) {
   console.log(`Creating ${variants.length} variations for product ${wooProductId}`);
@@ -392,6 +391,14 @@ async function createVariationsInWooCommerce(
       stock_quantity: variant.stock_totals?.qty || 0,
       stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
     };
+
+    // Set prices on the variation
+    if (product_prices?.regular) {
+      variationData.regular_price = product_prices.regular.toString();
+    }
+    if (product_prices?.list) {
+      variationData.sale_price = product_prices.list.toString();
+    }
 
     // Add EAN to meta_data
     if (variant.ean) {
@@ -430,39 +437,11 @@ async function updateProductInWooCommerce(
 ) {
   const { sku, product_prices, variants } = product;
 
-  // Update product prices
-  if (product_prices) {
-    const priceUpdateData: any = {};
-    
-    if (product_prices.regular) {
-      priceUpdateData.regular_price = product_prices.regular.toString();
-    }
-    if (product_prices.list) {
-      priceUpdateData.sale_price = product_prices.list.toString();
-    }
+  // For variable products, prices should be on variations, not the parent
+  // So we skip updating prices on the parent product
+  console.log(`Updating product ${sku}, will set prices on variations`);
 
-    if (Object.keys(priceUpdateData).length > 0) {
-      const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
-      updateUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-      updateUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-      
-      const updateResponse = await fetchWithRetry(updateUrl.toString(), {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(priceUpdateData),
-      });
-
-      if (!updateResponse.ok) {
-        throw new Error(`Failed to update product prices: ${updateResponse.statusText}`);
-      }
-
-      console.log(`Updated prices for product ${sku}`);
-    }
-  }
-
-  // Update variants (WooCommerce variations)
+  // Update variants (WooCommerce variations) including their prices
   if (variants && variants.length > 0) {
     const variantsToSync = variantIdsFilter 
       ? variants.filter((v: any) => variantIdsFilter.includes(v.id))
@@ -472,6 +451,7 @@ async function updateProductInWooCommerce(
       await syncVariantToWooCommerce(
         wooProductId,
         variant,
+        product_prices,
         wooConfig
       );
     }
@@ -481,6 +461,7 @@ async function updateProductInWooCommerce(
 async function syncVariantToWooCommerce(
   wooProductId: number,
   variant: any,
+  product_prices: any,
   wooConfig: WooCommerceConfig
 ) {
   // Find WooCommerce variation by size attribute
@@ -523,6 +504,14 @@ async function syncVariantToWooCommerce(
     manage_stock: true,
     stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
   };
+
+  // Set prices on the variation
+  if (product_prices?.regular) {
+    updateData.regular_price = product_prices.regular.toString();
+  }
+  if (product_prices?.list) {
+    updateData.sale_price = product_prices.list.toString();
+  }
 
   // Add EAN to meta_data
   if (variant.ean) {
