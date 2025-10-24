@@ -76,13 +76,15 @@ serve(async (req) => {
       throw new Error('No articles found in XML');
     }
 
-    console.log(`Processing ${artikelen.length} articles`);
+    console.log(`Found ${artikelen.length} articles - starting background processing`);
 
-    let processedCount = 0;
-    let variantCount = 0;
+    // Process articles in background to avoid timeout
+    const processArticles = async () => {
+      let processedCount = 0;
+      let variantCount = 0;
 
-    // Process each article
-    for (const artikel of (artikelen as any)) {
+      // Process each article
+      for (const artikel of (artikelen as any)) {
       try {
         // 1. Upsert Brand
         const merkNaam = artikel.querySelector('merk merknaam')?.textContent || '';
@@ -231,14 +233,18 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Import complete: ${processedCount} products, ${variantCount} variants`);
+      console.log(`Import complete: ${processedCount} products, ${variantCount} variants`);
+    };
 
+    // Start background processing (don't await)
+    processArticles().catch(err => console.error('Background processing error:', err));
+
+    // Return immediate response
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Imported ${processedCount} products with ${variantCount} variants`,
-        processed: processedCount,
-        variants: variantCount,
+        message: `Started processing ${artikelen.length} articles from ${fileName}`,
+        articles: artikelen.length,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
