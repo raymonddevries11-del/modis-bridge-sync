@@ -35,6 +35,7 @@ jobs:
           SFTP_PORT: ${{ secrets.SFTP_PORT }}
           SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
           SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
           SFTP_INBOUND_PATH: ${{ secrets.SFTP_INBOUND_PATH }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -54,6 +55,7 @@ jobs:
                 port: parseInt(process.env.SFTP_PORT),
                 username: process.env.SFTP_USERNAME,
                 privateKey: process.env.SFTP_PRIVATE_KEY,
+                passphrase: process.env.SFTP_PASSPHRASE,
                 readyTimeout: 30000,
               });
               
