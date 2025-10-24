@@ -250,10 +250,17 @@ async function createProductInWooCommerce(
 ) {
   const { sku, title, product_prices, variants, images, color, brands, tax_code } = product;
 
-  // Prepare product images
-  const productImages = (images || []).map((img: string) => ({
-    src: img.startsWith('http') ? img : `${wooConfig.url}/wp-content/uploads/${img}`
-  }));
+  // Prepare product images - skip images that don't have full URLs
+  const productImages = (images || [])
+    .filter((img: string) => img && img.trim().length > 0)
+    .map((img: string) => {
+      // Only include images if they're full URLs, otherwise skip them
+      if (img.startsWith('http://') || img.startsWith('https://')) {
+        return { src: img };
+      }
+      return null;
+    })
+    .filter((img: any) => img !== null);
 
   // Prepare size attribute values from variants
   const variantsToCreate = variantIdsFilter 
@@ -315,7 +322,35 @@ async function createProductInWooCommerce(
   });
 
   if (!createResponse.ok) {
-    const errorText = await createResponse.text();
+    const errorData = await createResponse.json();
+    
+    // If product already exists, try to find and update it instead
+    if (errorData.code === 'woocommerce_rest_product_not_created' && errorData.message?.includes('SKU')) {
+      console.log(`Product ${sku} already exists, searching for it to update`);
+      
+      // Search again but this time search in all products (not just published)
+      const searchAllUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
+      searchAllUrl.searchParams.append('sku', sku);
+      searchAllUrl.searchParams.append('status', 'any');
+      searchAllUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+      searchAllUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+      
+      const searchAllResponse = await fetchWithRetry(searchAllUrl.toString(), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      if (searchAllResponse.ok) {
+        const foundProducts = await searchAllResponse.json();
+        if (foundProducts && foundProducts.length > 0) {
+          const existingProduct = foundProducts[0];
+          console.log(`Found existing product ${sku} with ID ${existingProduct.id}, updating instead`);
+          await updateProductInWooCommerce(existingProduct.id, product, wooConfig, variantIdsFilter);
+          return;
+        }
+      }
+    }
+    
+    const errorText = JSON.stringify(errorData);
     throw new Error(`Failed to create product ${sku}: ${createResponse.status} - ${errorText}`);
   }
 
