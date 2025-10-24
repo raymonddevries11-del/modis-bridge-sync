@@ -25,7 +25,8 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    const { action, name, id } = await req.json();
+    const body = await req.json();
+    const { action, name, id } = body;
 
     console.log(`API Keys: action=${action}`);
 
