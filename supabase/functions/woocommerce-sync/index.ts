@@ -221,12 +221,15 @@ async function syncProductToWooCommerce(
   });
 
   if (!searchResponse.ok) {
-    throw new Error(`Failed to find product ${sku}: ${searchResponse.statusText}`);
+    if (searchResponse.status === 401) {
+      throw new Error(`WooCommerce authentication failed. Check your API credentials.`);
+    }
+    throw new Error(`Failed to search for product ${sku}: ${searchResponse.status} ${searchResponse.statusText}`);
   }
 
   const wooProducts = await searchResponse.json();
   if (!wooProducts || wooProducts.length === 0) {
-    console.log(`Product ${sku} not found in WooCommerce, skipping`);
+    console.log(`Product ${sku} not found in WooCommerce, skipping sync`);
     return;
   }
 
