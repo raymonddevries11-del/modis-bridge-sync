@@ -49,10 +49,13 @@ jobs:
             const sftp = new SftpClient();
             
             try {
-              // Debug: Check if passphrase is set
+              console.log('=== SFTP DEBUG INFO ===');
               console.log('Passphrase provided:', process.env.SFTP_PASSPHRASE ? 'YES' : 'NO');
-              console.log('Private key length:', process.env.SFTP_PRIVATE_KEY?.length || 0);
-              console.log('Connecting to SFTP...');
+              console.log('Host:', process.env.SFTP_HOST);
+              console.log('Port:', process.env.SFTP_PORT);
+              console.log('Username:', process.env.SFTP_USERNAME);
+              console.log('Inbound path configured:', process.env.SFTP_INBOUND_PATH);
+              console.log('======================');
               
               const connectConfig = {
                 host: process.env.SFTP_HOST,
@@ -62,32 +65,82 @@ jobs:
                 readyTimeout: 30000,
               };
               
-              // Add passphrase if it exists
               if (process.env.SFTP_PASSPHRASE) {
                 connectConfig.passphrase = process.env.SFTP_PASSPHRASE;
               }
               
+              console.log('Connecting to SFTP...');
               await sftp.connect(connectConfig);
+              console.log('✓ Connected to SFTP');
               
-              console.log('Connected to SFTP');
+              // Check current directory
+              const cwd = await sftp.cwd();
+              console.log('Current working directory:', cwd);
               
-              const readyPath = `${process.env.SFTP_INBOUND_PATH}/ready`;
-              const processingPath = `${process.env.SFTP_INBOUND_PATH}/processing`;
-              const archivePath = `${process.env.SFTP_INBOUND_PATH}/archive`;
-              const errorPath = `${process.env.SFTP_INBOUND_PATH}/error`;
+              // List root to see what's available
+              console.log('\n=== Listing root directory ===');
+              try {
+                const rootFiles = await sftp.list('.');
+                console.log('Root contents:', rootFiles.map(f => `${f.name} (${f.type})`).join(', '));
+              } catch (e) {
+                console.log('Could not list root:', e.message);
+              }
+              
+              // Build paths
+              const basePath = process.env.SFTP_INBOUND_PATH;
+              const readyPath = `${basePath}/ready`;
+              const processingPath = `${basePath}/processing`;
+              const archivePath = `${basePath}/archive`;
+              const errorPath = `${basePath}/error`;
+              
+              console.log('\n=== Checking configured paths ===');
+              console.log('Ready path:', readyPath);
+              console.log('Processing path:', processingPath);
+              console.log('Archive path:', archivePath);
+              console.log('Error path:', errorPath);
+              
+              // Check if base path exists
+              console.log('\n=== Verifying base path exists ===');
+              try {
+                const baseExists = await sftp.exists(basePath);
+                console.log(`Base path "${basePath}" exists:`, baseExists);
+                
+                if (baseExists) {
+                  const baseContents = await sftp.list(basePath);
+                  console.log('Base path contents:', baseContents.map(f => `${f.name} (${f.type})`).join(', '));
+                }
+              } catch (e) {
+                console.error('Error checking base path:', e.message);
+              }
               
               // Ensure directories exist
+              console.log('\n=== Creating directories if needed ===');
               for (const dir of [readyPath, processingPath, archivePath, errorPath]) {
                 try {
                   await sftp.mkdir(dir, true);
+                  console.log(`✓ Directory ensured: ${dir}`);
                 } catch (e) {
-                  // Directory might exist
+                  console.log(`Directory already exists or error: ${dir} - ${e.message}`);
                 }
               }
               
               // List XML files in ready directory
+              console.log('\n=== Scanning for XML files ===');
+              console.log('Scanning path:', readyPath);
+              
               const files = await sftp.list(readyPath);
-              const xmlFiles = files.filter(f => f.name.endsWith('.xml') && f.type === '-');
+              console.log(`Found ${files.length} total files/folders in ready directory`);
+              
+              if (files.length > 0) {
+                console.log('All items:', files.map(f => `${f.name} (type: ${f.type}, size: ${f.size})`).join('\n'));
+              }
+              
+              const xmlFiles = files.filter(f => {
+                const isXml = f.name.toLowerCase().endsWith('.xml');
+                const isFile = f.type === '-';
+                console.log(`Checking: ${f.name} - isXML: ${isXml}, isFile: ${isFile}`);
+                return isXml && isFile;
+              });
               
               console.log(`Found ${xmlFiles.length} XML files`);
               
