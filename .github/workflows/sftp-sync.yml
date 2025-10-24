@@ -1,0 +1,152 @@
+name: SFTP to Supabase Sync
+
+on:
+  schedule:
+    # Runs every 2 minutes
+    - cron: '*/2 * * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  sync-sftp:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install SSH client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install ssh2-sftp-client node-fetch
+
+      - name: Sync SFTP files
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_INBOUND_PATH: ${{ secrets.SFTP_INBOUND_PATH }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          node << 'EOF'
+          const SftpClient = require('ssh2-sftp-client');
+          const fetch = require('node-fetch');
+          const fs = require('fs').promises;
+
+          async function syncSftp() {
+            const sftp = new SftpClient();
+            
+            try {
+              console.log('Connecting to SFTP...');
+              await sftp.connect({
+                host: process.env.SFTP_HOST,
+                port: parseInt(process.env.SFTP_PORT),
+                username: process.env.SFTP_USERNAME,
+                privateKey: process.env.SFTP_PRIVATE_KEY,
+                readyTimeout: 30000,
+              });
+              
+              console.log('Connected to SFTP');
+              
+              const readyPath = `${process.env.SFTP_INBOUND_PATH}/ready`;
+              const processingPath = `${process.env.SFTP_INBOUND_PATH}/processing`;
+              const archivePath = `${process.env.SFTP_INBOUND_PATH}/archive`;
+              const errorPath = `${process.env.SFTP_INBOUND_PATH}/error`;
+              
+              // Ensure directories exist
+              for (const dir of [readyPath, processingPath, archivePath, errorPath]) {
+                try {
+                  await sftp.mkdir(dir, true);
+                } catch (e) {
+                  // Directory might exist
+                }
+              }
+              
+              // List XML files in ready directory
+              const files = await sftp.list(readyPath);
+              const xmlFiles = files.filter(f => f.name.endsWith('.xml') && f.type === '-');
+              
+              console.log(`Found ${xmlFiles.length} XML files`);
+              
+              for (const file of xmlFiles) {
+                const fileName = file.name;
+                const readyFilePath = `${readyPath}/${fileName}`;
+                const processingFilePath = `${processingPath}/${fileName}`;
+                const archiveFilePath = `${archivePath}/${fileName}`;
+                const errorFilePath = `${errorPath}/${fileName}`;
+                
+                try {
+                  console.log(`Processing: ${fileName}`);
+                  
+                  // Move to processing
+                  await sftp.rename(readyFilePath, processingFilePath);
+                  
+                  // Download file content
+                  const xmlContent = await sftp.get(processingFilePath);
+                  const xmlString = xmlContent.toString('utf-8');
+                  
+                  // Call Supabase edge function
+                  const response = await fetch(
+                    `${process.env.SUPABASE_URL}/functions/v1/process-articles`,
+                    {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                      },
+                      body: JSON.stringify({
+                        fileName: fileName,
+                        xmlContent: xmlString,
+                      }),
+                    }
+                  );
+                  
+                  if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Edge function failed: ${response.status} ${errorText}`);
+                  }
+                  
+                  const result = await response.json();
+                  console.log(`Success: ${fileName} - ${result.message}`);
+                  
+                  // Move to archive
+                  await sftp.rename(processingFilePath, archiveFilePath);
+                  
+                } catch (error) {
+                  console.error(`Error processing ${fileName}:`, error.message);
+                  
+                  // Move to error directory
+                  try {
+                    await sftp.rename(processingFilePath, errorFilePath);
+                  } catch (moveError) {
+                    console.error(`Failed to move to error dir:`, moveError.message);
+                  }
+                }
+              }
+              
+              console.log('SFTP sync completed');
+              
+            } catch (error) {
+              console.error('SFTP sync failed:', error);
+              process.exit(1);
+            } finally {
+              await sftp.end();
+            }
+          }
+
+          syncSftp().catch(err => {
+            console.error('Fatal error:', err);
+            process.exit(1);
+          });
+          EOF

@@ -2,7 +2,6 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { DOMParser } from "https://deno.land/x/deno_dom@v0.1.45/deno-dom-wasm.ts";
-import { SftpClient } from "../_shared/sftp-client.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -52,52 +51,16 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    const { filename, sourcePath } = await req.json();
+    const { fileName, xmlContent } = await req.json();
     
-    if (!filename || !sourcePath) {
+    if (!fileName || !xmlContent) {
       return new Response(
-        JSON.stringify({ error: 'Missing filename or sourcePath' }),
+        JSON.stringify({ error: 'Missing fileName or xmlContent' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    console.log(`Processing article import: ${filename}`);
-
-    // Get SFTP config from database
-    const { data: configData, error: configError } = await supabase
-      .from('config')
-      .select('value')
-      .eq('key', 'sftp')
-      .single();
-
-    if (configError || !configData) {
-      throw new Error('SFTP configuration not found');
-    }
-
-    const sftpConfig = configData.value;
-    const privateKey = Deno.env.get('SFTP_PRIVATE_KEY');
-    
-    if (!privateKey) {
-      throw new Error('SFTP_PRIVATE_KEY not configured');
-    }
-
-    // Connect to SFTP and download file
-    const sftpClient = new SftpClient();
-    await sftpClient.connect({
-      host: sftpConfig.host,
-      port: sftpConfig.port,
-      username: sftpConfig.username,
-      privateKey: privateKey,
-    });
-
-    const filePath = `${sourcePath}/${filename}`;
-    const processingPath = `${sourcePath}/../processing/${filename}`;
-    
-    // Move to processing directory
-    await sftpClient.moveFile(filePath, processingPath);
-    
-    // Download file content
-    const xmlContent = await sftpClient.downloadFile(processingPath);
+    console.log(`Processing article import: ${fileName}`);
     
     // Parse XML
     const parser = new DOMParser();
@@ -268,19 +231,12 @@ serve(async (req) => {
       }
     }
 
-    // Move file to archive
-    const now = new Date();
-    const archiveFolder = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const archivePath = `${sourcePath}/../archive/${archiveFolder}/${filename}`;
-    
-    await sftpClient.moveFile(processingPath, archivePath);
-    await sftpClient.disconnect();
-
     console.log(`Import complete: ${processedCount} products, ${variantCount} variants`);
 
     return new Response(
       JSON.stringify({
         success: true,
+        message: `Imported ${processedCount} products with ${variantCount} variants`,
         processed: processedCount,
         variants: variantCount,
       }),
