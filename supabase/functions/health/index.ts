@@ -94,7 +94,7 @@ serve(async (req) => {
     try {
       const [products, orders, variants] = await Promise.all([
         supabase.from('products').select('id', { count: 'exact', head: true }),
-        supabase.from('orders').select('id', { count: 'exact', head: true }),
+        supabase.from('orders').select('order_number', { count: 'exact', head: true }),
         supabase.from('variants').select('id', { count: 'exact', head: true }),
       ]);
 
