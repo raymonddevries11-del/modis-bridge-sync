@@ -513,7 +513,7 @@ async function updateProductInWooCommerce(
 ) {
   const { sku, product_prices, variants, images } = product;
 
-  // First, fetch the existing product to get current images
+  // Fetch current WooCommerce product to get existing images
   const getProductUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
   getProductUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
   getProductUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
@@ -524,33 +524,50 @@ async function updateProductInWooCommerce(
     },
   });
 
-  let existingImages: any[] = [];
-  if (getResponse.ok) {
-    const existingProduct = await getResponse.json();
-    existingImages = existingProduct.images || [];
+  if (!getResponse.ok) {
+    console.error(`Failed to fetch product ${wooProductId} for image comparison`);
+    return; // Skip image update if we can't fetch current state
   }
 
-  // Prepare new product images from our database
-  const newProductImages = (images || [])
+  const existingProduct = await getResponse.json();
+  const existingImages = existingProduct.images || [];
+  
+  // Create a Set of existing image URLs for fast lookup
+  const existingImageUrls = new Set(existingImages.map((img: any) => {
+    // Normalize URLs by removing query params and protocol differences
+    try {
+      const url = new URL(img.src);
+      return url.hostname + url.pathname;
+    } catch {
+      return img.src;
+    }
+  }));
+
+  // Prepare images from our database and filter out ones that already exist
+  const newImagesToAdd = (images || [])
     .filter((img: string) => img && img.trim().length > 0)
-    .map((img: string) => {
-      if (img.startsWith('http://') || img.startsWith('https://')) {
-        return { src: img };
+    .filter((img: string) => {
+      // Only process valid URLs
+      if (!img.startsWith('http://') && !img.startsWith('https://')) {
+        return false;
       }
-      return null;
+      
+      // Normalize and check if it already exists
+      try {
+        const url = new URL(img);
+        const normalizedUrl = url.hostname + url.pathname;
+        return !existingImageUrls.has(normalizedUrl);
+      } catch {
+        return false;
+      }
     })
-    .filter((img: any) => img !== null);
+    .map((img: string) => ({ src: img }));
 
-  // Check which images are actually new (not already in WooCommerce)
-  const existingImageSrcs = new Set(existingImages.map((img: any) => img.src));
-  const imagesToAdd = newProductImages.filter((img: any) => !existingImageSrcs.has(img.src));
-
-  // Only update if there are new images to add
-  if (imagesToAdd.length > 0) {
-    // Merge existing images with new ones to prevent duplicates
-    const mergedImages = [...existingImages, ...imagesToAdd];
+  // Only update if there are actually new images to add
+  if (newImagesToAdd.length > 0) {
+    const mergedImages = [...existingImages, ...newImagesToAdd];
     
-    console.log(`Adding ${imagesToAdd.length} new images to product ${sku} (total: ${mergedImages.length})`);
+    console.log(`Adding ${newImagesToAdd.length} new images to product ${sku} (total: ${mergedImages.length})`);
     
     const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
     updateUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
@@ -569,7 +586,7 @@ async function updateProductInWooCommerce(
       console.error(`Failed to update product images: ${errorText}`);
     }
   } else {
-    console.log(`Product ${sku} images are up to date, skipping image update`);
+    console.log(`Product ${sku} has no new images to add (${existingImages.length} existing)`);
   }
 
   console.log(`Updating product ${sku}, will set prices on variations`);
