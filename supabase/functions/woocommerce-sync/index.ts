@@ -513,8 +513,25 @@ async function updateProductInWooCommerce(
 ) {
   const { sku, product_prices, variants, images } = product;
 
-  // Prepare product images
-  const productImages = (images || [])
+  // First, fetch the existing product to get current images
+  const getProductUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
+  getProductUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  getProductUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+  const getResponse = await fetchWithRetry(getProductUrl.toString(), {
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  let existingImages: any[] = [];
+  if (getResponse.ok) {
+    const existingProduct = await getResponse.json();
+    existingImages = existingProduct.images || [];
+  }
+
+  // Prepare new product images from our database
+  const newProductImages = (images || [])
     .filter((img: string) => img && img.trim().length > 0)
     .map((img: string) => {
       if (img.startsWith('http://') || img.startsWith('https://')) {
@@ -524,12 +541,16 @@ async function updateProductInWooCommerce(
     })
     .filter((img: any) => img !== null);
 
-  // Update the product with images
-  const updateData: any = {};
-  
-  if (productImages.length > 0) {
-    updateData.images = productImages;
-    console.log(`Updating product ${sku} with ${productImages.length} images`);
+  // Check which images are actually new (not already in WooCommerce)
+  const existingImageSrcs = new Set(existingImages.map((img: any) => img.src));
+  const imagesToAdd = newProductImages.filter((img: any) => !existingImageSrcs.has(img.src));
+
+  // Only update if there are new images to add
+  if (imagesToAdd.length > 0) {
+    // Merge existing images with new ones to prevent duplicates
+    const mergedImages = [...existingImages, ...imagesToAdd];
+    
+    console.log(`Adding ${imagesToAdd.length} new images to product ${sku} (total: ${mergedImages.length})`);
     
     const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
     updateUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
@@ -540,13 +561,15 @@ async function updateProductInWooCommerce(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(updateData),
+      body: JSON.stringify({ images: mergedImages }),
     });
 
     if (!updateResponse.ok) {
       const errorText = await updateResponse.text();
       console.error(`Failed to update product images: ${errorText}`);
     }
+  } else {
+    console.log(`Product ${sku} images are up to date, skipping image update`);
   }
 
   console.log(`Updating product ${sku}, will set prices on variations`);
