@@ -139,6 +139,30 @@ async function processJob(
     } as WooCommerceConfig;
     const { productIds, variantIds } = job.payload;
 
+    // Limit batch size to prevent timeouts
+    const BATCH_SIZE = 10;
+    let productIdsToProcess = productIds || [];
+    
+    // If we have more products than batch size, split the job
+    if (productIdsToProcess.length > BATCH_SIZE) {
+      const currentBatch = productIdsToProcess.slice(0, BATCH_SIZE);
+      const remainingIds = productIdsToProcess.slice(BATCH_SIZE);
+      
+      // Create a new job for remaining products
+      console.log(`Splitting job: processing ${currentBatch.length} now, ${remainingIds.length} in new job`);
+      await supabase.from('jobs').insert({
+        type: 'SYNC_TO_WOO',
+        tenant_id: job.tenant_id,
+        state: 'ready',
+        payload: {
+          productIds: remainingIds,
+          variantIds: variantIds
+        }
+      });
+      
+      productIdsToProcess = currentBatch;
+    }
+
     // Fetch products with their prices and variants (filtered by tenant)
     let query = supabase
       .from('products')
@@ -152,8 +176,8 @@ async function processJob(
       `)
       .eq('tenant_id', job.tenant_id);
 
-    if (productIds && productIds.length > 0) {
-      query = query.in('id', productIds);
+    if (productIdsToProcess && productIdsToProcess.length > 0) {
+      query = query.in('id', productIdsToProcess);
     } else if (variantIds && variantIds.length > 0) {
       // If only variant IDs, fetch their parent products
       const { data: variantData } = await supabase
