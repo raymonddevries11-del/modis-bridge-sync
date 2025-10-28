@@ -22,20 +22,34 @@ Deno.serve(async (req) => {
   );
 
   try {
-    console.log('Fetching WooCommerce orders...');
+    const body = await req.json().catch(() => ({}));
+    const tenantId = body.tenantId;
 
-    // Get WooCommerce credentials
-    const { data: config } = await supabase
-      .from('config')
-      .select('value')
-      .eq('key', 'woocommerce')
-      .single();
-
-    if (!config?.value) {
-      throw new Error('WooCommerce configuration not found');
+    if (!tenantId) {
+      return new Response(
+        JSON.stringify({ error: 'Missing tenantId' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    const wooConfig = config.value as WooCommerceConfig;
+    console.log(`Fetching WooCommerce orders for tenant ${tenantId}...`);
+
+    // Get tenant configuration
+    const { data: config, error: configError } = await supabase
+      .from('tenant_config')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .single();
+
+    if (configError || !config) {
+      throw new Error('Tenant configuration not found');
+    }
+
+    const wooConfig = {
+      url: config.woocommerce_url,
+      consumerKey: config.woocommerce_consumer_key,
+      consumerSecret: config.woocommerce_consumer_secret,
+    } as WooCommerceConfig;
 
     // Fetch recent orders from WooCommerce (last 30 days, processing/completed status)
     const ordersUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/orders`);
@@ -79,6 +93,7 @@ Deno.serve(async (req) => {
       // Prepare order data
       const orderData = {
         order_number: orderNumber,
+        tenant_id: tenantId,
         status: wooOrder.status,
         currency: wooOrder.currency,
         customer: {
@@ -134,6 +149,7 @@ Deno.serve(async (req) => {
 
         orderLines.push({
           order_number: orderNumber,
+          tenant_id: tenantId,
           sku: item.sku || '',
           ean: item.meta_data?.find((m: any) => m.key === 'ean')?.value || '',
           name: item.name || '',
@@ -162,7 +178,7 @@ Deno.serve(async (req) => {
         
         try {
           const exportResponse = await supabase.functions.invoke('export-orders', {
-            body: { orderNumber }
+            body: { orderNumber, tenantId }
           });
           
           if (exportResponse.error) {

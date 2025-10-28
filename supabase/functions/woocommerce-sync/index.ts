@@ -41,7 +41,7 @@ Deno.serve(async (req) => {
       console.log(`Processing specific job: ${body.jobId}`);
       const { data, error } = await supabase
         .from('jobs')
-        .select('*')
+        .select('*, tenants!inner(id)')
         .eq('id', body.jobId)
         .eq('type', 'SYNC_TO_WOO')
         .in('state', ['ready', 'processing'])
@@ -58,7 +58,7 @@ Deno.serve(async (req) => {
       // Fetch ready jobs with FOR UPDATE SKIP LOCKED (single consumer pattern)
       const { data, error: jobError } = await supabase
         .from('jobs')
-        .select('*')
+        .select('*, tenants!inner(id)')
         .eq('type', 'SYNC_TO_WOO')
         .eq('state', 'ready')
         .limit(10);
@@ -79,22 +79,9 @@ Deno.serve(async (req) => {
 
     console.log(`Processing ${jobs.length} sync jobs`);
 
-    // Get WooCommerce credentials
-    const { data: config } = await supabase
-      .from('config')
-      .select('value')
-      .eq('key', 'woocommerce')
-      .single();
-
-    if (!config?.value) {
-      throw new Error('WooCommerce configuration not found');
-    }
-
-    const wooConfig = config.value as WooCommerceConfig;
-
-    // Process each job
+    // Process each job (each job now has its own tenant configuration)
     const results = await Promise.allSettled(
-      jobs.map((job) => processJob(job, wooConfig, supabase))
+      jobs.map((job) => processJob(job, supabase))
     );
 
     const successCount = results.filter((r) => r.status === 'fulfilled').length;
@@ -122,8 +109,7 @@ Deno.serve(async (req) => {
 });
 
 async function processJob(
-  job: SyncJob,
-  wooConfig: WooCommerceConfig,
+  job: any,
   supabase: any
 ) {
   console.log(`Processing job ${job.id}`, job.payload);
@@ -135,9 +121,25 @@ async function processJob(
     .eq('id', job.id);
 
   try {
+    // Get tenant-specific WooCommerce config
+    const { data: tenantConfig, error: configError } = await supabase
+      .from('tenant_config')
+      .select('*')
+      .eq('tenant_id', job.tenant_id)
+      .single();
+
+    if (configError || !tenantConfig) {
+      throw new Error(`Tenant configuration not found for job ${job.id}`);
+    }
+
+    const wooConfig = {
+      url: tenantConfig.woocommerce_url,
+      consumerKey: tenantConfig.woocommerce_consumer_key,
+      consumerSecret: tenantConfig.woocommerce_consumer_secret,
+    } as WooCommerceConfig;
     const { productIds, variantIds } = job.payload;
 
-    // Fetch products with their prices and variants
+    // Fetch products with their prices and variants (filtered by tenant)
     let query = supabase
       .from('products')
       .select(`
@@ -147,7 +149,8 @@ async function processJob(
           *,
           stock_totals(*)
         )
-      `);
+      `)
+      .eq('tenant_id', job.tenant_id);
 
     if (productIds && productIds.length > 0) {
       query = query.in('id', productIds);

@@ -5,7 +5,8 @@ import {
   ShoppingCart, 
   Settings, 
   FileText,
-  Activity
+  Activity,
+  Building2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +15,7 @@ const navigation = [
   { name: "Products", href: "/products", icon: Package },
   { name: "Orders", href: "/orders", icon: ShoppingCart },
   { name: "Jobs", href: "/jobs", icon: Activity },
+  { name: "Tenants", href: "/tenants", icon: Building2 },
   { name: "Logs", href: "/logs", icon: FileText },
   { name: "Settings", href: "/settings", icon: Settings },
 ];

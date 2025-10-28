@@ -83,6 +83,7 @@ export type Database = {
           storage_path: string
           synced_at: string | null
           synced_to_sftp: boolean | null
+          tenant_id: string | null
         }
         Insert: {
           created_at?: string | null
@@ -92,6 +93,7 @@ export type Database = {
           storage_path: string
           synced_at?: string | null
           synced_to_sftp?: boolean | null
+          tenant_id?: string | null
         }
         Update: {
           created_at?: string | null
@@ -101,8 +103,17 @@ export type Database = {
           storage_path?: string
           synced_at?: string | null
           synced_to_sftp?: boolean | null
+          tenant_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "export_files_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       jobs: {
         Row: {
@@ -112,6 +123,7 @@ export type Database = {
           id: string
           payload: Json
           state: Database["public"]["Enums"]["job_state"]
+          tenant_id: string | null
           type: string
           updated_at: string
         }
@@ -122,6 +134,7 @@ export type Database = {
           id?: string
           payload: Json
           state?: Database["public"]["Enums"]["job_state"]
+          tenant_id?: string | null
           type: string
           updated_at?: string
         }
@@ -132,10 +145,19 @@ export type Database = {
           id?: string
           payload?: Json
           state?: Database["public"]["Enums"]["job_state"]
+          tenant_id?: string | null
           type?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "jobs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       order_lines: {
         Row: {
@@ -146,6 +168,7 @@ export type Database = {
           order_number: string
           qty: number
           sku: string
+          tenant_id: string | null
           unit_price: number
           vat_rate: number
         }
@@ -157,6 +180,7 @@ export type Database = {
           order_number: string
           qty: number
           sku: string
+          tenant_id?: string | null
           unit_price: number
           vat_rate: number
         }
@@ -168,6 +192,7 @@ export type Database = {
           order_number?: string
           qty?: number
           sku?: string
+          tenant_id?: string | null
           unit_price?: number
           vat_rate?: number
         }
@@ -178,6 +203,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "orders"
             referencedColumns: ["order_number"]
+          },
+          {
+            foreignKeyName: "order_lines_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -191,6 +223,7 @@ export type Database = {
           paid_at: string | null
           shipping: Json
           status: string
+          tenant_id: string | null
           totals: Json
         }
         Insert: {
@@ -202,6 +235,7 @@ export type Database = {
           paid_at?: string | null
           shipping: Json
           status: string
+          tenant_id?: string | null
           totals: Json
         }
         Update: {
@@ -213,9 +247,18 @@ export type Database = {
           paid_at?: string | null
           shipping?: Json
           status?: string
+          tenant_id?: string | null
           totals?: Json
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "orders_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       product_prices: {
         Row: {
@@ -259,6 +302,7 @@ export type Database = {
           sku: string
           supplier_id: string | null
           tax_code: string | null
+          tenant_id: string | null
           title: string
           updated_at: string
           url_key: string | null
@@ -272,6 +316,7 @@ export type Database = {
           sku: string
           supplier_id?: string | null
           tax_code?: string | null
+          tenant_id?: string | null
           title: string
           updated_at?: string
           url_key?: string | null
@@ -285,6 +330,7 @@ export type Database = {
           sku?: string
           supplier_id?: string | null
           tax_code?: string | null
+          tenant_id?: string | null
           title?: string
           updated_at?: string
           url_key?: string | null
@@ -302,6 +348,13 @@ export type Database = {
             columns: ["supplier_id"]
             isOneToOne: false
             referencedRelation: "suppliers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "products_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
         ]
@@ -376,6 +429,71 @@ export type Database = {
           created_at?: string
           id?: string
           name?: string
+        }
+        Relationships: []
+      }
+      tenant_config: {
+        Row: {
+          sftp_inbound_path: string
+          sftp_outbound_path: string
+          tenant_id: string
+          updated_at: string
+          woocommerce_consumer_key: string
+          woocommerce_consumer_secret: string
+          woocommerce_url: string
+        }
+        Insert: {
+          sftp_inbound_path: string
+          sftp_outbound_path: string
+          tenant_id: string
+          updated_at?: string
+          woocommerce_consumer_key: string
+          woocommerce_consumer_secret: string
+          woocommerce_url: string
+        }
+        Update: {
+          sftp_inbound_path?: string
+          sftp_outbound_path?: string
+          tenant_id?: string
+          updated_at?: string
+          woocommerce_consumer_key?: string
+          woocommerce_consumer_secret?: string
+          woocommerce_url?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_config_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tenants: {
+        Row: {
+          active: boolean
+          created_at: string
+          id: string
+          name: string
+          slug: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          name: string
+          slug: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          name?: string
+          slug?: string
+          updated_at?: string
         }
         Relationships: []
       }

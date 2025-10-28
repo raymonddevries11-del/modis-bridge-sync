@@ -43,9 +43,9 @@ jobs:
             try {
               console.log('=== Syncing Supabase Storage to SFTP ===');
               
-              // Get list of files from database that haven't been synced yet
+              // Get list of files from database with tenant info
               const response = await fetch(
-                `${process.env.SUPABASE_URL}/rest/v1/export_files?synced_to_sftp=eq.false&select=*`,
+                `${process.env.SUPABASE_URL}/rest/v1/export_files?synced_to_sftp=eq.false&select=*,tenants!inner(slug)`,
                 {
                   headers: {
                     'apikey': process.env.SUPABASE_ANON_KEY,
@@ -83,53 +83,52 @@ jobs:
               await sftp.connect(connectConfig);
               console.log('✓ Connected to SFTP');
               
-              // Ensure wp-to-modis directory exists
-              try {
-                await sftp.mkdir('/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis', true);
-                console.log('✓ Directory ensured: /home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis');
-              } catch (e) {
-                console.log('Directory already exists or error:', e.message);
-              }
-              
               let synced = 0;
-              let skipped = 0;
               
               for (const file of files) {
-                const remotePath = `/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis/${file.filename}`;
+                const tenantSlug = file.tenants?.slug;
+                if (!tenantSlug) {
+                  console.error(`No tenant found for file ${file.filename}, skipping`);
+                  continue;
+                }
+                
+                const tenantDir = `/home/customer/www/developmentplatform.nl/public_html/${tenantSlug}/wp-to-modis`;
+                const remotePath = `${tenantDir}/${file.filename}`;
                 
                 try {
+                  // Ensure tenant directory exists
+                  try {
+                    await sftp.mkdir(tenantDir, true);
+                    console.log(`✓ Directory ensured: ${tenantDir}`);
+                  } catch (e) {
+                    console.log('Directory already exists:', e.message);
+                  }
+                  
                   // Download from Supabase Storage via public URL
                   const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/order-exports/${file.storage_path}`;
-                  console.log(`Downloading ${file.filename} from: ${publicUrl}`);
+                  console.log(`Downloading ${file.filename} for tenant ${tenantSlug}`);
                   
                   const downloadResponse = await fetch(publicUrl);
                   
                   if (!downloadResponse.ok) {
-                    throw new Error(`Download failed: ${downloadResponse.status} ${downloadResponse.statusText}`);
+                    throw new Error(`Download failed: ${downloadResponse.status}`);
                   }
                   
-                  // Get buffer from response
                   const arrayBuffer = await downloadResponse.arrayBuffer();
                   const buffer = Buffer.from(arrayBuffer);
                   
-                  console.log(`Uploading to: ${remotePath}`);
-                  console.log(`Buffer size: ${buffer.length} bytes`);
+                  console.log(`Uploading to: ${remotePath} (${buffer.length} bytes)`);
                   
-                  // Upload to SFTP
                   await sftp.put(buffer, remotePath);
-                  console.log(`✓ Uploaded ${file.filename} to SFTP`);
+                  console.log(`✓ Uploaded ${file.filename} to ${tenantSlug}/wp-to-modis`);
                   
-                  // Verify file exists on SFTP
                   const exists = await sftp.exists(remotePath);
                   if (!exists) {
                     throw new Error(`File not found after upload: ${remotePath}`);
                   }
-                  console.log(`✓ Verified ${file.filename} exists on SFTP`);
                   
-                  // List the directory to see what's there
-                  const dirPath = '/home/customer/www/developmentplatform.nl/public_html/kosterschoenmode/wp-to-modis';
-                  const dirList = await sftp.list(dirPath);
-                  console.log(`Files in ${dirPath}:`, dirList.map(f => f.name).join(', '));
+                  const dirList = await sftp.list(tenantDir);
+                  console.log(`Files in ${tenantSlug}:`, dirList.map(f => f.name).join(', '));
                   
                   // Mark as synced in database
                   const updateResponse = await fetch(

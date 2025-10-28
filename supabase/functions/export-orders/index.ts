@@ -17,7 +17,7 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    const { orderNumber } = await req.json();
+    const { orderNumber, tenantId } = await req.json();
     
     if (!orderNumber) {
       return new Response(
@@ -28,10 +28,14 @@ serve(async (req) => {
 
     console.log(`Exporting order: ${orderNumber}`);
 
-    // Get order with order lines
+    // Get order with order lines and tenant info
     const { data: order, error: orderError } = await supabase
       .from('orders')
-      .select('*, order_lines(*)')
+      .select(`
+        *,
+        order_lines(*),
+        tenants!inner(slug)
+      `)
       .eq('order_number', orderNumber)
       .single();
 
@@ -39,22 +43,9 @@ serve(async (req) => {
       throw new Error(`Order ${orderNumber} not found`);
     }
 
-    // Get SFTP config
-    const { data: configData, error: configError } = await supabase
-      .from('config')
-      .select('value')
-      .eq('key', 'sftp')
-      .single();
-
-    if (configError || !configData) {
-      throw new Error('SFTP configuration not found');
-    }
-
-    const sftpConfig = configData.value;
-    const privateKey = Deno.env.get('SFTP_PRIVATE_KEY');
-    
-    if (!privateKey) {
-      throw new Error('SFTP_PRIVATE_KEY not configured');
+    const tenantSlug = (order as any).tenants?.slug;
+    if (!tenantSlug) {
+      throw new Error(`Tenant not found for order ${orderNumber}`);
     }
 
     // Generate timestamp for filename
@@ -165,11 +156,12 @@ serve(async (req) => {
     console.log('Order XML generated:', filename);
     console.log('XML length:', xmlContent.length);
 
-    // Save XML to Supabase Storage
+    // Save XML to Supabase Storage (tenant-specific folder)
+    const storagePath = `${tenantSlug}/${filename}`;
     const { data: uploadData, error: uploadError } = await supabase
       .storage
       .from('order-exports')
-      .upload(`wp-to-modis/${filename}`, new Blob([xmlContent], { type: 'application/xml' }), {
+      .upload(storagePath, new Blob([xmlContent], { type: 'application/xml' }), {
         contentType: 'application/xml',
         upsert: true,
       });
@@ -188,6 +180,7 @@ serve(async (req) => {
         filename: filename,
         storage_path: uploadData.path,
         order_number: orderNumber,
+        tenant_id: order.tenant_id,
         synced_to_sftp: false
       });
 
