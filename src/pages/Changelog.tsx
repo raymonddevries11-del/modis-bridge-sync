@@ -12,7 +12,8 @@ import {
   ShoppingCart, 
   RefreshCw,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Building2
 } from "lucide-react";
 
 interface ChangelogEntry {
@@ -22,6 +23,10 @@ interface ChangelogEntry {
   description: string;
   metadata: any;
   created_at: string;
+  tenants?: {
+    name: string;
+    slug: string;
+  };
 }
 
 const Changelog = () => {
@@ -32,7 +37,10 @@ const Changelog = () => {
     queryFn: async () => {
       let query = supabase
         .from("changelog")
-        .select("*")
+        .select(`
+          *,
+          tenants!inner(name, slug)
+        `)
         .order("created_at", { ascending: false })
         .limit(100);
 
@@ -142,7 +150,13 @@ const Changelog = () => {
                         <div className="flex items-start gap-3">
                           {getEventIcon(entry.event_type)}
                           <div className="flex-1 space-y-1">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {entry.tenants && (
+                                <Badge variant="outline" className="gap-1">
+                                  <Building2 className="h-3 w-3" />
+                                  {entry.tenants.name}
+                                </Badge>
+                              )}
                               <Badge variant={getEventColor(entry.event_type)}>
                                 {entry.event_type}
                               </Badge>
