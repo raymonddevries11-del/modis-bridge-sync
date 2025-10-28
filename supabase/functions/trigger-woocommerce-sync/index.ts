@@ -18,10 +18,23 @@ Deno.serve(async (req) => {
   try {
     console.log('Triggering WooCommerce sync jobs...');
 
-    // Get all products
+    // Get active tenant
+    const { data: tenant, error: tenantError } = await supabase
+      .from('tenants')
+      .select('id')
+      .eq('active', true)
+      .single();
+
+    if (tenantError || !tenant) {
+      console.error('Error fetching tenant:', tenantError);
+      throw new Error('No active tenant found');
+    }
+
+    // Get all products for this tenant
     const { data: products, error: productsError } = await supabase
       .from('products')
-      .select('id');
+      .select('id')
+      .eq('tenant_id', tenant.id);
 
     if (productsError) {
       console.error('Error fetching products:', productsError);
@@ -46,6 +59,7 @@ Deno.serve(async (req) => {
       .insert({
         type: 'SYNC_TO_WOO',
         state: 'ready',
+        tenant_id: tenant.id,
         payload: { productIds },
       });
 
