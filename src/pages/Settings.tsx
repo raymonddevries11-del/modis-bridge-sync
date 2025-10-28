@@ -19,11 +19,6 @@ interface SftpFormData {
   outboundPath: string;
 }
 
-interface WooCommerceFormData {
-  url: string;
-  consumerKey: string;
-  consumerSecret: string;
-}
 
 interface ApiKeyFormData {
   name: string;
@@ -43,13 +38,6 @@ const Settings = () => {
     },
   });
 
-  const wooForm = useForm<WooCommerceFormData>({
-    defaultValues: {
-      url: "",
-      consumerKey: "",
-      consumerSecret: "",
-    },
-  });
 
   const apiKeyForm = useForm<ApiKeyFormData>({
     defaultValues: {
@@ -72,20 +60,6 @@ const Settings = () => {
     },
   });
 
-  // Load WooCommerce settings
-  useQuery({
-    queryKey: ['settings', 'woocommerce'],
-    queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke('settings', {
-        body: { action: 'get', key: 'woocommerce' },
-      });
-      if (error) throw error;
-      if (data) {
-        wooForm.reset(data);
-      }
-      return data;
-    },
-  });
 
   // Load API keys
   const { data: apiKeysData } = useQuery({
@@ -116,22 +90,6 @@ const Settings = () => {
     },
   });
 
-  // Save WooCommerce settings
-  const saveWooMutation = useMutation({
-    mutationFn: async (data: WooCommerceFormData) => {
-      const { error } = await supabase.functions.invoke('settings', {
-        body: { action: 'save', key: 'woocommerce', value: data },
-      });
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      toast({ title: "WooCommerce settings saved successfully" });
-      queryClient.invalidateQueries({ queryKey: ['settings', 'woocommerce'] });
-    },
-    onError: (error: any) => {
-      toast({ title: "Error saving WooCommerce settings", description: error.message, variant: "destructive" });
-    },
-  });
 
   // Generate API key
   const generateApiKeyMutation = useMutation({
@@ -182,14 +140,13 @@ const Settings = () => {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
           <p className="text-muted-foreground">
-            Configure SFTP, WooCommerce, and API settings
+            Configure SFTP and API settings. WooCommerce settings are now managed per tenant on the Tenants page.
           </p>
         </div>
 
         <Tabs defaultValue="sftp" className="space-y-4">
           <TabsList>
             <TabsTrigger value="sftp">SFTP</TabsTrigger>
-            <TabsTrigger value="woocommerce">WooCommerce</TabsTrigger>
             <TabsTrigger value="api">API Keys</TabsTrigger>
           </TabsList>
 
@@ -237,36 +194,6 @@ const Settings = () => {
             </form>
           </TabsContent>
 
-          <TabsContent value="woocommerce" className="space-y-4">
-            <form onSubmit={wooForm.handleSubmit((data) => saveWooMutation.mutate(data))}>
-              <Card>
-                <CardHeader>
-                  <CardTitle>WooCommerce API</CardTitle>
-                  <CardDescription>
-                    Configure WooCommerce REST API credentials
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="woo-url">Store URL</Label>
-                    <Input id="woo-url" placeholder="https://yourstore.com" {...wooForm.register("url")} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="woo-key">Consumer Key</Label>
-                    <Input id="woo-key" placeholder="ck_..." {...wooForm.register("consumerKey")} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="woo-secret">Consumer Secret</Label>
-                    <Input id="woo-secret" type="password" placeholder="cs_..." {...wooForm.register("consumerSecret")} />
-                  </div>
-                  <Button type="submit" disabled={saveWooMutation.isPending}>
-                    {saveWooMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save WooCommerce Settings
-                  </Button>
-                </CardContent>
-              </Card>
-            </form>
-          </TabsContent>
 
           <TabsContent value="api" className="space-y-4">
             <Card>
