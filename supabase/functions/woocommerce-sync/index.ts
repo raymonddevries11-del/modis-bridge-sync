@@ -463,10 +463,44 @@ async function updateProductInWooCommerce(
   wooConfig: WooCommerceConfig,
   variantIdsFilter?: string[]
 ) {
-  const { sku, product_prices, variants } = product;
+  const { sku, product_prices, variants, images } = product;
 
-  // For variable products, prices should be on variations, not the parent
-  // So we skip updating prices on the parent product
+  // Prepare product images
+  const productImages = (images || [])
+    .filter((img: string) => img && img.trim().length > 0)
+    .map((img: string) => {
+      if (img.startsWith('http://') || img.startsWith('https://')) {
+        return { src: img };
+      }
+      return null;
+    })
+    .filter((img: any) => img !== null);
+
+  // Update the product with images
+  const updateData: any = {};
+  
+  if (productImages.length > 0) {
+    updateData.images = productImages;
+    console.log(`Updating product ${sku} with ${productImages.length} images`);
+    
+    const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
+    updateUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+    updateUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+    const updateResponse = await fetchWithRetry(updateUrl.toString(), {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updateData),
+    });
+
+    if (!updateResponse.ok) {
+      const errorText = await updateResponse.text();
+      console.error(`Failed to update product images: ${errorText}`);
+    }
+  }
+
   console.log(`Updating product ${sku}, will set prices on variations`);
 
   // Update variants (WooCommerce variations) including their prices
