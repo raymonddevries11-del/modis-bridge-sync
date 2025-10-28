@@ -81,7 +81,7 @@ serve(async (req) => {
 
         console.log(`Invoking ${functionName} for job ${job.id}`);
 
-        // Invoke the edge function
+        // Invoke the edge function with jobId
         const response = await fetch(
           `${SUPABASE_URL}/functions/v1/${functionName}`,
           {
@@ -90,7 +90,10 @@ serve(async (req) => {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
             },
-            body: JSON.stringify(job.payload),
+            body: JSON.stringify({
+              jobId: job.id,
+              ...job.payload
+            }),
           }
         );
 
