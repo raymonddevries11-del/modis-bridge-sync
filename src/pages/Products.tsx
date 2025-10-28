@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useState } from "react";
-import { Search, RefreshCw, Calendar } from "lucide-react";
+import { Search, RefreshCw, Calendar, Image } from "lucide-react";
 import { toast } from "sonner";
 
 const Products = () => {
@@ -203,6 +203,23 @@ const Products = () => {
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Variants:</span>
                     <Badge>{product.variants?.length || 0}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Afbeeldingen:</span>
+                    <div className="flex items-center gap-2">
+                      {product.images && product.images.length > 0 ? (
+                        <>
+                          <Image className="h-4 w-4 text-green-600" />
+                          <Badge variant="default" className="bg-green-600">
+                            {product.images.length}
+                          </Badge>
+                        </>
+                      ) : (
+                        <Badge variant="secondary" className="text-muted-foreground">
+                          Geen
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground pt-2 border-t">
                     <Calendar className="h-3 w-3" />
