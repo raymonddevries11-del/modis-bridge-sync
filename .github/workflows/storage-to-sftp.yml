@@ -92,7 +92,7 @@ jobs:
                   continue;
                 }
                 
-                const tenantDir = `/home/customer/www/developmentplatform.nl/public_html/${tenantSlug}/wp-to-modis`;
+                const tenantDir = `/home/customer/www/modisbridge.nl/public_html/${tenantSlug}/wp-to-modis`;
                 const remotePath = `${tenantDir}/${file.filename}`;
                 
                 try {

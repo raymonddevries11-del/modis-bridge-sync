@@ -45,6 +45,13 @@ serve(async (req) => {
       throw new Error('SFTP_PRIVATE_KEY not configured');
     }
 
+    // Get tenant_id from filename pattern (assumes format includes tenant info)
+    // For now, we'll use the outboundPath from config as the base
+    const basePath = sftpConfig.outboundPath || '';
+    const remotePath = basePath ? `${basePath}/${filename}` : filename;
+
+    console.log(`Uploading to remote path: ${remotePath}`);
+
     // Write private key to temp file
     const keyFile = await Deno.makeTempFile();
     await Deno.writeTextFile(keyFile, privateKey);
@@ -63,7 +70,7 @@ serve(async (req) => {
           "-o", "UserKnownHostsFile=/dev/null",
           "-P", String(sftpConfig.port || 22),
           contentFile,
-          `${sftpConfig.username}@${sftpConfig.host}:${filename}`
+          `${sftpConfig.username}@${sftpConfig.host}:${remotePath}`
         ],
         stdout: "piped",
         stderr: "piped",
