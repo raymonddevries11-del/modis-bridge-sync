@@ -53,7 +53,7 @@ jobs:
               
               // Get all active tenants with their SFTP configurations
               const tenantsResponse = await fetch(
-                `${process.env.SUPABASE_URL}/rest/v1/tenants?select=*,tenant_config(*)&active=eq.true`,
+                `${process.env.SUPABASE_URL}/rest/v1/tenants?active=eq.true&select=id,name,slug`,
                 {
                   headers: {
                     'apikey': process.env.SUPABASE_ANON_KEY,
@@ -68,6 +68,34 @@ jobs:
               
               const tenants = await tenantsResponse.json();
               console.log(`Found ${tenants.length} active tenants`);
+              
+              if (tenants.length === 0) {
+                console.log('No active tenants to sync');
+                return;
+              }
+              
+              // Get tenant configs separately
+              const configsResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/tenant_config?select=*`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_ANON_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
+                  }
+                }
+              );
+              
+              if (!configsResponse.ok) {
+                throw new Error(`Failed to fetch tenant configs: ${configsResponse.status}`);
+              }
+              
+              const configs = await configsResponse.json();
+              
+              // Map configs to tenants
+              const configMap = {};
+              for (const config of configs) {
+                configMap[config.tenant_id] = config;
+              }
               
               if (tenants.length === 0) {
                 console.log('No active tenants to sync');
@@ -93,7 +121,7 @@ jobs:
               
               // Process each tenant
               for (const tenant of tenants) {
-                const tenantConfig = tenant.tenant_config?.[0];
+                const tenantConfig = configMap[tenant.id];
                 
                 if (!tenantConfig || !tenantConfig.sftp_inbound_path) {
                   console.log(`⚠ Skipping ${tenant.name} - no SFTP config found`);
