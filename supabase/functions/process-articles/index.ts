@@ -54,7 +54,7 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    const { fileName, xmlContent } = await req.json();
+    const { fileName, xmlContent, tenantId } = await req.json();
     
     if (!fileName || !xmlContent) {
       return new Response(
@@ -237,6 +237,20 @@ serve(async (req) => {
     }
 
       console.log(`Import complete: ${processedCount} products, ${variantCount} variants`);
+      
+      // Add changelog entry
+      if (tenantId) {
+        await supabase.from('changelog').insert({
+          tenant_id: tenantId,
+          event_type: 'PRODUCTS_IMPORTED',
+          description: `${processedCount} producten geïmporteerd van ${fileName}`,
+          metadata: {
+            productCount: processedCount,
+            variantCount: variantCount,
+            fileName: fileName
+          }
+        });
+      }
     };
 
     // Start background processing (don't await)

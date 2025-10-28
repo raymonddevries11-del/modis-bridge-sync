@@ -12,9 +12,10 @@ interface Tenant {
 interface TenantSelectorProps {
   value: string;
   onChange: (value: string) => void;
+  showAll?: boolean;
 }
 
-export function TenantSelector({ value, onChange }: TenantSelectorProps) {
+export function TenantSelector({ value, onChange, showAll = false }: TenantSelectorProps) {
   const { data: tenants = [] } = useQuery({
     queryKey: ["tenants"],
     queryFn: async () => {
@@ -34,6 +35,9 @@ export function TenantSelector({ value, onChange }: TenantSelectorProps) {
         <SelectValue placeholder="Select tenant" />
       </SelectTrigger>
       <SelectContent>
+        {showAll && (
+          <SelectItem value="">Alle tenants</SelectItem>
+        )}
         {tenants.map((tenant) => (
           <SelectItem key={tenant.id} value={tenant.id}>
             {tenant.name}

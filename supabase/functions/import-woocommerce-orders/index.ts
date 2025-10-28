@@ -194,6 +194,21 @@ Deno.serve(async (req) => {
 
     console.log(`Import complete: ${imported} imported, ${skipped} skipped, ${exported} exported`);
 
+    // Add changelog entry
+    if (imported > 0 || exported > 0) {
+      await supabase.from('changelog').insert({
+        tenant_id: tenantId,
+        event_type: 'ORDERS_IMPORTED',
+        description: `${imported} orders geïmporteerd, ${exported} geëxporteerd`,
+        metadata: {
+          imported,
+          skipped,
+          exported,
+          total: wooOrders.length
+        }
+      });
+    }
+
     return new Response(
       JSON.stringify({
         success: true,

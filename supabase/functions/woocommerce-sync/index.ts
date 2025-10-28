@@ -207,8 +207,20 @@ async function processJob(
       await syncProductToWooCommerce(product, wooConfig, variantIds);
     }
 
-    // Mark as done
+    // Mark as done and log to changelog
     await supabase.from('jobs').update({ state: 'done', error: null }).eq('id', job.id);
+    
+    // Add changelog entry
+    await supabase.from('changelog').insert({
+      tenant_id: job.tenant_id,
+      event_type: 'SYNC_COMPLETED',
+      description: `${products.length} producten gesynchroniseerd naar WooCommerce`,
+      metadata: {
+        productCount: products.length,
+        jobId: job.id
+      }
+    });
+    
     console.log(`Job ${job.id} completed successfully`);
   } catch (error) {
     console.error(`Job ${job.id} failed:`, error);
@@ -244,6 +256,18 @@ async function processJob(
           error: errorMessage 
         })
         .eq('id', job.id);
+      
+      // Log failed sync to changelog
+      await supabase.from('changelog').insert({
+        tenant_id: job.tenant_id,
+        event_type: 'SYNC_FAILED',
+        description: `WooCommerce synchronisatie mislukt na ${maxRetries} pogingen`,
+        metadata: {
+          error: errorMessage,
+          attempts: attempts,
+          jobId: job.id
+        }
+      });
     }
 
     throw error;
