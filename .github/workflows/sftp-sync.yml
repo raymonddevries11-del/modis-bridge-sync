@@ -36,7 +36,6 @@ jobs:
           SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
           SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
           SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
-          SFTP_INBOUND_PATH: ${{ secrets.SFTP_INBOUND_PATH }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
@@ -49,14 +48,33 @@ jobs:
             const sftp = new SftpClient();
             
             try {
-              console.log('=== SFTP DEBUG INFO ===');
-              console.log('Passphrase provided:', process.env.SFTP_PASSPHRASE ? 'YES' : 'NO');
-              console.log('Host:', process.env.SFTP_HOST);
-              console.log('Port:', process.env.SFTP_PORT);
-              console.log('Username:', process.env.SFTP_USERNAME);
-              console.log('Inbound path configured:', process.env.SFTP_INBOUND_PATH);
-              console.log('======================');
+              console.log('=== SFTP Multi-Tenant Sync ===');
+              console.log('Fetching tenant configurations from Supabase...');
               
+              // Get all active tenants with their SFTP configurations
+              const tenantsResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/tenants?select=*,tenant_config(*)&active=eq.true`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_ANON_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
+                  }
+                }
+              );
+              
+              if (!tenantsResponse.ok) {
+                throw new Error(`Failed to fetch tenants: ${tenantsResponse.status}`);
+              }
+              
+              const tenants = await tenantsResponse.json();
+              console.log(`Found ${tenants.length} active tenants`);
+              
+              if (tenants.length === 0) {
+                console.log('No active tenants to sync');
+                return;
+              }
+              
+              // Connect to SFTP once
               const connectConfig = {
                 host: process.env.SFTP_HOST,
                 port: parseInt(process.env.SFTP_PORT),
@@ -73,21 +91,18 @@ jobs:
               await sftp.connect(connectConfig);
               console.log('✓ Connected to SFTP');
               
-              // Check current directory
-              const cwd = await sftp.cwd();
-              console.log('Current working directory:', cwd);
-              
-              // List root to see what's available
-              console.log('\n=== Listing root directory ===');
-              try {
-                const rootFiles = await sftp.list('.');
-                console.log('Root contents:', rootFiles.map(f => `${f.name} (${f.type})`).join(', '));
-              } catch (e) {
-                console.log('Could not list root:', e.message);
-              }
-              
-              // Build paths
-              const basePath = process.env.SFTP_INBOUND_PATH;
+              // Process each tenant
+              for (const tenant of tenants) {
+                const tenantConfig = tenant.tenant_config?.[0];
+                
+                if (!tenantConfig || !tenantConfig.sftp_inbound_path) {
+                  console.log(`⚠ Skipping ${tenant.name} - no SFTP config found`);
+                  continue;
+                }
+                
+                console.log(`\n=== Processing tenant: ${tenant.name} (${tenant.slug}) ===`);
+                
+                const basePath = tenantConfig.sftp_inbound_path;
               const readyPath = `${basePath}/ready`;
               const processingPath = `${basePath}/processing`;
               const archivePath = `${basePath}/archive`;
@@ -260,7 +275,10 @@ jobs:
                 }
               }
               
-              console.log('SFTP sync completed');
+              console.log(`\n=== Finished processing tenant: ${tenant.name} ===`);
+            }
+              
+              console.log('\n=== All tenants synced ===');
               
             } catch (error) {
               console.error('SFTP sync failed:', error);
