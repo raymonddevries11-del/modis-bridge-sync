@@ -97,10 +97,18 @@ serve(async (req) => {
           }
         );
 
-        const result = await response.json();
+        const responseText = await response.text();
+        let result;
+        
+        try {
+          result = responseText ? JSON.parse(responseText) : {};
+        } catch (parseError) {
+          console.error('Failed to parse response:', responseText);
+          throw new Error(`Invalid JSON response: ${responseText.substring(0, 200)}`);
+        }
 
         if (!response.ok) {
-          throw new Error(result.error || 'Function invocation failed');
+          throw new Error(result.error || `Function invocation failed with status ${response.status}`);
         }
 
         // Update job to done
