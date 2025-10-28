@@ -19,13 +19,16 @@ function parseInteger(value: string): number {
   return Number(value.replace(/^0+/, '') || '0');
 }
 
-function extractPhotos(artikel: any): string[] {
+function extractPhotos(artikel: any, supabaseUrl: string): string[] {
   const photos: string[] = [];
   for (let i = 1; i <= 6; i++) {
     const fotoKey = `foto-0${i}`;
     const fotoEl = artikel.querySelector(fotoKey);
     if (fotoEl?.textContent?.trim()) {
-      photos.push(fotoEl.textContent.trim());
+      const filename = fotoEl.textContent.trim();
+      // Convert to Supabase Storage URL
+      const imageUrl = `${supabaseUrl}/storage/v1/object/public/product-images/${filename}`;
+      photos.push(imageUrl);
     }
   }
   return photos;
@@ -117,7 +120,7 @@ serve(async (req) => {
         const title = artikel.querySelector('webshop-titel')?.textContent || '';
         const taxCode = artikel.querySelector('btw-code')?.textContent || '';
         const urlKey = artikel.querySelector('url-sleutel')?.textContent || null;
-        const images = extractPhotos(artikel);
+        const images = extractPhotos(artikel, supabaseUrl);
         const color = extractColor(artikel);
 
         // 4. Upsert Product

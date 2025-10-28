@@ -144,6 +144,63 @@ jobs:
               
               console.log(`Found ${xmlFiles.length} XML files`);
               
+              // Sync photos from webfoto directory
+              console.log('\n=== Syncing product photos ===');
+              const webfotoPath = `${basePath}/webfoto`;
+              
+              try {
+                const webfotoExists = await sftp.exists(webfotoPath);
+                console.log(`Webfoto path "${webfotoPath}" exists:`, webfotoExists);
+                
+                if (webfotoExists) {
+                  const photoFiles = await sftp.list(webfotoPath);
+                  const imageFiles = photoFiles.filter(f => {
+                    const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(f.name);
+                    const isFile = f.type === '-';
+                    return isImage && isFile;
+                  });
+                  
+                  console.log(`Found ${imageFiles.length} image files to sync`);
+                  
+                  for (const photoFile of imageFiles) {
+                    try {
+                      const photoPath = `${webfotoPath}/${photoFile.name}`;
+                      const imageBuffer = await sftp.get(photoPath);
+                      
+                      // Upload to Supabase Storage
+                      const uploadResponse = await fetch(
+                        `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${photoFile.name}`,
+                        {
+                          method: 'POST',
+                          headers: {
+                            'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                            'Content-Type': 'image/jpeg',
+                          },
+                          body: imageBuffer,
+                        }
+                      );
+                      
+                      if (uploadResponse.ok) {
+                        console.log(`✓ Uploaded photo: ${photoFile.name}`);
+                      } else {
+                        // Check if file already exists (409 conflict)
+                        if (uploadResponse.status === 409) {
+                          console.log(`Photo already exists: ${photoFile.name}`);
+                        } else {
+                          console.error(`Failed to upload ${photoFile.name}: ${uploadResponse.status}`);
+                        }
+                      }
+                    } catch (photoError) {
+                      console.error(`Error uploading photo ${photoFile.name}:`, photoError.message);
+                    }
+                  }
+                }
+              } catch (e) {
+                console.error('Error syncing photos:', e.message);
+              }
+              
+              console.log('\n=== Processing XML files ===');
+              
               for (const file of xmlFiles) {
                 const fileName = file.name;
                 const readyFilePath = `${readyPath}/${fileName}`;
