@@ -1,26 +1,45 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
+import { TenantSelector } from "@/components/TenantSelector";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { RotateCw } from "lucide-react";
 import { toast } from "sonner";
 
 const Jobs = () => {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [selectedTenant, setSelectedTenant] = useState<string>("all");
   const queryClient = useQueryClient();
 
+  // Auto-select first active tenant
+  const { data: tenants } = useQuery({
+    queryKey: ["tenants"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("tenants")
+        .select("*")
+        .eq("active", true)
+        .order("name");
+      return data || [];
+    },
+  });
+
   const { data: jobs, isLoading } = useQuery({
-    queryKey: ["jobs", statusFilter, typeFilter],
+    queryKey: ["jobs", statusFilter, typeFilter, selectedTenant],
     queryFn: async () => {
       let query = supabase
         .from("jobs")
         .select("*")
         .order("created_at", { ascending: false });
+
+      if (selectedTenant !== "all") {
+        query = query.eq("tenant_id", selectedTenant);
+      }
 
       if (statusFilter !== "all") {
         query = query.eq("state", statusFilter as "ready" | "processing" | "done" | "error");
@@ -83,6 +102,20 @@ const Jobs = () => {
         </div>
 
         <div className="flex items-center gap-4">
+          <Select value={selectedTenant} onValueChange={setSelectedTenant}>
+            <SelectTrigger className="w-[250px]">
+              <SelectValue placeholder="Filter by tenant" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Tenants</SelectItem>
+              {tenants?.map((tenant) => (
+                <SelectItem key={tenant.id} value={tenant.id}>
+                  {tenant.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="w-[180px]">
               <SelectValue placeholder="Filter by status" />

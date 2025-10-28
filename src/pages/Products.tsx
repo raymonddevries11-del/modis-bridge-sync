@@ -1,12 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
+import { TenantSelector } from "@/components/TenantSelector";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Search, RefreshCw, Calendar, Image } from "lucide-react";
 import { toast } from "sonner";
 
@@ -14,7 +15,27 @@ const Products = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [brandFilter, setBrandFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
+  const [selectedTenant, setSelectedTenant] = useState<string>("");
   const queryClient = useQueryClient();
+
+  // Auto-select first active tenant
+  const { data: tenants } = useQuery({
+    queryKey: ["tenants"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("tenants")
+        .select("*")
+        .eq("active", true)
+        .order("name");
+      return data || [];
+    },
+  });
+
+  useEffect(() => {
+    if (tenants && tenants.length > 0 && !selectedTenant) {
+      setSelectedTenant(tenants[0].id);
+    }
+  }, [tenants, selectedTenant]);
 
   const { data: brands } = useQuery({
     queryKey: ["brands"],
@@ -39,8 +60,10 @@ const Products = () => {
   });
 
   const { data: products, isLoading } = useQuery({
-    queryKey: ["products", searchTerm, brandFilter, supplierFilter],
+    queryKey: ["products", searchTerm, brandFilter, supplierFilter, selectedTenant],
     queryFn: async () => {
+      if (!selectedTenant) return [];
+      
       let query = supabase
         .from("products")
         .select(`
@@ -50,6 +73,7 @@ const Products = () => {
           product_prices(*),
           variants(*)
         `)
+        .eq("tenant_id", selectedTenant)
         .order("updated_at", { ascending: false });
 
       if (searchTerm) {
@@ -110,6 +134,11 @@ const Products = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-4">
+          <TenantSelector 
+            value={selectedTenant} 
+            onChange={setSelectedTenant} 
+          />
+          
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input

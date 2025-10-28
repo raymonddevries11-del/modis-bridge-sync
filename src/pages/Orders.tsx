@@ -1,27 +1,51 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
+import { TenantSelector } from "@/components/TenantSelector";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search, Download, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 
 const Orders = () => {
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedTenant, setSelectedTenant] = useState<string>("");
   const queryClient = useQueryClient();
 
-  const { data: orders, isLoading } = useQuery({
-    queryKey: ["orders", searchTerm],
+  // Auto-select first active tenant
+  const { data: tenants } = useQuery({
+    queryKey: ["tenants"],
     queryFn: async () => {
+      const { data } = await supabase
+        .from("tenants")
+        .select("*")
+        .eq("active", true)
+        .order("name");
+      return data || [];
+    },
+  });
+
+  useEffect(() => {
+    if (tenants && tenants.length > 0 && !selectedTenant) {
+      setSelectedTenant(tenants[0].id);
+    }
+  }, [tenants, selectedTenant]);
+
+  const { data: orders, isLoading } = useQuery({
+    queryKey: ["orders", searchTerm, selectedTenant],
+    queryFn: async () => {
+      if (!selectedTenant) return [];
+      
       let query = supabase
         .from("orders")
         .select(`
           *,
           order_lines(*)
         `)
+        .eq("tenant_id", selectedTenant)
         .order("created_at", { ascending: false });
 
       if (searchTerm) {
@@ -89,6 +113,11 @@ const Orders = () => {
         </div>
 
         <div className="flex items-center gap-4">
+          <TenantSelector 
+            value={selectedTenant} 
+            onChange={setSelectedTenant} 
+          />
+          
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
