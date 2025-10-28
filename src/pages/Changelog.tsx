@@ -25,7 +25,7 @@ interface ChangelogEntry {
 }
 
 const Changelog = () => {
-  const [selectedTenant, setSelectedTenant] = useState<string>("");
+  const [selectedTenant, setSelectedTenant] = useState<string>("all");
 
   const { data: changelog, isLoading } = useQuery({
     queryKey: ["changelog", selectedTenant],
@@ -36,7 +36,7 @@ const Changelog = () => {
         .order("created_at", { ascending: false })
         .limit(100);
 
-      if (selectedTenant) {
+      if (selectedTenant && selectedTenant !== "all") {
         query = query.eq("tenant_id", selectedTenant);
       }
 

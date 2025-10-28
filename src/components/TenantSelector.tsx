@@ -36,7 +36,7 @@ export function TenantSelector({ value, onChange, showAll = false }: TenantSelec
       </SelectTrigger>
       <SelectContent>
         {showAll && (
-          <SelectItem value="">Alle tenants</SelectItem>
+          <SelectItem value="all">Alle tenants</SelectItem>
         )}
         {tenants.map((tenant) => (
           <SelectItem key={tenant.id} value={tenant.id}>
