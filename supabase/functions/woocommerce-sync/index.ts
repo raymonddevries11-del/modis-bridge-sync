@@ -41,14 +41,14 @@ Deno.serve(async (req) => {
       console.log(`Processing specific job: ${body.jobId}`);
       const { data, error } = await supabase
         .from('jobs')
-        .select('*, tenants!inner(id)')
+        .select('*')
         .eq('id', body.jobId)
         .eq('type', 'SYNC_TO_WOO')
         .in('state', ['ready', 'processing'])
         .single();
       
       if (error || !data) {
-        console.log(`Job ${body.jobId} not found or not processable`);
+        console.log(`Job ${body.jobId} not found or not processable`, error);
         return new Response(JSON.stringify({ message: 'Job not found' }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
@@ -58,7 +58,7 @@ Deno.serve(async (req) => {
       // Fetch ready jobs with FOR UPDATE SKIP LOCKED (single consumer pattern)
       const { data, error: jobError } = await supabase
         .from('jobs')
-        .select('*, tenants!inner(id)')
+        .select('*')
         .eq('type', 'SYNC_TO_WOO')
         .eq('state', 'ready')
         .limit(10);
