@@ -144,9 +144,12 @@ jobs:
               
               console.log(`Found ${xmlFiles.length} XML files`);
               
-              // Sync photos from webfoto directory
+              // Sync photos from webfoto directory (at tenant level, not inside modis-to-wp)
               console.log('\n=== Syncing product photos ===');
-              const webfotoPath = `${basePath}/webfoto`;
+              
+              // Extract tenant path from basePath by removing /modis-to-wp
+              const tenantBasePath = basePath.replace('/modis-to-wp', '');
+              const webfotoPath = `${tenantBasePath}/webfoto`;
               
               try {
                 const webfotoExists = await sftp.exists(webfotoPath);
