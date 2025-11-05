@@ -152,6 +152,30 @@ jobs:
                     console.error(`Failed to mark ${file.filename} as synced`);
                   }
                   
+                  // Log to changelog
+                  try {
+                    await fetch(
+                      `${process.env.SUPABASE_URL}/rest/v1/changelog`,
+                      {
+                        method: 'POST',
+                        headers: {
+                          'apikey': process.env.SUPABASE_ANON_KEY,
+                          'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                          'Content-Type': 'application/json',
+                          'Prefer': 'return=minimal'
+                        },
+                        body: JSON.stringify({
+                          tenant_id: file.tenant_id,
+                          event_type: 'SFTP_UPLOAD',
+                          description: `Order ${file.order_number} geüpload naar SFTP`,
+                          metadata: { filename: file.filename, order_number: file.order_number }
+                        })
+                      }
+                    );
+                  } catch (logError) {
+                    console.error('Failed to log to changelog:', logError.message);
+                  }
+                  
                   synced++;
                   
                 } catch (error) {

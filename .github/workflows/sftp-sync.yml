@@ -288,6 +288,30 @@ jobs:
                   const result = await response.json();
                   console.log(`Success: ${fileName} - ${result.message}`);
                   
+                  // Log to changelog
+                  try {
+                    await fetch(
+                      `${process.env.SUPABASE_URL}/rest/v1/changelog`,
+                      {
+                        method: 'POST',
+                        headers: {
+                          'apikey': process.env.SUPABASE_ANON_KEY,
+                          'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                          'Content-Type': 'application/json',
+                          'Prefer': 'return=minimal'
+                        },
+                        body: JSON.stringify({
+                          tenant_id: tenant.id,
+                          event_type: 'SFTP_SYNC',
+                          description: `XML bestand ${fileName} verwerkt via SFTP`,
+                          metadata: { filename: fileName, tenant_name: tenant.name }
+                        })
+                      }
+                    );
+                  } catch (logError) {
+                    console.error('Failed to log to changelog:', logError.message);
+                  }
+                  
                   // Move to archive
                   await sftp.rename(processingFilePath, archiveFilePath);
                   
