@@ -132,11 +132,13 @@ Deno.serve(async (req) => {
 
     // Check if a specific job ID was provided in the request
     let jobs;
+    let isSchedulerInvoked = false;
     const body = await req.json().catch(() => ({}));
     
     if (body.jobId) {
       // Process specific job (called by job-scheduler)
       console.log(`Processing specific job: ${body.jobId}`);
+      isSchedulerInvoked = true;
       const { data, error } = await supabase
         .from('jobs')
         .select('*')
@@ -179,7 +181,7 @@ Deno.serve(async (req) => {
 
     // Process each job (each job now has its own tenant configuration)
     const results = await Promise.allSettled(
-      jobs.map((job) => processJob(job, supabase))
+      jobs.map((job) => processJob(job, supabase, isSchedulerInvoked))
     );
 
     const successCount = results.filter((r) => r.status === 'fulfilled').length;
@@ -208,7 +210,8 @@ Deno.serve(async (req) => {
 
 async function processJob(
   job: any,
-  supabase: any
+  supabase: any,
+  isSchedulerInvoked: boolean = false
 ) {
   console.log(`Processing job ${job.id}`, job.payload);
 
@@ -306,19 +309,21 @@ async function processJob(
       await syncProductToWooCommerce(product, wooConfig, variantIds);
     }
 
-    // Mark as done and log to changelog
-    await supabase.from('jobs').update({ state: 'done', error: null }).eq('id', job.id);
-    
-    // Add changelog entry
-    await supabase.from('changelog').insert({
-      tenant_id: job.tenant_id,
-      event_type: 'SYNC_COMPLETED',
-      description: `${products.length} producten gesynchroniseerd naar WooCommerce`,
-      metadata: {
-        productCount: products.length,
-        jobId: job.id
-      }
-    });
+    // Only mark as done and log if NOT invoked by scheduler (scheduler handles state)
+    if (!isSchedulerInvoked) {
+      await supabase.from('jobs').update({ state: 'done', error: null }).eq('id', job.id);
+      
+      // Add changelog entry
+      await supabase.from('changelog').insert({
+        tenant_id: job.tenant_id,
+        event_type: 'SYNC_COMPLETED',
+        description: `${products.length} producten gesynchroniseerd naar WooCommerce`,
+        metadata: {
+          productCount: products.length,
+          jobId: job.id
+        }
+      });
+    }
     
     console.log(`Job ${job.id} completed successfully`);
   } catch (error) {
@@ -347,26 +352,28 @@ async function processJob(
         })
         .eq('id', job.id);
     } else {
-      // Permanent failure
-      await supabase
-        .from('jobs')
-        .update({ 
-          state: 'error', 
-          error: errorMessage 
-        })
-        .eq('id', job.id);
-      
-      // Log failed sync to changelog
-      await supabase.from('changelog').insert({
-        tenant_id: job.tenant_id,
-        event_type: 'SYNC_FAILED',
-        description: `WooCommerce synchronisatie mislukt na ${maxRetries} pogingen`,
-        metadata: {
-          error: errorMessage,
-          attempts: attempts,
-          jobId: job.id
-        }
-      });
+      // Permanent failure - only update if not scheduler invoked
+      if (!isSchedulerInvoked) {
+        await supabase
+          .from('jobs')
+          .update({ 
+            state: 'error', 
+            error: errorMessage 
+          })
+          .eq('id', job.id);
+        
+        // Log failed sync to changelog
+        await supabase.from('changelog').insert({
+          tenant_id: job.tenant_id,
+          event_type: 'SYNC_FAILED',
+          description: `WooCommerce synchronisatie mislukt na ${maxRetries} pogingen`,
+          metadata: {
+            error: errorMessage,
+            attempts: attempts,
+            jobId: job.id
+          }
+        });
+      }
     }
 
     throw error;
