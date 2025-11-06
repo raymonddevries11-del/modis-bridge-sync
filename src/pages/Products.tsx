@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ProductDetailModal } from "@/components/ProductDetailModal";
 import { useState, useEffect } from "react";
 import { Search, RefreshCw, Calendar, Image } from "lucide-react";
 import { toast } from "sonner";
@@ -16,6 +17,8 @@ const Products = () => {
   const [brandFilter, setBrandFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
   const [selectedTenant, setSelectedTenant] = useState<string>("");
+  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const queryClient = useQueryClient();
 
   // Auto-select first active tenant
@@ -205,7 +208,14 @@ const Products = () => {
         ) : products && products.length > 0 ? (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {products.map((product: any) => (
-              <Card key={product.id} className="hover:shadow-md transition-shadow">
+              <Card 
+                key={product.id} 
+                className="hover:shadow-md transition-shadow cursor-pointer"
+                onClick={() => {
+                  setSelectedProduct(product);
+                  setIsModalOpen(true);
+                }}
+              >
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className="flex-1 min-w-0">
@@ -268,6 +278,14 @@ const Products = () => {
               </p>
             </CardContent>
           </Card>
+        )}
+
+        {selectedProduct && (
+          <ProductDetailModal
+            product={selectedProduct}
+            open={isModalOpen}
+            onOpenChange={setIsModalOpen}
+          />
         )}
       </div>
     </Layout>
