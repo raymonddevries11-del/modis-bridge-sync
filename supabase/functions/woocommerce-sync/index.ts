@@ -540,16 +540,21 @@ async function updateProductInWooCommerce(
   const existingProduct = await getResponse.json();
   const existingImages = existingProduct.images || [];
   
-  // Create a Set of existing image URLs for fast lookup
-  const existingImageUrls = new Set(existingImages.map((img: any) => {
-    // Normalize URLs by removing query params and protocol differences
+  // Extract filenames from existing images (e.g., "W-3_287812001.jpg" from any URL)
+  const existingImageFilenames = new Set(existingImages.map((img: any) => {
     try {
       const url = new URL(img.src);
-      return url.hostname + url.pathname;
+      const pathname = url.pathname;
+      // Get filename without extension for better matching
+      const filename = pathname.split('/').pop() || '';
+      const filenameWithoutExt = filename.replace(/\.[^/.]+$/, '');
+      return filenameWithoutExt.toLowerCase();
     } catch {
-      return img.src;
+      return '';
     }
-  }));
+  }).filter(Boolean));
+
+  console.log(`Product ${sku} has ${existingImages.length} existing images with filenames:`, Array.from(existingImageFilenames));
 
   // Prepare images from our database and filter out ones that already exist
   const newImagesToAdd = (images || [])
@@ -560,11 +565,19 @@ async function updateProductInWooCommerce(
         return false;
       }
       
-      // Normalize and check if it already exists
+      // Check if filename already exists in WooCommerce
       try {
         const url = new URL(img);
-        const normalizedUrl = url.hostname + url.pathname;
-        return !existingImageUrls.has(normalizedUrl);
+        const pathname = url.pathname;
+        const filename = pathname.split('/').pop() || '';
+        const filenameWithoutExt = filename.replace(/\.[^/.]+$/, '');
+        
+        if (existingImageFilenames.has(filenameWithoutExt.toLowerCase())) {
+          console.log(`Skipping duplicate image: ${filename}`);
+          return false;
+        }
+        
+        return true;
       } catch {
         return false;
       }
