@@ -18,16 +18,62 @@ Deno.serve(async (req) => {
   try {
     console.log('WooCommerce webhook received');
 
+    // Verify webhook signature
+    const signature = req.headers.get('x-wc-webhook-signature');
+    const webhookSecret = Deno.env.get('WOOCOMMERCE_WEBHOOK_SECRET');
+
+    if (!webhookSecret) {
+      console.error('WOOCOMMERCE_WEBHOOK_SECRET not configured');
+      return new Response(
+        JSON.stringify({ error: 'Webhook not configured' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Parse the request body
     const contentType = req.headers.get('content-type') || '';
+    let bodyText: string;
     let wooOrder;
 
     if (contentType.includes('application/json')) {
-      // JSON payload (actual webhooks)
-      wooOrder = await req.json();
+      // Get raw body for signature verification
+      bodyText = await req.text();
+      
+      // Verify HMAC signature for non-test webhooks
+      if (signature && webhookSecret) {
+        const encoder = new TextEncoder();
+        const key = await crypto.subtle.importKey(
+          'raw',
+          encoder.encode(webhookSecret),
+          { name: 'HMAC', hash: 'SHA-256' },
+          false,
+          ['sign']
+        );
+
+        const expectedSig = await crypto.subtle.sign(
+          'HMAC',
+          key,
+          encoder.encode(bodyText)
+        );
+
+        const expectedBase64 = btoa(String.fromCharCode(...new Uint8Array(expectedSig)));
+
+        if (signature !== expectedBase64) {
+          console.error('Invalid webhook signature');
+          return new Response(
+            JSON.stringify({ error: 'Invalid signature' }),
+            { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        
+        console.log('Webhook signature verified successfully');
+      }
+
+      // Parse JSON after verification
+      wooOrder = JSON.parse(bodyText);
     } else {
       // Test webhook or other format - return success
-      const bodyText = await req.text();
+      bodyText = await req.text();
       console.log('Non-JSON webhook received:', bodyText);
       return new Response(
         JSON.stringify({ message: 'Webhook endpoint ready' }),

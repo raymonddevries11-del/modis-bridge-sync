@@ -7,10 +7,10 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.settings]
-verify_jwt = false
+verify_jwt = true
 
 [functions.api-keys]
-verify_jwt = false
+verify_jwt = true
 
 [functions.woocommerce-sync]
 verify_jwt = false
