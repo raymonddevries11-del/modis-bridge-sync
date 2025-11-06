@@ -540,21 +540,26 @@ async function updateProductInWooCommerce(
   const existingProduct = await getResponse.json();
   const existingImages = existingProduct.images || [];
   
-  // Extract filenames from existing images (e.g., "W-3_287812001.jpg" from any URL)
+  // Extract base filenames from existing images (strip WordPress suffixes like -1, -2, -scaled, etc.)
   const existingImageFilenames = new Set(existingImages.map((img: any) => {
     try {
       const url = new URL(img.src);
       const pathname = url.pathname;
-      // Get filename without extension for better matching
       const filename = pathname.split('/').pop() || '';
+      
+      // Remove extension first
       const filenameWithoutExt = filename.replace(/\.[^/.]+$/, '');
-      return filenameWithoutExt.toLowerCase();
+      
+      // Remove WordPress auto-generated suffixes: -1, -2, -3, -scaled, etc.
+      const baseFilename = filenameWithoutExt.replace(/-\d+$/, '').replace(/-scaled$/, '');
+      
+      return baseFilename.toLowerCase();
     } catch {
       return '';
     }
   }).filter(Boolean));
 
-  console.log(`Product ${sku} has ${existingImages.length} existing images with filenames:`, Array.from(existingImageFilenames));
+  console.log(`Product ${sku} has ${existingImages.length} existing images with base filenames:`, Array.from(existingImageFilenames));
 
   // Prepare images from our database and filter out ones that already exist
   const newImagesToAdd = (images || [])
@@ -565,15 +570,18 @@ async function updateProductInWooCommerce(
         return false;
       }
       
-      // Check if filename already exists in WooCommerce
+      // Check if base filename already exists in WooCommerce
       try {
         const url = new URL(img);
         const pathname = url.pathname;
         const filename = pathname.split('/').pop() || '';
-        const filenameWithoutExt = filename.replace(/\.[^/.]+$/, '');
         
-        if (existingImageFilenames.has(filenameWithoutExt.toLowerCase())) {
-          console.log(`Skipping duplicate image: ${filename}`);
+        // Get base filename without extension and suffixes
+        const filenameWithoutExt = filename.replace(/\.[^/.]+$/, '');
+        const baseFilename = filenameWithoutExt.replace(/-\d+$/, '').replace(/-scaled$/, '');
+        
+        if (existingImageFilenames.has(baseFilename.toLowerCase())) {
+          console.log(`Skipping duplicate image: ${filename} (matches existing base: ${baseFilename})`);
           return false;
         }
         
