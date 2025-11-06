@@ -56,41 +56,39 @@ const Jobs = () => {
     refetchInterval: 3000,
   });
 
-  // Calculate sync progress - track unique products across all jobs
-  const syncProgress = jobs?.reduce((acc, job: any) => {
-    if (job.type !== 'SYNC_TO_WOO') return acc;
+  // Calculate sync progress - use most recent status for each product
+  const productStatusMap = new Map<string, string>();
+  
+  // Jobs are sorted by created_at DESC, so reverse to process oldest first
+  const sortedJobs = [...(jobs || [])].reverse();
+  
+  sortedJobs.forEach((job: any) => {
+    if (job.type !== 'SYNC_TO_WOO') return;
     
     const productIds = job.payload?.productIds || [];
-    
     productIds.forEach((id: string) => {
-      if (job.state === 'done') {
-        acc.completed.add(id);
-        acc.allProducts.add(id);
-      } else if (job.state === 'processing') {
-        if (!acc.completed.has(id)) {
-          acc.processing.add(id);
-        }
-        acc.allProducts.add(id);
-      } else if (job.state === 'ready') {
-        if (!acc.completed.has(id) && !acc.processing.has(id)) {
-          acc.pending.add(id);
-        }
-        acc.allProducts.add(id);
-      }
+      // Update status - newer jobs will overwrite older ones
+      productStatusMap.set(id, job.state);
     });
-    
-    return acc;
-  }, { 
-    completed: new Set(), 
-    processing: new Set(), 
-    pending: new Set(), 
-    allProducts: new Set() 
-  }) || { 
-    completed: new Set(), 
-    processing: new Set(), 
-    pending: new Set(), 
-    allProducts: new Set() 
+  });
+
+  // Count products by their most recent status
+  const syncProgress = {
+    completed: new Set<string>(),
+    processing: new Set<string>(),
+    pending: new Set<string>(),
+    allProducts: productStatusMap
   };
+
+  productStatusMap.forEach((state, productId) => {
+    if (state === 'done') {
+      syncProgress.completed.add(productId);
+    } else if (state === 'processing') {
+      syncProgress.processing.add(productId);
+    } else if (state === 'ready') {
+      syncProgress.pending.add(productId);
+    }
+  });
 
   const progressPercentage = syncProgress.allProducts.size > 0 
     ? Math.round((syncProgress.completed.size / syncProgress.allProducts.size) * 100) 
