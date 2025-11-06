@@ -7,7 +7,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Helper to parse quantity
+// Helper to parse quantity (removes leading zeros)
 function parseQty(qty: string): number {
   return parseInt(qty.replace(/^0+/, '') || '0', 10);
 }
@@ -28,114 +28,197 @@ Deno.serve(async (req) => {
 
     // Parse XML
     const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(xmlContent, 'text/xml');
+    const xmlDoc = parser.parseFromString(xmlContent, 'text/html'); // Use text/html for more lenient parsing
 
     if (!xmlDoc) {
       throw new Error('Failed to parse XML');
     }
 
-    // Get all stock items (voorraad items)
-    const stockItems = xmlDoc.querySelectorAll('ArtikelVoorraad');
+    // Get all voorraad items (vrd elements)
+    const stockItems = xmlDoc.querySelectorAll('vrd');
 
     if (stockItems.length === 0) {
-      throw new Error('No stock items found in XML');
+      throw new Error('No stock items (vrd) found in XML');
     }
 
-    console.log(`Found ${stockItems.length} stock items - starting background processing`);
+    console.log(`Found ${stockItems.length} stock items (vrd) - starting background processing`);
 
     // Start background processing
     const processStock = async () => {
-      let updatedCount = 0;
-      let skippedCount = 0;
+      let updatedVariants = 0;
+      let skippedVariants = 0;
       const errors: string[] = [];
 
-      for (const itemNode of Array.from(stockItems)) {
+      for (const vrdNode of Array.from(stockItems)) {
         try {
-          const item = itemNode as Element;
+          const vrd = vrdNode as Element;
           
-          // Extract data from XML
-          const sku = item.querySelector('ArtikelNummer')?.textContent?.trim();
-          const storeId = item.querySelector('VestigingsNummer')?.textContent?.trim();
-          const qtyText = item.querySelector('Voorraad')?.textContent?.trim();
+          // Extract artikelnummer (SKU) and mutatiecode
+          const sku = vrd.querySelector('artikelnummer')?.textContent?.trim();
+          const mutatieCode = vrd.querySelector('mutatiecode')?.textContent?.trim();
 
-          if (!sku || !storeId || !qtyText) {
-            console.log(`Skipping item - missing data: SKU=${sku}, Store=${storeId}, Qty=${qtyText}`);
-            skippedCount++;
+          if (!sku) {
+            console.log('Skipping vrd - missing artikelnummer');
+            skippedVariants++;
             continue;
           }
 
-          const qty = parseQty(qtyText);
+          console.log(`Processing SKU: ${sku}, Mutatiecode: ${mutatieCode}`);
 
-          // Find variant by SKU (via product)
+          // Find product by SKU
           const { data: product } = await supabase
             .from('products')
-            .select('id, variants(id, maat_id)')
+            .select('id')
             .eq('sku', sku)
             .eq('tenant_id', tenantId)
-            .single();
+            .maybeSingle();
 
-          if (!product || !product.variants || product.variants.length === 0) {
-            console.log(`Product/variant not found for SKU: ${sku}`);
-            skippedCount++;
+          if (!product) {
+            console.log(`Product not found for SKU: ${sku} (might not be synced yet)`);
+            skippedVariants++;
             continue;
           }
 
-          // Update stock for all variants of this product
-          for (const variant of product.variants) {
-            // Upsert stock by store
-            const { error: storeError } = await supabase
-              .from('stock_by_store')
-              .upsert({
-                variant_id: variant.id,
-                store_id: storeId,
-                qty: qty,
-                updated_at: new Date().toISOString(),
-              }, {
-                onConflict: 'variant_id,store_id',
-              });
+          // Get all maat elements within this vrd
+          const maatElements = vrd.querySelectorAll('maat');
+          
+          if (maatElements.length === 0) {
+            console.log(`No maat elements found for SKU: ${sku}`);
+            skippedVariants++;
+            continue;
+          }
 
-            if (storeError) {
-              console.error(`Error updating stock_by_store for variant ${variant.id}:`, storeError);
-              errors.push(`Stock by store error for ${sku}: ${storeError.message}`);
-              continue;
-            }
+          // Process each maat (variant)
+          for (const maatNode of Array.from(maatElements)) {
+            try {
+              const maat = maatNode as Element;
+              
+              // Get maat_id from id attribute
+              const maatId = maat.getAttribute('id')?.trim();
+              const ean = maat.querySelector('ean-barcode')?.textContent?.trim();
+              const totaalAantal = maat.querySelector('totaal-aantal')?.textContent?.trim();
 
-            // Calculate and update total stock for this variant
-            const { data: storeStocks } = await supabase
-              .from('stock_by_store')
-              .select('qty')
-              .eq('variant_id', variant.id);
+              if (!maatId) {
+                console.log(`Skipping maat - missing id attribute for SKU: ${sku}`);
+                continue;
+              }
 
-            const totalQty = storeStocks?.reduce((sum, s) => sum + (s.qty || 0), 0) || 0;
+              console.log(`  Processing variant maat_id: ${maatId}, EAN: ${ean}, Total: ${totaalAantal}`);
 
-            const { error: totalError } = await supabase
-              .from('stock_totals')
-              .upsert({
-                variant_id: variant.id,
-                qty: totalQty,
-                updated_at: new Date().toISOString(),
-              }, {
-                onConflict: 'variant_id',
-              });
+              // Find variant by product_id and maat_id
+              const { data: variant } = await supabase
+                .from('variants')
+                .select('id')
+                .eq('product_id', product.id)
+                .eq('maat_id', maatId)
+                .maybeSingle();
 
-            if (totalError) {
-              console.error(`Error updating stock_totals for variant ${variant.id}:`, totalError);
-              errors.push(`Stock total error for ${sku}: ${totalError.message}`);
-            } else {
-              updatedCount++;
+              if (!variant) {
+                console.log(`  Variant not found for SKU: ${sku}, maat_id: ${maatId}`);
+                skippedVariants++;
+                continue;
+              }
+
+              // Determine quantity based on mutatiecode
+              let shouldDelete = false;
+              if (mutatieCode === 'D') {
+                // Delete: set all stock to 0
+                shouldDelete = true;
+                console.log(`  Mutatiecode D: Setting all stock to 0 for variant ${variant.id}`);
+              }
+
+              // Get all filiaal elements for store-specific stock
+              const filiaalElements = maat.querySelectorAll('filiaal');
+              
+              if (filiaalElements.length === 0) {
+                console.log(`  No filiaal elements found for maat_id: ${maatId}`);
+              }
+
+              // Process each store location
+              for (const filiaalNode of Array.from(filiaalElements)) {
+                try {
+                  const filiaal = filiaalNode as Element;
+                  
+                  // Get store_id from id attribute
+                  const storeId = filiaal.getAttribute('id')?.trim();
+                  const aantalText = filiaal.querySelector('Aantal')?.textContent?.trim();
+
+                  if (!storeId || !aantalText) {
+                    console.log(`    Skipping filiaal - missing id or Aantal`);
+                    continue;
+                  }
+
+                  const qty = shouldDelete ? 0 : parseQty(aantalText);
+
+                  console.log(`    Store ${storeId}: ${qty} items`);
+
+                  // Upsert stock by store
+                  const { error: storeError } = await supabase
+                    .from('stock_by_store')
+                    .upsert({
+                      variant_id: variant.id,
+                      store_id: storeId,
+                      qty: qty,
+                      updated_at: new Date().toISOString(),
+                    }, {
+                      onConflict: 'variant_id,store_id',
+                    });
+
+                  if (storeError) {
+                    console.error(`    Error updating stock_by_store:`, storeError);
+                    errors.push(`Stock by store error for ${sku}/${maatId}/${storeId}: ${storeError.message}`);
+                  }
+                } catch (filiaalError) {
+                  const error = filiaalError as Error;
+                  console.error('    Error processing filiaal:', error);
+                  errors.push(`Filiaal error for ${sku}/${maatId}: ${error.message}`);
+                }
+              }
+
+              // Calculate and update total stock for this variant
+              const { data: storeStocks } = await supabase
+                .from('stock_by_store')
+                .select('qty')
+                .eq('variant_id', variant.id);
+
+              const totalQty = storeStocks?.reduce((sum, s) => sum + (s.qty || 0), 0) || 0;
+
+              console.log(`  Total stock for variant ${variant.id}: ${totalQty}`);
+
+              const { error: totalError } = await supabase
+                .from('stock_totals')
+                .upsert({
+                  variant_id: variant.id,
+                  qty: totalQty,
+                  updated_at: new Date().toISOString(),
+                }, {
+                  onConflict: 'variant_id',
+                });
+
+              if (totalError) {
+                console.error(`  Error updating stock_totals:`, totalError);
+                errors.push(`Stock total error for ${sku}/${maatId}: ${totalError.message}`);
+              } else {
+                updatedVariants++;
+              }
+
+            } catch (maatError) {
+              const error = maatError as Error;
+              console.error('  Error processing maat:', error);
+              errors.push(`Maat error for ${sku}: ${error.message}`);
             }
           }
-        } catch (itemError) {
-          const error = itemError as Error;
-          console.error('Error processing stock item:', error);
-          errors.push(`Item error: ${error.message}`);
+        } catch (vrdError) {
+          const error = vrdError as Error;
+          console.error('Error processing vrd:', error);
+          errors.push(`VRD error: ${error.message}`);
         }
       }
 
-      console.log(`Stock import complete: ${updatedCount} updated, ${skippedCount} skipped`);
+      console.log(`Stock import complete: ${updatedVariants} variants updated, ${skippedVariants} variants skipped`);
       
       if (errors.length > 0) {
-        console.log(`Errors encountered: ${errors.join(', ')}`);
+        console.log(`Errors encountered (${errors.length}): ${errors.slice(0, 5).join(', ')}${errors.length > 5 ? '...' : ''}`);
       }
 
       // Log to changelog
@@ -143,11 +226,11 @@ Deno.serve(async (req) => {
         await supabase.from('changelog').insert({
           tenant_id: tenantId,
           event_type: 'STOCK_IMPORT',
-          description: `Voorraad bestand ${fileName} verwerkt: ${updatedCount} bijgewerkt, ${skippedCount} overgeslagen`,
+          description: `Voorraad bestand ${fileName} verwerkt: ${updatedVariants} variants bijgewerkt, ${skippedVariants} overgeslagen`,
           metadata: {
             filename: fileName,
-            updated_count: updatedCount,
-            skipped_count: skippedCount,
+            updated_variants: updatedVariants,
+            skipped_variants: skippedVariants,
             error_count: errors.length,
           },
         });
@@ -156,7 +239,7 @@ Deno.serve(async (req) => {
       }
     };
 
-    // Start background processing (waitUntil available in newer Deno versions)
+    // Start background processing
     processStock();
 
     // Return immediate response
