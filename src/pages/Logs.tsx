@@ -59,7 +59,7 @@ const Logs = () => {
       const { data } = await supabase
         .from("changelog")
         .select("*, tenants!inner(name, slug)")
-        .in("event_type", ["SFTP_SYNC", "SFTP_UPLOAD"])
+        .in("event_type", ["SFTP_SYNC", "SFTP_UPLOAD", "STOCK_IMPORT", "PRODUCTS_IMPORTED", "SYNC_COMPLETED"])
         .order("created_at", { ascending: false })
         .limit(100);
       return data as ChangelogEntry[] || [];
@@ -173,6 +173,10 @@ const Logs = () => {
         return <Download className="h-4 w-4 text-blue-600" />;
       case 'SFTP_UPLOAD':
         return <Upload className="h-4 w-4 text-green-600" />;
+      case 'STOCK_IMPORT':
+        return <Download className="h-4 w-4 text-purple-600" />;
+      case 'PRODUCTS_IMPORTED':
+        return <Download className="h-4 w-4 text-orange-600" />;
       case 'SYNC_COMPLETED':
         return <CheckCircle className="h-4 w-4 text-green-600" />;
       default:
@@ -184,9 +188,9 @@ const Logs = () => {
     <Layout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">SFTP Logs</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Import Logs</h1>
           <p className="text-muted-foreground">
-            Bestandsverwerking naar en vanaf SFTP server (updates automatisch)
+            XML bestandsverwerking (producten & voorraad) - updates automatisch
           </p>
         </div>
 
@@ -237,7 +241,7 @@ const Logs = () => {
             <Card>
               <CardContent className="py-12 text-center">
                 <p className="text-sm text-muted-foreground">
-                  Nog geen SFTP activiteit. Bestanden worden elke 2 minuten gesynchroniseerd via GitHub Actions.
+                  Nog geen import activiteit. XML bestanden worden elke 2 minuten gesynchroniseerd via GitHub Actions.
                 </p>
               </CardContent>
             </Card>
