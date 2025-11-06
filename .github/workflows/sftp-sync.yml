@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           npm init -y
-          npm install ssh2-sftp-client node-fetch
+          npm install ssh2-sftp-client node-fetch form-data
 
       - name: Debug and Sync SFTP files
         env:
@@ -314,21 +314,31 @@ jobs:
                       // Photo doesn't exist (404), proceed with upload
                       const imageBuffer = await sftp.get(photoPath);
                       
+                      // Upload via edge function instead of direct storage API
+                      const FormData = (await import('form-data')).default;
+                      const formData = new FormData();
+                      formData.append('file', imageBuffer, {
+                        filename: photoFile.name,
+                        contentType: 'image/jpeg'
+                      });
+                      formData.append('tenantId', tenant.slug);
+                      formData.append('fileName', photoFile.name);
+                      
                       const uploadResponse = await fetch(
-                        `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${photoFile.name}`,
+                        `${process.env.SUPABASE_URL}/functions/v1/upload-product-image`,
                         {
                           method: 'POST',
                           headers: {
-                            'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
-                            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-                            'Content-Type': 'image/jpeg',
+                            'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                            ...formData.getHeaders()
                           },
-                          body: imageBuffer,
+                          body: formData
                         }
                       );
                       
                       if (uploadResponse.ok) {
-                        console.log(`✓ Uploaded photo: ${photoFile.name}`);
+                        const result = await uploadResponse.json();
+                        console.log(`✓ Uploaded photo: ${photoFile.name} - ${result.message}`);
                       } else {
                         const errorText = await uploadResponse.text();
                         console.error(`Failed to upload ${photoFile.name}: ${uploadResponse.status} - ${errorText}`);
