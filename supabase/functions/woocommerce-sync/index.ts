@@ -299,10 +299,18 @@ async function syncProductToWooCommerce(
     if (searchResponse.status === 401) {
       throw new Error(`WooCommerce authentication failed. Check your API credentials.`);
     }
-    throw new Error(`Failed to search for product ${sku}: ${searchResponse.status} ${searchResponse.statusText}`);
+    const errorText = await searchResponse.text();
+    throw new Error(`Failed to search for product ${sku}: ${searchResponse.status} ${searchResponse.statusText} - ${errorText.substring(0, 200)}`);
   }
 
-  const wooProducts = await searchResponse.json();
+  let wooProducts;
+  try {
+    wooProducts = await searchResponse.json();
+  } catch (parseError) {
+    const responseText = await searchResponse.text();
+    console.error('Failed to parse JSON response:', responseText.substring(0, 500));
+    throw new Error(`Invalid JSON response from WooCommerce API. Response starts with: ${responseText.substring(0, 100)}. This often indicates a Cloudflare/CDN block or incorrect WooCommerce URL.`);
+  }
   
   // If product doesn't exist, create it
   if (!wooProducts || wooProducts.length === 0) {
