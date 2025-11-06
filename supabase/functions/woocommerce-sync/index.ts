@@ -261,11 +261,12 @@ async function processJob(
       productIdsToProcess = currentBatch;
     }
 
-    // Fetch products with their prices and variants (filtered by tenant)
+    // Fetch products with their prices, variants, brands, and other needed data (filtered by tenant)
     let query = supabase
       .from('products')
       .select(`
         *,
+        brands(id, name),
         product_prices(*),
         variants(
           *,
@@ -485,9 +486,11 @@ async function createProductInWooCommerce(
   }
 
   // Ensure all custom attributes exist in WooCommerce first
+  console.log(`Product ${sku} has attributes:`, attributes);
   if (attributes && typeof attributes === 'object') {
     for (const [key, value] of Object.entries(attributes)) {
       if (value && String(value).trim()) {
+        console.log(`Ensuring attribute exists: ${key}`);
         await ensureAttributeExists(key, wooConfig);
       }
     }
@@ -510,10 +513,12 @@ async function createProductInWooCommerce(
   }
 
   // Add categories if available - ensure they exist first
+  console.log(`Product ${sku} has categories:`, categories);
   if (categories && Array.isArray(categories) && categories.length > 0) {
     const categoryIds: number[] = [];
     for (const cat of categories) {
       if (cat.name) {
+        console.log(`Ensuring category exists: ${cat.name}`);
         const catId = await ensureCategoryExists(cat.name, wooConfig);
         if (catId) {
           categoryIds.push(catId);
@@ -522,6 +527,7 @@ async function createProductInWooCommerce(
     }
     if (categoryIds.length > 0) {
       productData.categories = categoryIds.map(id => ({ id }));
+      console.log(`Added ${categoryIds.length} categories to product`);
     }
   } else if (brands?.name) {
     // Fallback to brand as category if no categories available
