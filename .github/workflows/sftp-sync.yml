@@ -279,23 +279,35 @@ jobs:
                     try {
                       const photoPath = `${webfotoPath}/${photoFile.name}`;
                       
-                      // Check if photo already exists in Supabase Storage using list API
+                      // Check if photo already exists in Supabase Storage
+                      // List all files in the bucket root directory
                       const listResponse = await fetch(
-                        `${process.env.SUPABASE_URL}/storage/v1/object/list/product-images?search=${encodeURIComponent(photoFile.name)}`,
+                        `${process.env.SUPABASE_URL}/storage/v1/object/list/product-images`,
                         {
+                          method: 'POST',
                           headers: {
                             'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                            'Content-Type': 'application/json',
                           },
+                          body: JSON.stringify({
+                            limit: 10000,
+                            offset: 0,
+                            sortBy: { column: 'name', order: 'asc' },
+                          }),
                         }
                       );
                       
                       // Skip if photo already exists
                       if (listResponse.ok) {
                         const files = await listResponse.json();
-                        if (files.some(f => f.name === photoFile.name)) {
+                        const fileExists = Array.isArray(files) && files.some(f => f.name === photoFile.name);
+                        if (fileExists) {
                           console.log(`⊘ Skipped (already exists): ${photoFile.name}`);
                           continue;
                         }
+                        console.log(`✓ Photo doesn't exist yet, uploading: ${photoFile.name}`);
+                      } else {
+                        console.log(`⚠ Could not check existence for ${photoFile.name}, proceeding with upload`);
                       }
                       
                       // Photo doesn't exist (404), proceed with upload
