@@ -332,7 +332,7 @@ async function createProductInWooCommerce(
   wooConfig: WooCommerceConfig,
   variantIdsFilter?: string[]
 ) {
-  const { sku, title, product_prices, variants, images, color, brands, tax_code, webshop_text, meta_description, categories } = product;
+  const { sku, title, product_prices, variants, images, color, brands, tax_code, webshop_text, meta_description, categories, attributes } = product;
 
   // Prepare product images - skip images that don't have full URLs
   const productImages = (images || [])
@@ -384,6 +384,22 @@ async function createProductInWooCommerce(
       variation: false,
       options: [color.label]
     });
+  }
+
+  // Add all product attributes from database
+  if (attributes && typeof attributes === 'object') {
+    let position = productData.attributes.length;
+    for (const [key, value] of Object.entries(attributes)) {
+      if (value && String(value).trim()) {
+        productData.attributes.push({
+          name: key,
+          position: position++,
+          visible: true,
+          variation: false,
+          options: [String(value)]
+        });
+      }
+    }
   }
 
   // Add categories if available
@@ -524,7 +540,7 @@ async function updateProductInWooCommerce(
   wooConfig: WooCommerceConfig,
   variantIdsFilter?: string[]
 ) {
-  const { sku, title, variants, images, product_prices, webshop_text, meta_description, categories, brands } = product;
+  const { sku, title, variants, images, product_prices, webshop_text, meta_description, categories, brands, attributes, color } = product;
 
   // Fetch current WooCommerce product to get existing images
   const getProductUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
@@ -641,6 +657,46 @@ async function updateProductInWooCommerce(
     // Fallback to brand as category if no categories available
     updateData.categories = [{ name: brands.name }];
   }
+
+  // Update attributes
+  const updatedAttributes: any[] = [
+    {
+      name: 'Size',
+      position: 0,
+      visible: true,
+      variation: true,
+      options: variants?.map((v: any) => v.size_label) || []
+    }
+  ];
+
+  // Add color attribute if available
+  if (color?.label) {
+    updatedAttributes.push({
+      name: 'Color',
+      position: 1,
+      visible: true,
+      variation: false,
+      options: [color.label]
+    });
+  }
+
+  // Add all product attributes from database
+  if (attributes && typeof attributes === 'object') {
+    let position = updatedAttributes.length;
+    for (const [key, value] of Object.entries(attributes)) {
+      if (value && String(value).trim()) {
+        updatedAttributes.push({
+          name: key,
+          position: position++,
+          visible: true,
+          variation: false,
+          options: [String(value)]
+        });
+      }
+    }
+  }
+
+  updateData.attributes = updatedAttributes;
 
   // Update product data if there's anything to update
   if (Object.keys(updateData).length > 0) {
