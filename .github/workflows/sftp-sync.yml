@@ -50,39 +50,6 @@ jobs:
             
             try {
               console.log('=== SFTP Multi-Tenant Sync ===');
-              
-              // Validate Service Role Key before starting
-              console.log('Validating SUPABASE_SERVICE_ROLE_KEY...');
-              
-              if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-                throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured in GitHub secrets');
-              }
-              
-              // Debug: Show key format (first/last 10 chars only for security)
-              const keyPreview = process.env.SUPABASE_SERVICE_ROLE_KEY;
-              console.log('Key length:', keyPreview.length);
-              console.log('Key starts with:', keyPreview.substring(0, 10));
-              console.log('Key ends with:', keyPreview.substring(keyPreview.length - 10));
-              
-              // Test the key with a storage list call (more reliable than REST API root)
-              const testResponse = await fetch(
-                `${process.env.SUPABASE_URL}/storage/v1/bucket`,
-                {
-                  headers: {
-                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
-                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
-                  }
-                }
-              );
-              
-              if (!testResponse.ok) {
-                const errorText = await testResponse.text();
-                console.error('Validation failed. Response status:', testResponse.status);
-                console.error('Error details:', errorText);
-                throw new Error(`Service Role Key validation failed: ${testResponse.status} - ${errorText}`);
-              }
-              
-              console.log('✓ Service Role Key is valid');
               console.log('Fetching tenant configurations from Supabase...');
               
               // Get all active tenants with their SFTP configurations
