@@ -56,26 +56,44 @@ const Jobs = () => {
     refetchInterval: 3000,
   });
 
-  // Calculate sync progress
+  // Calculate sync progress - track unique products across all jobs
   const syncProgress = jobs?.reduce((acc, job: any) => {
     if (job.type !== 'SYNC_TO_WOO') return acc;
     
-    const productCount = job.payload?.productIds?.length || 0;
+    const productIds = job.payload?.productIds || [];
     
-    if (job.state === 'done') {
-      acc.completed += productCount;
-    } else if (job.state === 'processing') {
-      acc.processing += productCount;
-    } else if (job.state === 'ready') {
-      acc.pending += productCount;
-    }
-    acc.total += productCount;
+    productIds.forEach((id: string) => {
+      if (job.state === 'done') {
+        acc.completed.add(id);
+        acc.allProducts.add(id);
+      } else if (job.state === 'processing') {
+        if (!acc.completed.has(id)) {
+          acc.processing.add(id);
+        }
+        acc.allProducts.add(id);
+      } else if (job.state === 'ready') {
+        if (!acc.completed.has(id) && !acc.processing.has(id)) {
+          acc.pending.add(id);
+        }
+        acc.allProducts.add(id);
+      }
+    });
     
     return acc;
-  }, { completed: 0, processing: 0, pending: 0, total: 0 }) || { completed: 0, processing: 0, pending: 0, total: 0 };
+  }, { 
+    completed: new Set(), 
+    processing: new Set(), 
+    pending: new Set(), 
+    allProducts: new Set() 
+  }) || { 
+    completed: new Set(), 
+    processing: new Set(), 
+    pending: new Set(), 
+    allProducts: new Set() 
+  };
 
-  const progressPercentage = syncProgress.total > 0 
-    ? Math.round((syncProgress.completed / syncProgress.total) * 100) 
+  const progressPercentage = syncProgress.allProducts.size > 0 
+    ? Math.round((syncProgress.completed.size / syncProgress.allProducts.size) * 100) 
     : 0;
 
   const retryJobMutation = useMutation({
@@ -166,7 +184,7 @@ const Jobs = () => {
         </div>
 
         {/* Sync Progress Bar */}
-        {syncProgress.total > 0 && (
+        {syncProgress.allProducts.size > 0 && (
           <Card className="border-primary/20 bg-primary/5">
             <CardContent className="pt-6">
               <div className="space-y-3">
@@ -174,20 +192,20 @@ const Jobs = () => {
                   <div>
                     <h3 className="text-sm font-semibold">WooCommerce Sync Voortgang</h3>
                     <p className="text-xs text-muted-foreground">
-                      {syncProgress.completed} van {syncProgress.total} producten gesynchroniseerd
+                      {syncProgress.completed.size} van {syncProgress.allProducts.size} producten gesynchroniseerd
                     </p>
                   </div>
                   <div className="text-right">
                     <p className="text-2xl font-bold">{progressPercentage}%</p>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      {syncProgress.processing > 0 && (
+                      {syncProgress.processing.size > 0 && (
                         <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
-                          {syncProgress.processing} processing
+                          {syncProgress.processing.size} processing
                         </Badge>
                       )}
-                      {syncProgress.pending > 0 && (
+                      {syncProgress.pending.size > 0 && (
                         <Badge variant="outline" className="bg-muted">
-                          {syncProgress.pending} wachtend
+                          {syncProgress.pending.size} wachtend
                         </Badge>
                       )}
                     </div>
