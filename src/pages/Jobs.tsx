@@ -126,11 +126,53 @@ const Jobs = () => {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Job queued for retry");
+      toast.success("Job opnieuw ingepland");
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
     onError: (error: any) => {
-      toast.error(`Failed to retry job: ${error.message}`);
+      toast.error(`Fout: ${error.message}`);
+    },
+  });
+
+  const cleanupErrorJobsMutation = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase
+        .from("jobs")
+        .update({ 
+          state: "ready",
+          attempts: 0,
+          error: null
+        })
+        .eq("state", "error")
+        .eq("type", "SYNC_TO_WOO");
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      toast.success("Alle error jobs opnieuw ingepland");
+    },
+    onError: (error: any) => {
+      toast.error(`Fout bij cleanup: ${error.message}`);
+    },
+  });
+
+  const deleteDoneJobsMutation = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase
+        .from("jobs")
+        .delete()
+        .eq("state", "done")
+        .eq("type", "SYNC_TO_WOO");
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      toast.success("Voltooide jobs verwijderd");
+    },
+    onError: (error: any) => {
+      toast.error(`Fout bij verwijderen: ${error.message}`);
     },
   });
 
@@ -157,7 +199,7 @@ const Jobs = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 flex-wrap">
           <Select value={selectedTenant} onValueChange={setSelectedTenant}>
             <SelectTrigger className="w-[250px]">
               <SelectValue placeholder="Filter by tenant" />
@@ -196,6 +238,23 @@ const Jobs = () => {
               <SelectItem value="SYNC_TO_WOO">WooCommerce Sync</SelectItem>
             </SelectContent>
           </Select>
+
+          <div className="ml-auto flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => cleanupErrorJobsMutation.mutate()}
+              disabled={cleanupErrorJobsMutation.isPending}
+            >
+              Retry alle errors
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => deleteDoneJobsMutation.mutate()}
+              disabled={deleteDoneJobsMutation.isPending}
+            >
+              Verwijder voltooide jobs
+            </Button>
+          </div>
         </div>
 
         {/* Sync Progress Bar */}
