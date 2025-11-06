@@ -50,7 +50,15 @@ jobs:
             
             try {
               console.log('=== SFTP Multi-Tenant Sync ===');
-              console.log('Fetching tenant configurations from Supabase...');
+              console.log('Environment check:');
+              console.log('- SUPABASE_URL:', process.env.SUPABASE_URL ? 'Set' : 'MISSING');
+              console.log('- SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY ? 'Set' : 'MISSING');
+              console.log('- SUPABASE_SERVICE_ROLE_KEY:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'Set' : 'MISSING');
+              console.log('- SFTP_HOST:', process.env.SFTP_HOST ? 'Set' : 'MISSING');
+              console.log('- SFTP_USERNAME:', process.env.SFTP_USERNAME ? 'Set' : 'MISSING');
+              console.log('- SFTP_PRIVATE_KEY:', process.env.SFTP_PRIVATE_KEY ? 'Set' : 'MISSING');
+              
+              console.log('\nFetching tenant configurations from Supabase...');
               
               // Get all active tenants with their SFTP configurations
               const tenantsResponse = await fetch(
@@ -64,11 +72,12 @@ jobs:
               );
               
               if (!tenantsResponse.ok) {
-                throw new Error(`Failed to fetch tenants: ${tenantsResponse.status}`);
+                const errorText = await tenantsResponse.text();
+                throw new Error(`Failed to fetch tenants: ${tenantsResponse.status} - ${errorText}`);
               }
               
               const tenants = await tenantsResponse.json();
-              console.log(`Found ${tenants.length} active tenants`);
+              console.log(`✓ Found ${tenants.length} active tenants`);
               
               if (tenants.length === 0) {
                 console.log('No active tenants to sync');
@@ -76,6 +85,7 @@ jobs:
               }
               
               // Get tenant configs separately (using service role key for privileged access)
+              console.log('Fetching tenant configurations...');
               const configsResponse = await fetch(
                 `${process.env.SUPABASE_URL}/rest/v1/tenant_config?select=*`,
                 {
@@ -92,6 +102,7 @@ jobs:
               }
               
               const configs = await configsResponse.json();
+              console.log(`✓ Found ${configs.length} tenant configs`);
               
               // Map configs to tenants
               const configMap = {};
@@ -99,12 +110,21 @@ jobs:
                 configMap[config.tenant_id] = config;
               }
               
-              if (tenants.length === 0) {
-                console.log('No active tenants to sync');
+              // Verify we have configs for all tenants
+              const tenantsWithConfig = tenants.filter(t => configMap[t.id]);
+              console.log(`${tenantsWithConfig.length}/${tenants.length} tenants have SFTP configuration`);
+              
+              if (tenantsWithConfig.length === 0) {
+                console.log('No tenants with SFTP configuration found');
                 return;
               }
               
               // Connect to SFTP once
+              console.log('\nConnecting to SFTP...');
+              console.log('- Host:', process.env.SFTP_HOST);
+              console.log('- Port:', process.env.SFTP_PORT);
+              console.log('- Username:', process.env.SFTP_USERNAME);
+              
               const connectConfig = {
                 host: process.env.SFTP_HOST,
                 port: parseInt(process.env.SFTP_PORT),
@@ -115,11 +135,11 @@ jobs:
               
               if (process.env.SFTP_PASSPHRASE) {
                 connectConfig.passphrase = process.env.SFTP_PASSPHRASE;
+                console.log('- Using passphrase: Yes');
               }
               
-              console.log('Connecting to SFTP...');
               await sftp.connect(connectConfig);
-              console.log('✓ Connected to SFTP');
+              console.log('✓ Connected to SFTP successfully');
               
               // Process each tenant
               for (const tenant of tenants) {
