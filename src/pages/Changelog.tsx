@@ -33,7 +33,7 @@ const Changelog = () => {
   const [selectedTenant, setSelectedTenant] = useState<string>("all");
 
   const { data: changelog, isLoading } = useQuery({
-    queryKey: ["changelog", selectedTenant],
+    queryKey: ["woocommerce-changelog", selectedTenant],
     queryFn: async () => {
       let query = supabase
         .from("changelog")
@@ -41,6 +41,7 @@ const Changelog = () => {
           *,
           tenants!inner(name, slug)
         `)
+        .eq("event_type", "SYNC_COMPLETED")
         .order("created_at", { ascending: false })
         .limit(100);
 
@@ -115,9 +116,9 @@ const Changelog = () => {
     <Layout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Changelog</h1>
+          <h1 className="text-3xl font-bold tracking-tight">WooCommerce Changelog</h1>
           <p className="text-muted-foreground">
-            Overzicht van alle wijzigingen en activiteiten per tenant
+            Productaanpassingen gesynchroniseerd naar WooCommerce
           </p>
         </div>
 
@@ -133,7 +134,7 @@ const Changelog = () => {
           <Card>
             <CardContent className="py-12 text-center">
               <RefreshCw className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
-              <p className="text-sm text-muted-foreground mt-4">Changelog laden...</p>
+              <p className="text-sm text-muted-foreground mt-4">WooCommerce sync geschiedenis laden...</p>
             </CardContent>
           </Card>
         ) : Object.keys(groupedChangelog).length > 0 ? (
@@ -201,7 +202,7 @@ const Changelog = () => {
             <CardContent className="py-12 text-center">
               <FileText className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <p className="text-sm text-muted-foreground">
-                Nog geen changelog entries.
+                Nog geen WooCommerce synchronisaties. Wijzigingen aan producten worden automatisch gesynchroniseerd.
               </p>
             </CardContent>
           </Card>
