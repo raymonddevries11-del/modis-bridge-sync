@@ -44,6 +44,22 @@ function extractColor(artikel: any) {
   };
 }
 
+function extractAttributes(artikel: any) {
+  return {
+    gender: artikel.querySelector('geslacht')?.textContent || '',
+    upperMaterial: artikel.querySelector('bovenmateriaal')?.textContent || '',
+    lining: artikel.querySelector('voering')?.textContent || '',
+    insole: artikel.querySelector('binnenzool')?.textContent || '',
+    sole: artikel.querySelector('zool')?.textContent || '',
+    type: artikel.querySelector('type')?.textContent || '',
+    heelHeight: artikel.querySelector('hakhoogte')?.textContent || '',
+    closure: artikel.querySelector('sluiting')?.textContent || '',
+    supplierName: artikel.querySelector('leverancier naam-leverancier')?.textContent || '',
+    supplierDescription: artikel.querySelector('leverancier artikelnummer-leverancier')?.textContent || '',
+    supplierTitle: artikel.querySelector('leverancier omschrijving-leverancier')?.textContent || '',
+  };
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -122,6 +138,7 @@ serve(async (req) => {
         const urlKey = artikel.querySelector('url-sleutel')?.textContent || null;
         const images = extractPhotos(artikel, supabaseUrl);
         const color = extractColor(artikel);
+        const attributes = extractAttributes(artikel);
 
         // 4. Upsert Product
         const { data: product, error: productError } = await supabase
@@ -132,9 +149,11 @@ serve(async (req) => {
             tax_code: taxCode,
             images: images,
             color: color,
+            attributes: attributes,
             url_key: urlKey,
             brand_id: brandId,
             supplier_id: supplierId,
+            tenant_id: tenantId,
           }, { onConflict: 'sku' })
           .select()
           .single();

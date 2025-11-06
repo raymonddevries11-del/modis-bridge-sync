@@ -329,6 +329,7 @@ export type Database = {
       }
       products: {
         Row: {
+          attributes: Json | null
           brand_id: string | null
           color: Json | null
           created_at: string
@@ -343,6 +344,7 @@ export type Database = {
           url_key: string | null
         }
         Insert: {
+          attributes?: Json | null
           brand_id?: string | null
           color?: Json | null
           created_at?: string
@@ -357,6 +359,7 @@ export type Database = {
           url_key?: string | null
         }
         Update: {
+          attributes?: Json | null
           brand_id?: string | null
           color?: Json | null
           created_at?: string

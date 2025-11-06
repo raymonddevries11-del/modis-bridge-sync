@@ -179,12 +179,84 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
             {product.color && (
               <div className="space-y-2">
                 <Label>Kleur Informatie</Label>
-                <Textarea
-                  value={JSON.stringify(product.color, null, 2)}
-                  disabled
-                  className="font-mono text-xs"
-                  rows={4}
-                />
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Kleur:</span>
+                    <p className="font-medium">{product.color.label || "N/A"}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Filter:</span>
+                    <p className="font-medium">{product.color.filter || "N/A"}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {product.attributes && (
+              <div className="space-y-3 pt-4 border-t">
+                <Label className="text-base">Product Eigenschappen</Label>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  {product.attributes.gender && (
+                    <div>
+                      <span className="text-muted-foreground">Gender:</span>
+                      <p className="font-medium">{product.attributes.gender}</p>
+                    </div>
+                  )}
+                  {product.attributes.upperMaterial && (
+                    <div>
+                      <span className="text-muted-foreground">Bovenmateriaal:</span>
+                      <p className="font-medium">{product.attributes.upperMaterial}</p>
+                    </div>
+                  )}
+                  {product.attributes.lining && (
+                    <div>
+                      <span className="text-muted-foreground">Voering:</span>
+                      <p className="font-medium">{product.attributes.lining}</p>
+                    </div>
+                  )}
+                  {product.attributes.insole && (
+                    <div>
+                      <span className="text-muted-foreground">Binnenzool:</span>
+                      <p className="font-medium">{product.attributes.insole}</p>
+                    </div>
+                  )}
+                  {product.attributes.sole && (
+                    <div>
+                      <span className="text-muted-foreground">Zool:</span>
+                      <p className="font-medium">{product.attributes.sole}</p>
+                    </div>
+                  )}
+                  {product.attributes.type && (
+                    <div>
+                      <span className="text-muted-foreground">Type:</span>
+                      <p className="font-medium">{product.attributes.type}</p>
+                    </div>
+                  )}
+                  {product.attributes.heelHeight && (
+                    <div>
+                      <span className="text-muted-foreground">Hakhoogte:</span>
+                      <p className="font-medium">{product.attributes.heelHeight}</p>
+                    </div>
+                  )}
+                  {product.attributes.closure && (
+                    <div>
+                      <span className="text-muted-foreground">Sluiting:</span>
+                      <p className="font-medium">{product.attributes.closure}</p>
+                    </div>
+                  )}
+                  {product.attributes.supplierDescription && (
+                    <div>
+                      <span className="text-muted-foreground">Leveranciers omschrijving:</span>
+                      <p className="font-medium font-mono text-xs">{product.attributes.supplierDescription}</p>
+                    </div>
+                  )}
+                  {product.attributes.supplierTitle && (
+                    <div>
+                      <span className="text-muted-foreground">Leveranciers titel:</span>
+                      <p className="font-medium">{product.attributes.supplierTitle}</p>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </TabsContent>
