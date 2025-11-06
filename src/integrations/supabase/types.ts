@@ -329,12 +329,23 @@ export type Database = {
       }
       products: {
         Row: {
+          article_group: Json | null
           attributes: Json | null
           brand_id: string | null
+          categories: Json | null
           color: Json | null
+          cost_price: number | null
           created_at: string
+          discount_percentage: number | null
           id: string
           images: Json | null
+          internal_description: string | null
+          is_promotion: boolean | null
+          meta_description: string | null
+          meta_keywords: string | null
+          meta_title: string | null
+          outlet_sale: boolean | null
+          plan_period: string | null
           sku: string
           supplier_id: string | null
           tax_code: string | null
@@ -342,14 +353,28 @@ export type Database = {
           title: string
           updated_at: string
           url_key: string | null
+          webshop_date: string | null
+          webshop_text: string | null
+          webshop_text_en: string | null
         }
         Insert: {
+          article_group?: Json | null
           attributes?: Json | null
           brand_id?: string | null
+          categories?: Json | null
           color?: Json | null
+          cost_price?: number | null
           created_at?: string
+          discount_percentage?: number | null
           id?: string
           images?: Json | null
+          internal_description?: string | null
+          is_promotion?: boolean | null
+          meta_description?: string | null
+          meta_keywords?: string | null
+          meta_title?: string | null
+          outlet_sale?: boolean | null
+          plan_period?: string | null
           sku: string
           supplier_id?: string | null
           tax_code?: string | null
@@ -357,14 +382,28 @@ export type Database = {
           title: string
           updated_at?: string
           url_key?: string | null
+          webshop_date?: string | null
+          webshop_text?: string | null
+          webshop_text_en?: string | null
         }
         Update: {
+          article_group?: Json | null
           attributes?: Json | null
           brand_id?: string | null
+          categories?: Json | null
           color?: Json | null
+          cost_price?: number | null
           created_at?: string
+          discount_percentage?: number | null
           id?: string
           images?: Json | null
+          internal_description?: string | null
+          is_promotion?: boolean | null
+          meta_description?: string | null
+          meta_keywords?: string | null
+          meta_title?: string | null
+          outlet_sale?: boolean | null
+          plan_period?: string | null
           sku?: string
           supplier_id?: string | null
           tax_code?: string | null
@@ -372,6 +411,9 @@ export type Database = {
           title?: string
           updated_at?: string
           url_key?: string | null
+          webshop_date?: string | null
+          webshop_text?: string | null
+          webshop_text_en?: string | null
         }
         Relationships: [
           {
@@ -559,30 +601,36 @@ export type Database = {
       variants: {
         Row: {
           active: boolean
+          allow_backorder: boolean | null
           created_at: string
           ean: string | null
           id: string
           maat_id: string
+          maat_web: string | null
           product_id: string
           size_label: string
           updated_at: string
         }
         Insert: {
           active?: boolean
+          allow_backorder?: boolean | null
           created_at?: string
           ean?: string | null
           id?: string
           maat_id: string
+          maat_web?: string | null
           product_id: string
           size_label: string
           updated_at?: string
         }
         Update: {
           active?: boolean
+          allow_backorder?: boolean | null
           created_at?: string
           ean?: string | null
           id?: string
           maat_id?: string
+          maat_web?: string | null
           product_id?: string
           size_label?: string
           updated_at?: string

@@ -84,8 +84,9 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
         </DialogHeader>
 
         <Tabs defaultValue="details" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="details">Details</TabsTrigger>
+            <TabsTrigger value="content">Content & SEO</TabsTrigger>
             <TabsTrigger value="variants">Variants ({product.variants?.length || 0})</TabsTrigger>
             <TabsTrigger value="images">Afbeeldingen ({product.images?.length || 0})</TabsTrigger>
             <TabsTrigger value="woo-mapping">WooCommerce Mapping</TabsTrigger>
@@ -158,6 +159,28 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
               )}
 
               <div className="space-y-2">
+                <Label htmlFor="cost-price">Cost Price (€)</Label>
+                <Input
+                  id="cost-price"
+                  type="number"
+                  step="0.01"
+                  value={product.cost_price || ""}
+                  disabled
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="discount">Discount (%)</Label>
+                <Input
+                  id="discount"
+                  type="number"
+                  step="0.01"
+                  value={product.discount_percentage || ""}
+                  disabled
+                />
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="tax-code">Tax Code</Label>
                 <Input
                   id="tax-code"
@@ -192,73 +215,108 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
               </div>
             )}
 
-            {product.attributes && (
-              <div className="space-y-3 pt-4 border-t">
-                <Label className="text-base">Product Eigenschappen</Label>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  {product.attributes.gender && (
-                    <div>
-                      <span className="text-muted-foreground">Gender:</span>
-                      <p className="font-medium">{product.attributes.gender}</p>
-                    </div>
-                  )}
-                  {product.attributes.upperMaterial && (
-                    <div>
-                      <span className="text-muted-foreground">Bovenmateriaal:</span>
-                      <p className="font-medium">{product.attributes.upperMaterial}</p>
-                    </div>
-                  )}
-                  {product.attributes.lining && (
-                    <div>
-                      <span className="text-muted-foreground">Voering:</span>
-                      <p className="font-medium">{product.attributes.lining}</p>
-                    </div>
-                  )}
-                  {product.attributes.insole && (
-                    <div>
-                      <span className="text-muted-foreground">Binnenzool:</span>
-                      <p className="font-medium">{product.attributes.insole}</p>
-                    </div>
-                  )}
-                  {product.attributes.sole && (
-                    <div>
-                      <span className="text-muted-foreground">Zool:</span>
-                      <p className="font-medium">{product.attributes.sole}</p>
-                    </div>
-                  )}
-                  {product.attributes.type && (
-                    <div>
-                      <span className="text-muted-foreground">Type:</span>
-                      <p className="font-medium">{product.attributes.type}</p>
-                    </div>
-                  )}
-                  {product.attributes.heelHeight && (
-                    <div>
-                      <span className="text-muted-foreground">Hakhoogte:</span>
-                      <p className="font-medium">{product.attributes.heelHeight}</p>
-                    </div>
-                  )}
-                  {product.attributes.closure && (
-                    <div>
-                      <span className="text-muted-foreground">Sluiting:</span>
-                      <p className="font-medium">{product.attributes.closure}</p>
-                    </div>
-                  )}
-                  {product.attributes.supplierDescription && (
-                    <div>
-                      <span className="text-muted-foreground">Leveranciers omschrijving:</span>
-                      <p className="font-medium font-mono text-xs">{product.attributes.supplierDescription}</p>
-                    </div>
-                  )}
-                  {product.attributes.supplierTitle && (
-                    <div>
-                      <span className="text-muted-foreground">Leveranciers titel:</span>
-                      <p className="font-medium">{product.attributes.supplierTitle}</p>
-                    </div>
-                  )}
+            {product.categories && product.categories.length > 0 && (
+              <div className="space-y-2 pt-4 border-t">
+                <Label>Webshop Categorieën</Label>
+                <div className="flex flex-wrap gap-2">
+                  {product.categories.map((cat: any, idx: number) => (
+                    <Badge key={idx} variant="secondary">
+                      {cat.name}
+                    </Badge>
+                  ))}
                 </div>
               </div>
             )}
+
+            {product.attributes && Object.keys(product.attributes).length > 0 && (
+              <div className="space-y-3 pt-4 border-t">
+                <Label className="text-base">Product Eigenschappen</Label>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  {Object.entries(product.attributes).map(([key, value]: [string, any]) => (
+                    <div key={key}>
+                      <span className="text-muted-foreground">{key}:</span>
+                      <p className="font-medium">{value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(product.outlet_sale || product.is_promotion || product.plan_period) && (
+              <div className="space-y-2 pt-4 border-t">
+                <Label>Product Status</Label>
+                <div className="flex flex-wrap gap-2">
+                  {product.outlet_sale && <Badge variant="destructive">Outlet/Sale</Badge>}
+                  {product.is_promotion && <Badge variant="default">In Promotie</Badge>}
+                  {product.plan_period && <Badge variant="outline">Seizoen: {product.plan_period}</Badge>}
+                </div>
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="content" className="space-y-4">
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="internal-desc">Interne Omschrijving</Label>
+                <Input
+                  id="internal-desc"
+                  value={product.internal_description || ""}
+                  disabled
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="webshop-text">Product Beschrijving (NL)</Label>
+                <Textarea
+                  id="webshop-text"
+                  value={product.webshop_text || ""}
+                  disabled
+                  rows={5}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="webshop-text-en">Product Beschrijving (EN)</Label>
+                <Textarea
+                  id="webshop-text-en"
+                  value={product.webshop_text_en || ""}
+                  disabled
+                  rows={5}
+                />
+              </div>
+            </div>
+
+            <div className="pt-4 border-t space-y-4">
+              <Label className="text-base">SEO Informatie</Label>
+              
+              <div className="space-y-2">
+                <Label htmlFor="meta-title">Meta Title</Label>
+                <Input
+                  id="meta-title"
+                  value={product.meta_title || ""}
+                  disabled
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="meta-keywords">Meta Keywords</Label>
+                <Input
+                  id="meta-keywords"
+                  value={product.meta_keywords || ""}
+                  disabled
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="meta-description">Meta Description</Label>
+                <Textarea
+                  id="meta-description"
+                  value={product.meta_description || ""}
+                  disabled
+                  rows={3}
+                />
+              </div>
+            </div>
           </TabsContent>
 
           <TabsContent value="variants" className="space-y-4">
@@ -268,10 +326,10 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
                   <Card key={variant.id}>
                     <CardHeader className="py-3">
                       <CardTitle className="text-sm font-medium">
-                        Maat: {variant.size_label} (ID: {variant.maat_id})
+                        Maat: {variant.size_label} {variant.maat_web && variant.maat_web !== variant.size_label && `(Web: ${variant.maat_web})`}
                       </CardTitle>
                     </CardHeader>
-                    <CardContent className="grid grid-cols-3 gap-4 text-sm">
+                    <CardContent className="grid grid-cols-4 gap-4 text-sm">
                       <div>
                         <span className="text-muted-foreground">EAN:</span>
                         <p className="font-mono">{variant.ean || "N/A"}</p>
@@ -280,6 +338,12 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
                         <span className="text-muted-foreground">Status:</span>
                         <Badge variant={variant.active ? "default" : "secondary"}>
                           {variant.active ? "Actief" : "Inactief"}
+                        </Badge>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Backorder:</span>
+                        <Badge variant={variant.allow_backorder ? "default" : "outline"}>
+                          {variant.allow_backorder ? "Ja" : "Nee"}
                         </Badge>
                       </div>
                       <div>

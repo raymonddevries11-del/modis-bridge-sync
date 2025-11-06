@@ -45,19 +45,39 @@ function extractColor(artikel: any) {
 }
 
 function extractAttributes(artikel: any) {
-  return {
-    gender: artikel.querySelector('geslacht')?.textContent || '',
-    upperMaterial: artikel.querySelector('bovenmateriaal')?.textContent || '',
-    lining: artikel.querySelector('voering')?.textContent || '',
-    insole: artikel.querySelector('binnenzool')?.textContent || '',
-    sole: artikel.querySelector('zool')?.textContent || '',
-    type: artikel.querySelector('type')?.textContent || '',
-    heelHeight: artikel.querySelector('hakhoogte')?.textContent || '',
-    closure: artikel.querySelector('sluiting')?.textContent || '',
-    supplierName: artikel.querySelector('leverancier naam-leverancier')?.textContent || '',
-    supplierDescription: artikel.querySelector('leverancier artikelnummer-leverancier')?.textContent || '',
-    supplierTitle: artikel.querySelector('leverancier omschrijving-leverancier')?.textContent || '',
-  };
+  const attrs: any = {};
+  
+  // Extract attribute names and values (attribuut-nm-1 through attribuut-nm-20)
+  for (let i = 1; i <= 20; i++) {
+    const attrName = artikel.querySelector(`attribuut-nm-${i}`)?.textContent?.trim();
+    const attrValue = artikel.querySelector(`attribuut-waarde-${i}`)?.textContent?.trim();
+    
+    if (attrName && attrValue && attrValue !== '000') {
+      // Use the attribute name as the key for better readability
+      attrs[attrName] = attrValue;
+    }
+  }
+  
+  return attrs;
+}
+
+function extractCategories(artikel: any) {
+  const categories = [];
+  
+  for (let i = 1; i <= 8; i++) {
+    const groupId = artikel.querySelector(`webshop-groep-${i}`)?.textContent?.trim();
+    const groupDesc = artikel.querySelector(`wgp-omschrijving-${i}`)?.textContent?.trim();
+    
+    if (groupId && groupId !== '0000' && groupDesc) {
+      categories.push({
+        id: groupId,
+        name: groupDesc,
+        level: i
+      });
+    }
+  }
+  
+  return categories;
 }
 
 serve(async (req) => {
@@ -139,6 +159,28 @@ serve(async (req) => {
         const images = extractPhotos(artikel, supabaseUrl);
         const color = extractColor(artikel);
         const attributes = extractAttributes(artikel);
+        const categories = extractCategories(artikel);
+        
+        // Extract additional product fields
+        const costPrice = parsePrice(artikel.querySelector('kostprijs')?.textContent || '0');
+        const discountPercentage = parsePrice(artikel.querySelector('kortings-percentage')?.textContent || '0');
+        const internalDescription = artikel.querySelector('interne-omschrijving')?.textContent || null;
+        const webshopText = artikel.querySelector('webshop-tekst')?.textContent || null;
+        const webshopTextEn = artikel.querySelector('webshop-tekst-en')?.textContent || null;
+        const metaTitle = artikel.querySelector('meta-titel-1')?.textContent || null;
+        const metaKeywords = artikel.querySelector('meta-keywords-1')?.textContent || null;
+        const metaDescription = artikel.querySelector('meta-oms-1')?.textContent || null;
+        const planPeriod = artikel.querySelector('planperiode')?.textContent || null;
+        const outletSale = artikel.querySelector('outlet-sale')?.textContent === '1';
+        const isPromotion = artikel.querySelector('aanbieding')?.textContent === '1';
+        const webshopDateStr = artikel.querySelector('webshopdatum')?.textContent || null;
+        const webshopDate = webshopDateStr ? webshopDateStr : null;
+        
+        const articleGroupEl = artikel.querySelector('artikelgroep');
+        const articleGroup = articleGroupEl ? {
+          id: articleGroupEl.getAttribute('id') || '',
+          description: articleGroupEl.querySelector('omschrijving')?.textContent || ''
+        } : null;
 
         // 4. Upsert Product
         const { data: product, error: productError } = await supabase
@@ -150,10 +192,24 @@ serve(async (req) => {
             images: images,
             color: color,
             attributes: attributes,
+            categories: categories,
             url_key: urlKey,
             brand_id: brandId,
             supplier_id: supplierId,
             tenant_id: tenantId,
+            cost_price: costPrice,
+            discount_percentage: discountPercentage,
+            internal_description: internalDescription,
+            webshop_text: webshopText,
+            webshop_text_en: webshopTextEn,
+            meta_title: metaTitle,
+            meta_keywords: metaKeywords,
+            meta_description: metaDescription,
+            plan_period: planPeriod,
+            article_group: articleGroup,
+            outlet_sale: outletSale,
+            is_promotion: isPromotion,
+            webshop_date: webshopDate,
           }, { onConflict: 'sku' })
           .select()
           .single();
@@ -183,8 +239,10 @@ serve(async (req) => {
         for (const maat of (maten as any)) {
           const maatId = maat.getAttribute('id') || '';
           const sizeLabel = maat.querySelector('maat-alfa')?.textContent || '';
+          const maatWeb = maat.querySelector('maat-web')?.textContent || sizeLabel;
           const ean = maat.querySelector('ean-barcode')?.textContent || null;
           const active = maat.querySelector('maat-actief')?.textContent === '1';
+          const allowBackorder = maat.querySelector('GIERMAN backorder-toestaan')?.textContent !== 'no';
 
           // Upsert Variant
           const { data: variant, error: variantError } = await supabase
@@ -193,8 +251,10 @@ serve(async (req) => {
               product_id: product.id,
               maat_id: maatId,
               size_label: sizeLabel,
+              maat_web: maatWeb,
               ean: ean,
               active: active,
+              allow_backorder: allowBackorder,
             }, { onConflict: 'product_id,maat_id' })
             .select()
             .single();
