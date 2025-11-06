@@ -181,11 +181,12 @@ jobs:
               const xmlFiles = files.filter(f => {
                 const isXml = f.name.toLowerCase().endsWith('.xml');
                 const isFile = f.type === '-';
-                console.log(`Checking: ${f.name} - isXML: ${isXml}, isFile: ${isFile}`);
-                return isXml && isFile;
+                const isArtikel = f.name.toLowerCase().includes('artikel'); // Only process artikel files, skip voorraad
+                console.log(`Checking: ${f.name} - isXML: ${isXml}, isFile: ${isFile}, isArtikel: ${isArtikel}`);
+                return isXml && isFile && isArtikel;
               });
               
-              console.log(`Found ${xmlFiles.length} XML files`);
+              console.log(`Found ${xmlFiles.length} artikel XML files (voorraad files skipped)`);
               
               // Extract SKUs from XML files to determine which photos to sync
               const skusToSync = new Set();
