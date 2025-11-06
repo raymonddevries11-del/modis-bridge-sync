@@ -7,9 +7,12 @@ import {
   FileText,
   Activity,
   Building2,
-  History
+  History,
+  LogOut
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
+import { Button } from "@/components/ui/button";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -24,13 +27,14 @@ const navigation = [
 
 export const Sidebar = () => {
   const location = useLocation();
+  const { signOut } = useAuth();
 
   return (
-    <aside className="w-64 bg-sidebar border-r border-sidebar-border">
+    <aside className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col h-screen">
       <div className="flex h-16 items-center px-6 border-b border-sidebar-border">
         <h1 className="text-xl font-bold text-sidebar-foreground">Modis Bridge</h1>
       </div>
-      <nav className="flex flex-col gap-1 p-4">
+      <nav className="flex flex-col gap-1 p-4 flex-1">
         {navigation.map((item) => {
           const isActive = location.pathname === item.href;
           return (
@@ -50,6 +54,16 @@ export const Sidebar = () => {
           );
         })}
       </nav>
+      <div className="p-4 border-t border-sidebar-border">
+        <Button
+          variant="ghost"
+          className="w-full justify-start"
+          onClick={signOut}
+        >
+          <LogOut className="mr-2 h-4 w-4" />
+          Uitloggen
+        </Button>
+      </div>
     </aside>
   );
 };

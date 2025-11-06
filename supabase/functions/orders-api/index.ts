@@ -29,19 +29,50 @@ interface OrderRequest {
   paid_at?: string;
 }
 
+// Constant-time string comparison to prevent timing attacks
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
 async function verifyApiKey(supabase: any, authHeader: string | null): Promise<boolean> {
   if (!authHeader?.startsWith('Bearer ')) {
     return false;
   }
 
-  const token = authHeader.substring(7);
+  const providedKey = authHeader.substring(7);
+  
+  // Hash the provided key
+  const encoder = new TextEncoder();
+  const data = encoder.encode(providedKey);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const providedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   
   const { data: apiKeys } = await supabase
     .from('api_keys')
-    .select('id, key_hash')
-    .eq('key_hash', token);
+    .select('id, key_hash');
 
   if (!apiKeys || apiKeys.length === 0) {
+    return false;
+  }
+
+  // Use constant-time comparison
+  let validKey = null;
+  for (const key of apiKeys) {
+    if (timingSafeEqual(providedHash, key.key_hash)) {
+      validKey = key;
+      break;
+    }
+  }
+
+  if (!validKey) {
     return false;
   }
 
@@ -49,9 +80,68 @@ async function verifyApiKey(supabase: any, authHeader: string | null): Promise<b
   await supabase
     .from('api_keys')
     .update({ last_used_at: new Date().toISOString() })
-    .eq('id', apiKeys[0].id);
+    .eq('id', validKey.id);
 
   return true;
+}
+
+// Input validation functions
+function validateOrderNumber(orderNumber: any): boolean {
+  return typeof orderNumber === 'string' && orderNumber.length > 0 && orderNumber.length <= 100;
+}
+
+function validateStatus(status: any): boolean {
+  const validStatuses = ['pending', 'processing', 'completed', 'cancelled', 'on-hold', 'failed', 'refunded'];
+  return typeof status === 'string' && validStatuses.includes(status.toLowerCase());
+}
+
+function validateEmail(email: any): boolean {
+  if (typeof email !== 'string') return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email) && email.length <= 255;
+}
+
+function sanitizeString(str: string, maxLength: number = 500): string {
+  return str.trim().substring(0, maxLength);
+}
+
+function validateOrderData(orderData: any): { valid: boolean; error?: string } {
+  if (!validateOrderNumber(orderData.order_number)) {
+    return { valid: false, error: 'Invalid order number' };
+  }
+
+  if (!validateStatus(orderData.status)) {
+    return { valid: false, error: 'Invalid order status' };
+  }
+
+  if (orderData.customer?.email && !validateEmail(orderData.customer.email)) {
+    return { valid: false, error: 'Invalid customer email' };
+  }
+
+  if (!Array.isArray(orderData.lines) || orderData.lines.length === 0) {
+    return { valid: false, error: 'Order must have at least one line item' };
+  }
+
+  // Validate each line
+  for (const line of orderData.lines) {
+    if (!line.sku || typeof line.sku !== 'string' || line.sku.length > 100) {
+      return { valid: false, error: 'Invalid SKU in order line' };
+    }
+    if (!line.name || typeof line.name !== 'string' || line.name.length > 500) {
+      return { valid: false, error: 'Invalid product name in order line' };
+    }
+    if (typeof line.qty !== 'number' || line.qty <= 0 || line.qty > 10000) {
+      return { valid: false, error: 'Invalid quantity in order line' };
+    }
+    if (typeof line.unit_price !== 'number' || line.unit_price < 0) {
+      return { valid: false, error: 'Invalid unit price in order line' };
+    }
+    if (typeof line.vat_rate !== 'number' || line.vat_rate < 0 || line.vat_rate > 100) {
+      return { valid: false, error: 'Invalid VAT rate in order line' };
+    }
+  }
+
+  return { valid: true };
 }
 
 serve(async (req) => {
@@ -81,23 +171,31 @@ serve(async (req) => {
 
       const orderData: OrderRequest = await req.json();
 
-      // Validate required fields
-      if (!orderData.order_number || !orderData.status || !orderData.lines?.length) {
-        return new Response(JSON.stringify({ error: 'Missing required fields' }), {
+      // Validate input
+      const validation = validateOrderData(orderData);
+      if (!validation.valid) {
+        return new Response(JSON.stringify({ error: validation.error }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
+      // Sanitize string inputs
+      const sanitizedCustomer = orderData.customer ? {
+        ...orderData.customer,
+        name: sanitizeString(orderData.customer.name || '', 200),
+        email: sanitizeString(orderData.customer.email || '', 255),
+      } : {};
+
       // Upsert order
       const { data: order, error: orderError } = await supabase
         .from('orders')
         .upsert({
-          order_number: orderData.order_number,
-          status: orderData.status,
+          order_number: sanitizeString(orderData.order_number, 100),
+          status: orderData.status.toLowerCase(),
           currency: orderData.currency || 'EUR',
           totals: orderData.totals,
-          customer: orderData.customer,
+          customer: sanitizedCustomer,
           billing: orderData.billing,
           shipping: orderData.shipping,
           paid_at: orderData.paid_at || null,
@@ -107,8 +205,8 @@ serve(async (req) => {
         .single();
 
       if (orderError) {
-        console.error('Order upsert error:', orderError);
-        return new Response(JSON.stringify({ error: orderError.message }), {
+        console.error('Order upsert failed');
+        return new Response(JSON.stringify({ error: 'Unable to process order' }), {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
@@ -122,9 +220,9 @@ serve(async (req) => {
 
       const orderLines = orderData.lines.map(line => ({
         order_number: orderData.order_number,
-        sku: line.sku,
-        ean: line.ean || null,
-        name: line.name,
+        sku: sanitizeString(line.sku, 100),
+        ean: line.ean ? sanitizeString(line.ean, 50) : null,
+        name: sanitizeString(line.name, 500),
         qty: line.qty,
         unit_price: line.unit_price,
         vat_rate: line.vat_rate,
@@ -136,8 +234,8 @@ serve(async (req) => {
         .insert(orderLines);
 
       if (linesError) {
-        console.error('Order lines insert error:', linesError);
-        return new Response(JSON.stringify({ error: linesError.message }), {
+        console.error('Order lines insert failed');
+        return new Response(JSON.stringify({ error: 'Unable to process order lines' }), {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
@@ -154,7 +252,7 @@ serve(async (req) => {
         });
 
       if (jobError) {
-        console.error('Job creation error:', jobError);
+        console.error('Job creation failed');
       }
 
       return new Response(JSON.stringify({ 
@@ -168,6 +266,16 @@ serve(async (req) => {
 
     // GET /orders/:orderNumber
     if (req.method === 'GET' && pathParts.length === 3 && pathParts[1] === 'orders-api') {
+      const authHeader = req.headers.get('authorization');
+      const isValid = await verifyApiKey(supabase, authHeader);
+      
+      if (!isValid) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
       const orderNumber = pathParts[2];
 
       const { data: order, error: orderError } = await supabase
@@ -177,7 +285,7 @@ serve(async (req) => {
         .maybeSingle();
 
       if (orderError) {
-        return new Response(JSON.stringify({ error: orderError.message }), {
+        return new Response(JSON.stringify({ error: 'Unable to retrieve order' }), {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
@@ -207,8 +315,8 @@ serve(async (req) => {
     });
 
   } catch (error: any) {
-    console.error('Error in orders-api:', error);
-    return new Response(JSON.stringify({ error: error.message }), {
+    console.error('Request processing failed');
+    return new Response(JSON.stringify({ error: 'Internal server error' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
