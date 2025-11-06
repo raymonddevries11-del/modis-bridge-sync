@@ -19,6 +19,104 @@ interface SyncJob {
   };
 }
 
+// Helper function to ensure category exists in WooCommerce
+async function ensureCategoryExists(categoryName: string, wooConfig: WooCommerceConfig): Promise<number | null> {
+  try {
+    // Search for existing category
+    const searchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/categories`);
+    searchUrl.searchParams.append("consumer_key", wooConfig.consumerKey);
+    searchUrl.searchParams.append("consumer_secret", wooConfig.consumerSecret);
+    searchUrl.searchParams.append("search", categoryName);
+
+    const searchResponse = await fetch(searchUrl.toString());
+    if (searchResponse.ok) {
+      const existingCategories = await searchResponse.json();
+      if (existingCategories.length > 0) {
+        const exactMatch = existingCategories.find((cat: any) => cat.name === categoryName);
+        if (exactMatch) {
+          console.log(`Category "${categoryName}" already exists with ID ${exactMatch.id}`);
+          return exactMatch.id;
+        }
+      }
+    }
+
+    // Create new category
+    const createUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/categories`);
+    createUrl.searchParams.append("consumer_key", wooConfig.consumerKey);
+    createUrl.searchParams.append("consumer_secret", wooConfig.consumerSecret);
+
+    const createResponse = await fetch(createUrl.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: categoryName }),
+    });
+
+    if (createResponse.ok) {
+      const newCategory = await createResponse.json();
+      console.log(`Created category "${categoryName}" with ID ${newCategory.id}`);
+      return newCategory.id;
+    } else {
+      const errorText = await createResponse.text();
+      console.error(`Failed to create category "${categoryName}": ${errorText}`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`Error ensuring category "${categoryName}" exists:`, error);
+    return null;
+  }
+}
+
+// Helper function to ensure attribute exists in WooCommerce
+async function ensureAttributeExists(attributeName: string, wooConfig: WooCommerceConfig): Promise<number | null> {
+  try {
+    // Search for existing attribute
+    const searchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes`);
+    searchUrl.searchParams.append("consumer_key", wooConfig.consumerKey);
+    searchUrl.searchParams.append("consumer_secret", wooConfig.consumerSecret);
+
+    const searchResponse = await fetch(searchUrl.toString());
+    if (searchResponse.ok) {
+      const existingAttributes = await searchResponse.json();
+      const exactMatch = existingAttributes.find((attr: any) => attr.name === attributeName);
+      if (exactMatch) {
+        console.log(`Attribute "${attributeName}" already exists with ID ${exactMatch.id}`);
+        return exactMatch.id;
+      }
+    }
+
+    // Create new attribute
+    const createUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes`);
+    createUrl.searchParams.append("consumer_key", wooConfig.consumerKey);
+    createUrl.searchParams.append("consumer_secret", wooConfig.consumerSecret);
+
+    const createResponse = await fetch(createUrl.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: attributeName,
+        slug: attributeName.toLowerCase().replace(/\s+/g, '-'),
+        type: 'select',
+        order_by: 'menu_order',
+        has_archives: false
+      }),
+    });
+
+    if (createResponse.ok) {
+      const newAttribute = await createResponse.json();
+      console.log(`Created attribute "${attributeName}" with ID ${newAttribute.id}`);
+      return newAttribute.id;
+    } else {
+      const errorText = await createResponse.text();
+      console.error(`Failed to create attribute "${attributeName}": ${errorText}`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`Error ensuring attribute "${attributeName}" exists:`, error);
+    return null;
+  }
+}
+
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -386,6 +484,15 @@ async function createProductInWooCommerce(
     });
   }
 
+  // Ensure all custom attributes exist in WooCommerce first
+  if (attributes && typeof attributes === 'object') {
+    for (const [key, value] of Object.entries(attributes)) {
+      if (value && String(value).trim()) {
+        await ensureAttributeExists(key, wooConfig);
+      }
+    }
+  }
+
   // Add all product attributes from database
   if (attributes && typeof attributes === 'object') {
     let position = productData.attributes.length;
@@ -402,12 +509,26 @@ async function createProductInWooCommerce(
     }
   }
 
-  // Add categories if available
+  // Add categories if available - ensure they exist first
   if (categories && Array.isArray(categories) && categories.length > 0) {
-    productData.categories = categories.map((cat: any) => ({ name: cat.name }));
+    const categoryIds: number[] = [];
+    for (const cat of categories) {
+      if (cat.name) {
+        const catId = await ensureCategoryExists(cat.name, wooConfig);
+        if (catId) {
+          categoryIds.push(catId);
+        }
+      }
+    }
+    if (categoryIds.length > 0) {
+      productData.categories = categoryIds.map(id => ({ id }));
+    }
   } else if (brands?.name) {
     // Fallback to brand as category if no categories available
-    productData.categories = [{ name: brands.name }];
+    const brandCatId = await ensureCategoryExists(brands.name, wooConfig);
+    if (brandCatId) {
+      productData.categories = [{ id: brandCatId }];
+    }
   }
 
   console.log(`Creating product in WooCommerce: ${sku}`);
@@ -650,12 +771,26 @@ async function updateProductInWooCommerce(
     updateData.short_description = meta_description;
   }
   
-  // Add categories if available
+  // Update categories - ensure they exist first
   if (categories && Array.isArray(categories) && categories.length > 0) {
-    updateData.categories = categories.map((cat: any) => ({ name: cat.name }));
+    const categoryIds: number[] = [];
+    for (const cat of categories) {
+      if (cat.name) {
+        const catId = await ensureCategoryExists(cat.name, wooConfig);
+        if (catId) {
+          categoryIds.push(catId);
+        }
+      }
+    }
+    if (categoryIds.length > 0) {
+      updateData.categories = categoryIds.map(id => ({ id }));
+    }
   } else if (brands?.name) {
-    // Fallback to brand as category if no categories available
-    updateData.categories = [{ name: brands.name }];
+    // Fallback to brand as category
+    const brandCatId = await ensureCategoryExists(brands.name, wooConfig);
+    if (brandCatId) {
+      updateData.categories = [{ id: brandCatId }];
+    }
   }
 
   // Update attributes
@@ -678,6 +813,15 @@ async function updateProductInWooCommerce(
       variation: false,
       options: [color.label]
     });
+  }
+
+  // Ensure all custom attributes exist first
+  if (attributes && typeof attributes === 'object') {
+    for (const [key, value] of Object.entries(attributes)) {
+      if (value && String(value).trim()) {
+        await ensureAttributeExists(key, wooConfig);
+      }
+    }
   }
 
   // Add all product attributes from database
