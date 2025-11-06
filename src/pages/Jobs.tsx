@@ -56,37 +56,54 @@ const Jobs = () => {
     refetchInterval: 3000,
   });
 
-  // Calculate sync progress - use most recent status for each product
-  const productStatusMap = new Map<string, string>();
-  
-  // Jobs are sorted by created_at DESC, so reverse to process oldest first
-  const sortedJobs = [...(jobs || [])].reverse();
-  
-  sortedJobs.forEach((job: any) => {
-    if (job.type !== 'SYNC_TO_WOO') return;
-    
-    const productIds = job.payload?.productIds || [];
-    productIds.forEach((id: string) => {
-      // Update status - newer jobs will overwrite older ones
-      productStatusMap.set(id, job.state);
-    });
-  });
-
-  // Count products by their most recent status
+  // Calculate sync progress - prioritize 'done' status over newer jobs
   const syncProgress = {
     completed: new Set<string>(),
     processing: new Set<string>(),
     pending: new Set<string>(),
-    allProducts: productStatusMap
+    allProducts: new Set<string>()
   };
 
-  productStatusMap.forEach((state, productId) => {
-    if (state === 'done') {
-      syncProgress.completed.add(productId);
-    } else if (state === 'processing') {
-      syncProgress.processing.add(productId);
-    } else if (state === 'ready') {
-      syncProgress.pending.add(productId);
+  // First pass: collect all completed products from any 'done' job
+  jobs?.forEach((job: any) => {
+    if (job.type !== 'SYNC_TO_WOO') return;
+    const productIds = job.payload?.productIds || [];
+    
+    if (job.state === 'done') {
+      productIds.forEach((id: string) => {
+        syncProgress.completed.add(id);
+        syncProgress.allProducts.add(id);
+      });
+    }
+  });
+
+  // Second pass: collect processing products (but not if already completed)
+  jobs?.forEach((job: any) => {
+    if (job.type !== 'SYNC_TO_WOO') return;
+    const productIds = job.payload?.productIds || [];
+    
+    if (job.state === 'processing') {
+      productIds.forEach((id: string) => {
+        if (!syncProgress.completed.has(id)) {
+          syncProgress.processing.add(id);
+        }
+        syncProgress.allProducts.add(id);
+      });
+    }
+  });
+
+  // Third pass: collect pending products (but not if already completed or processing)
+  jobs?.forEach((job: any) => {
+    if (job.type !== 'SYNC_TO_WOO') return;
+    const productIds = job.payload?.productIds || [];
+    
+    if (job.state === 'ready') {
+      productIds.forEach((id: string) => {
+        if (!syncProgress.completed.has(id) && !syncProgress.processing.has(id)) {
+          syncProgress.pending.add(id);
+        }
+        syncProgress.allProducts.add(id);
+      });
     }
   });
 
