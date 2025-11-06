@@ -49,10 +49,10 @@ const Jobs = () => {
         query = query.eq("type", typeFilter);
       }
 
-      const { data } = await query.limit(100);
+      const { data } = await query.limit(500);
       return data || [];
     },
-    refetchInterval: 5000,
+    refetchInterval: 3000,
   });
 
   const retryJobMutation = useMutation({
@@ -152,7 +152,7 @@ const Jobs = () => {
               <Card key={job.id}>
                 <CardContent className="pt-6">
                   <div className="flex items-start justify-between mb-4">
-                    <div className="grid md:grid-cols-5 gap-4 flex-1">
+                    <div className="grid md:grid-cols-6 gap-4 flex-1">
                       <div>
                         <p className="text-sm font-medium text-muted-foreground">Type</p>
                         <p className="font-semibold">{job.type}</p>
@@ -172,11 +172,17 @@ const Jobs = () => {
                       </div>
                       <div>
                         <p className="text-sm font-medium text-muted-foreground">Created</p>
-                        <p className="text-sm">{new Date(job.created_at).toLocaleString()}</p>
+                        <p className="text-sm">{new Date(job.created_at).toLocaleString('nl-NL')}</p>
                       </div>
                       <div>
                         <p className="text-sm font-medium text-muted-foreground">Updated</p>
-                        <p className="text-sm">{new Date(job.updated_at).toLocaleString()}</p>
+                        <p className="text-sm">{new Date(job.updated_at).toLocaleString('nl-NL')}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Tijd</p>
+                        <p className="text-sm">
+                          {Math.round((new Date(job.updated_at).getTime() - new Date(job.created_at).getTime()) / 1000)}s
+                        </p>
                       </div>
                     </div>
                     {job.state === 'error' && (

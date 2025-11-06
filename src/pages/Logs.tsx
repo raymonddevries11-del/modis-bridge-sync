@@ -24,7 +24,12 @@ interface ChangelogEntry {
   event_type: string;
   description: string;
   created_at: string;
-  metadata: any;
+  metadata: {
+    filesProcessed?: number;
+    filesSkipped?: number;
+    totalFiles?: number;
+    [key: string]: any;
+  };
   tenant_id: string;
   tenants?: {
     name: string;
@@ -198,12 +203,25 @@ const Logs = () => {
               {allSftpActivity.map((entry) => (
                 <Card key={entry.id}>
                   <CardContent className="py-4">
-                    <div className="flex items-start gap-3">
+                     <div className="flex items-start gap-3">
                       {getEventIcon(entry.event_type)}
                       <div className="space-y-1 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{entry.description}</span>
                           <Badge variant="outline">{entry.event_type}</Badge>
+                          {entry.metadata?.filesProcessed !== undefined && (
+                            <Badge variant="secondary">
+                              {entry.metadata.filesProcessed} bestanden verwerkt
+                            </Badge>
+                          )}
+                          {entry.metadata?.filesSkipped !== undefined && entry.metadata.filesSkipped > 0 && (
+                            <Badge variant="outline">
+                              {entry.metadata.filesSkipped} overgeslagen
+                            </Badge>
+                          )}
+                          {entry.metadata?.totalFiles !== undefined && entry.metadata.totalFiles === 0 && (
+                            <Badge variant="outline">Geen bestanden</Badge>
+                          )}
                         </div>
                         <div className="flex items-center gap-4 text-xs text-muted-foreground">
                           <span>{entry.tenants?.name}</span>
