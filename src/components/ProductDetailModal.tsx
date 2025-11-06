@@ -7,10 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Save, Image as ImageIcon } from "lucide-react";
+import { Save, Image as ImageIcon, RefreshCw, AlertCircle } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface ProductDetailModalProps {
   product: any;
@@ -30,6 +31,18 @@ const wooCommerceFieldMapping = [
 export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetailModalProps) => {
   const queryClient = useQueryClient();
   const [editedProduct, setEditedProduct] = useState(product);
+
+  const { data: compareData, isLoading: isComparing, refetch: refetchCompare } = useQuery({
+    queryKey: ["product-compare", product.id],
+    queryFn: async () => {
+      const { data, error } = await supabase.functions.invoke("compare-product", {
+        body: { productId: product.id, tenantId: product.tenant_id },
+      });
+      if (error) throw error;
+      return data;
+    },
+    enabled: false, // Only fetch when user clicks compare
+  });
 
   const updateProductMutation = useMutation({
     mutationFn: async (updatedData: any) => {
@@ -84,12 +97,18 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
         </DialogHeader>
 
         <Tabs defaultValue="details" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="details">Details</TabsTrigger>
             <TabsTrigger value="content">Content & SEO</TabsTrigger>
             <TabsTrigger value="variants">Variants ({product.variants?.length || 0})</TabsTrigger>
             <TabsTrigger value="images">Afbeeldingen ({product.images?.length || 0})</TabsTrigger>
-            <TabsTrigger value="woo-mapping">WooCommerce Mapping</TabsTrigger>
+            <TabsTrigger value="compare">
+              Vergelijk WooCommerce
+              {compareData?.differences?.fields && Object.keys(compareData.differences.fields).length > 0 && (
+                <Badge variant="destructive" className="ml-2">{Object.keys(compareData.differences.fields).length}</Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="woo-mapping">Mapping</TabsTrigger>
           </TabsList>
 
           <TabsContent value="details" className="space-y-4">
@@ -384,6 +403,98 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
                 <p>Geen afbeeldingen beschikbaar</p>
               </div>
             )}
+          </TabsContent>
+
+          <TabsContent value="compare" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">Database vs WooCommerce</CardTitle>
+                  <Button
+                    onClick={() => refetchCompare()}
+                    disabled={isComparing}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <RefreshCw className={`h-4 w-4 mr-2 ${isComparing ? "animate-spin" : ""}`} />
+                    {isComparing ? "Vergelijken..." : "Vergelijk"}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {!compareData && !isComparing && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <AlertCircle className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                    <p>Klik op "Vergelijk" om verschillen te zien</p>
+                  </div>
+                )}
+
+                {isComparing && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <RefreshCw className="h-12 w-12 mx-auto mb-2 animate-spin" />
+                    <p>Producten vergelijken...</p>
+                  </div>
+                )}
+
+                {compareData && !isComparing && (
+                  <div className="space-y-4">
+                    {!compareData.differences?.exists && (
+                      <Alert>
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertDescription>
+                          Product niet gevonden in WooCommerce. Dit product moet nog worden gesynchroniseerd.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
+                    {compareData.differences?.exists && Object.keys(compareData.differences.fields).length === 0 && (
+                      <Alert>
+                        <AlertDescription className="text-green-600">
+                          ✓ Alle velden zijn synchroon tussen database en WooCommerce
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
+                    {compareData.differences?.exists && Object.keys(compareData.differences.fields).length > 0 && (
+                      <>
+                        <Alert variant="destructive">
+                          <AlertCircle className="h-4 w-4" />
+                          <AlertDescription>
+                            {Object.keys(compareData.differences.fields).length} verschil(len) gevonden
+                          </AlertDescription>
+                        </Alert>
+
+                        <div className="space-y-3">
+                          {Object.entries(compareData.differences.fields).map(([field, values]: [string, any]) => (
+                            <Card key={field} className="border-l-4 border-l-orange-500">
+                              <CardContent className="pt-4">
+                                <div className="space-y-2">
+                                  <p className="font-semibold text-sm">{field}</p>
+                                  <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div className="space-y-1">
+                                      <p className="text-muted-foreground text-xs">Database:</p>
+                                      <Badge variant="outline" className="font-mono">
+                                        {values.database || "N/A"}
+                                      </Badge>
+                                    </div>
+                                    <div className="space-y-1">
+                                      <p className="text-muted-foreground text-xs">WooCommerce:</p>
+                                      <Badge variant="secondary" className="font-mono">
+                                        {values.woocommerce || "N/A"}
+                                      </Badge>
+                                    </div>
+                                  </div>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="woo-mapping" className="space-y-4">
