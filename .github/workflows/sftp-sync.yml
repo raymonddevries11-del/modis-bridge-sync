@@ -253,18 +253,22 @@ jobs:
                     console.log('Sample image names:', imageFiles.slice(0, 5).map(f => f.name).join(', '));
                     
                     imageFiles = imageFiles.filter(f => {
-                      // Extract potential SKU from filename (before first underscore or before .jpg)
+                      // Extract SKU from filename after underscore (e.g., W-1_101069102.JPG -> 101069102)
                       const nameWithoutExt = f.name.replace(/\.(jpg|jpeg|png|gif|webp)$/i, '');
-                      const parts = nameWithoutExt.split('_');
+                      const underscoreIndex = nameWithoutExt.lastIndexOf('_');
+                      if (underscoreIndex === -1) return false;
                       
-                      // Check if any part of the filename matches any SKU
-                      return Array.from(skusToSync).some(sku => {
-                        const match = parts.some(part => part.includes(sku) || sku.includes(part));
-                        if (match) {
-                          console.log(`✓ Match found: ${f.name} contains SKU ${sku}`);
-                        }
-                        return match;
+                      const skuFromFilename = nameWithoutExt.substring(underscoreIndex + 1);
+                      
+                      // Check if SKU from filename starts with any of the artikel SKUs
+                      const match = Array.from(skusToSync).some(sku => {
+                        return sku.startsWith(skuFromFilename) || skuFromFilename.startsWith(sku);
                       });
+                      
+                      if (match) {
+                        console.log(`✓ Match found: ${f.name} matches SKU pattern`);
+                      }
+                      return match;
                     });
                     console.log(`Found ${imageFiles.length} image files matching XML SKUs (from ${photoFiles.length} total)`);
                   } else {
@@ -275,21 +279,23 @@ jobs:
                     try {
                       const photoPath = `${webfotoPath}/${photoFile.name}`;
                       
-                      // Check if photo already exists in Supabase Storage
-                      const checkResponse = await fetch(
-                        `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${photoFile.name}`,
+                      // Check if photo already exists in Supabase Storage using list API
+                      const listResponse = await fetch(
+                        `${process.env.SUPABASE_URL}/storage/v1/object/list/product-images?search=${encodeURIComponent(photoFile.name)}`,
                         {
-                          method: 'HEAD',
                           headers: {
                             'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
                           },
                         }
                       );
                       
-                      // Skip if photo already exists (200 OK)
-                      if (checkResponse.ok) {
-                        console.log(`⊘ Skipped (already exists): ${photoFile.name}`);
-                        continue;
+                      // Skip if photo already exists
+                      if (listResponse.ok) {
+                        const files = await listResponse.json();
+                        if (files.some(f => f.name === photoFile.name)) {
+                          console.log(`⊘ Skipped (already exists): ${photoFile.name}`);
+                          continue;
+                        }
                       }
                       
                       // Photo doesn't exist (404), proceed with upload
