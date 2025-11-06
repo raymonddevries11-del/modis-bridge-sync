@@ -287,7 +287,7 @@ jobs:
                         {
                           method: 'POST',
                           headers: {
-                            'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
                             'Content-Type': 'application/json',
                           },
                           body: JSON.stringify({
@@ -329,7 +329,8 @@ jobs:
                       if (uploadResponse.ok) {
                         console.log(`✓ Uploaded photo: ${photoFile.name}`);
                       } else {
-                        console.error(`Failed to upload ${photoFile.name}: ${uploadResponse.status}`);
+                        const errorText = await uploadResponse.text();
+                        console.error(`Failed to upload ${photoFile.name}: ${uploadResponse.status} - ${errorText}`);
                       }
                     } catch (photoError) {
                       console.error(`Error processing photo ${photoFile.name}:`, photoError.message);
