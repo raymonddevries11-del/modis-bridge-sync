@@ -1,6 +1,6 @@
 /// <reference lib="deno.ns" />
-/// <reference lib="dom" />
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { DOMParser, Element } from 'https://deno.land/x/deno_dom@v0.1.38/deno-dom-wasm.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
