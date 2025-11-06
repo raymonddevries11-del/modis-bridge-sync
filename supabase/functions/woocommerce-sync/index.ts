@@ -332,7 +332,7 @@ async function createProductInWooCommerce(
   wooConfig: WooCommerceConfig,
   variantIdsFilter?: string[]
 ) {
-  const { sku, title, product_prices, variants, images, color, brands, tax_code } = product;
+  const { sku, title, product_prices, variants, images, color, brands, tax_code, webshop_text, meta_description, categories } = product;
 
   // Prepare product images - skip images that don't have full URLs
   const productImages = (images || [])
@@ -360,6 +360,8 @@ async function createProductInWooCommerce(
     sku: sku,
     status: 'publish',
     catalog_visibility: 'visible',
+    description: webshop_text || '',
+    short_description: meta_description || '',
     images: productImages,
     attributes: [
       {
@@ -384,8 +386,11 @@ async function createProductInWooCommerce(
     });
   }
 
-  // Add brand as category if available
-  if (brands?.name) {
+  // Add categories if available
+  if (categories && Array.isArray(categories) && categories.length > 0) {
+    productData.categories = categories.map((cat: any) => ({ name: cat.name }));
+  } else if (brands?.name) {
+    // Fallback to brand as category if no categories available
     productData.categories = [{ name: brands.name }];
   }
 
@@ -519,7 +524,7 @@ async function updateProductInWooCommerce(
   wooConfig: WooCommerceConfig,
   variantIdsFilter?: string[]
 ) {
-  const { sku, product_prices, variants, images } = product;
+  const { sku, title, variants, images, product_prices, webshop_text, meta_description, categories, brands } = product;
 
   // Fetch current WooCommerce product to get existing images
   const getProductUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
@@ -616,6 +621,47 @@ async function updateProductInWooCommerce(
     }
   } else {
     console.log(`Product ${sku} has no new images to add (${existingImages.length} existing)`);
+  }
+
+  // Prepare product update data with descriptions and categories
+  const updateData: any = {};
+  
+  if (webshop_text) {
+    updateData.description = webshop_text;
+  }
+  
+  if (meta_description) {
+    updateData.short_description = meta_description;
+  }
+  
+  // Add categories if available
+  if (categories && Array.isArray(categories) && categories.length > 0) {
+    updateData.categories = categories.map((cat: any) => ({ name: cat.name }));
+  } else if (brands?.name) {
+    // Fallback to brand as category if no categories available
+    updateData.categories = [{ name: brands.name }];
+  }
+
+  // Update product data if there's anything to update
+  if (Object.keys(updateData).length > 0) {
+    const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
+    updateUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+    updateUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+    const updateResponse = await fetchWithRetry(updateUrl.toString(), {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updateData),
+    });
+
+    if (!updateResponse.ok) {
+      const errorText = await updateResponse.text();
+      console.error(`Failed to update product data: ${errorText}`);
+    } else {
+      console.log(`Updated product ${sku} data (description, categories)`);
+    }
   }
 
   console.log(`Updating product ${sku}, will set prices on variations`);
