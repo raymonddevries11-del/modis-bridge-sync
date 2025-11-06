@@ -131,7 +131,7 @@ jobs:
                 console.log(`\n=== Processing tenant: ${tenant.name} (${tenant.slug}) ===`);
                 
                 const basePath = tenantConfig.sftp_inbound_path;
-              const readyPath = `${basePath}/ready`;
+              const readyPath = basePath; // Scan directly in the base path
               const processingPath = `${basePath}/processing`;
               const archivePath = `${basePath}/archive`;
               const errorPath = `${basePath}/error`;
@@ -211,9 +211,27 @@ jobs:
                   for (const photoFile of imageFiles) {
                     try {
                       const photoPath = `${webfotoPath}/${photoFile.name}`;
+                      
+                      // Check if photo already exists in Supabase Storage
+                      const checkResponse = await fetch(
+                        `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${photoFile.name}`,
+                        {
+                          method: 'HEAD',
+                          headers: {
+                            'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                          },
+                        }
+                      );
+                      
+                      // Skip if photo already exists (200 OK)
+                      if (checkResponse.ok) {
+                        console.log(`⊘ Skipped (already exists): ${photoFile.name}`);
+                        continue;
+                      }
+                      
+                      // Photo doesn't exist (404), proceed with upload
                       const imageBuffer = await sftp.get(photoPath);
                       
-                      // Upload to Supabase Storage
                       const uploadResponse = await fetch(
                         `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${photoFile.name}`,
                         {
@@ -229,15 +247,10 @@ jobs:
                       if (uploadResponse.ok) {
                         console.log(`✓ Uploaded photo: ${photoFile.name}`);
                       } else {
-                        // Check if file already exists (409 conflict)
-                        if (uploadResponse.status === 409) {
-                          console.log(`Photo already exists: ${photoFile.name}`);
-                        } else {
-                          console.error(`Failed to upload ${photoFile.name}: ${uploadResponse.status}`);
-                        }
+                        console.error(`Failed to upload ${photoFile.name}: ${uploadResponse.status}`);
                       }
                     } catch (photoError) {
-                      console.error(`Error uploading photo ${photoFile.name}:`, photoError.message);
+                      console.error(`Error processing photo ${photoFile.name}:`, photoError.message);
                     }
                   }
                 }
