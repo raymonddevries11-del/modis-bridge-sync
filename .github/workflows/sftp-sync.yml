@@ -187,6 +187,34 @@ jobs:
               
               console.log(`Found ${xmlFiles.length} XML files`);
               
+              // Extract SKUs from XML files to determine which photos to sync
+              const skusToSync = new Set();
+              
+              if (xmlFiles.length > 0) {
+                console.log('\n=== Extracting SKUs from XML files ===');
+                for (const xmlFile of xmlFiles) {
+                  try {
+                    const xmlPath = `${readyPath}/${xmlFile.name}`;
+                    const xmlContent = await sftp.get(xmlPath);
+                    const xmlString = xmlContent.toString('utf-8');
+                    
+                    // Extract SKUs from XML (looking for patterns like <ArtikelNummer> or similar)
+                    const skuMatches = xmlString.match(/<ArtikelNummer[^>]*>([^<]+)<\/ArtikelNummer>/gi);
+                    if (skuMatches) {
+                      skuMatches.forEach(match => {
+                        const sku = match.replace(/<[^>]+>/g, '').trim();
+                        if (sku) {
+                          skusToSync.add(sku);
+                        }
+                      });
+                    }
+                  } catch (error) {
+                    console.error(`Error reading XML ${xmlFile.name}:`, error.message);
+                  }
+                }
+                console.log(`Found ${skusToSync.size} unique SKUs in XML files`);
+              }
+              
               // Sync photos from webfoto directory (at tenant level, not inside modis-to-wp)
               console.log('\n=== Syncing product photos ===');
               
@@ -200,13 +228,25 @@ jobs:
                 
                 if (webfotoExists) {
                   const photoFiles = await sftp.list(webfotoPath);
-                  const imageFiles = photoFiles.filter(f => {
+                  let imageFiles = photoFiles.filter(f => {
                     const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(f.name);
                     const isFile = f.type === '-';
                     return isImage && isFile;
                   });
                   
-                  console.log(`Found ${imageFiles.length} image files to sync`);
+                  // If we have SKUs from XML, filter images to only those matching SKUs
+                  if (skusToSync.size > 0) {
+                    imageFiles = imageFiles.filter(f => {
+                      // Check if filename starts with any of the SKUs
+                      const filename = f.name.split('_')[0]; // Get part before first underscore
+                      return Array.from(skusToSync).some(sku => 
+                        filename.includes(sku) || f.name.startsWith(sku)
+                      );
+                    });
+                    console.log(`Found ${imageFiles.length} image files matching XML SKUs (from ${photoFiles.length} total)`);
+                  } else {
+                    console.log(`Found ${imageFiles.length} image files to sync (no SKU filtering)`);
+                  }
                   
                   for (const photoFile of imageFiles) {
                     try {
