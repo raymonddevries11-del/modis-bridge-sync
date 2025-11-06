@@ -178,22 +178,31 @@ jobs:
                 console.log('All items:', files.map(f => `${f.name} (type: ${f.type}, size: ${f.size})`).join('\n'));
               }
               
-              const xmlFiles = files.filter(f => {
+              // Separate artikel and voorraad files
+              const artikelFiles = files.filter(f => {
                 const isXml = f.name.toLowerCase().endsWith('.xml');
                 const isFile = f.type === '-';
-                const isArtikel = f.name.toLowerCase().includes('artikel'); // Only process artikel files, skip voorraad
-                console.log(`Checking: ${f.name} - isXML: ${isXml}, isFile: ${isFile}, isArtikel: ${isArtikel}`);
+                const isArtikel = f.name.toLowerCase().includes('artikel');
                 return isXml && isFile && isArtikel;
               });
               
-              console.log(`Found ${xmlFiles.length} artikel XML files (voorraad files skipped)`);
+              const voorraadFiles = files.filter(f => {
+                const isXml = f.name.toLowerCase().endsWith('.xml');
+                const isFile = f.type === '-';
+                const isVoorraad = f.name.toLowerCase().includes('voorraad');
+                return isXml && isFile && isVoorraad;
+              });
               
-              // Extract SKUs from XML files to determine which photos to sync
+              console.log(`Found ${artikelFiles.length} artikel files and ${voorraadFiles.length} voorraad files`);
+              
+              const xmlFiles = [...artikelFiles, ...voorraadFiles];
+              
+              // Extract SKUs from artikel files only for photo sync
               const skusToSync = new Set();
               
-              if (xmlFiles.length > 0) {
-                console.log('\n=== Extracting SKUs from XML files ===');
-                for (const xmlFile of xmlFiles) {
+              if (artikelFiles.length > 0) {
+                console.log('\n=== Extracting SKUs from artikel files ===');
+                for (const xmlFile of artikelFiles) {
                   try {
                     const xmlPath = `${basePath}/${xmlFile.name}`;
                     const xmlContent = await sftp.get(xmlPath);
@@ -213,7 +222,7 @@ jobs:
                     console.error(`Error reading XML ${xmlFile.name}:`, error.message);
                   }
                 }
-                console.log(`Found ${skusToSync.size} unique SKUs in XML files`);
+                console.log(`Found ${skusToSync.size} unique SKUs in artikel files`);
                 if (skusToSync.size > 0) {
                   console.log('Sample SKUs:', Array.from(skusToSync).slice(0, 5).join(', '));
                 }
@@ -331,9 +340,15 @@ jobs:
                   const xmlContent = await sftp.get(processingFilePath);
                   const xmlString = xmlContent.toString('utf-8');
                   
+                  // Determine which edge function to call based on file type
+                  const isVoorraadFile = fileName.toLowerCase().includes('voorraad');
+                  const edgeFunction = isVoorraadFile ? 'process-stock' : 'process-articles';
+                  
+                  console.log(`Calling edge function: ${edgeFunction}`);
+                  
                   // Call Supabase edge function
                   const response = await fetch(
-                    `${process.env.SUPABASE_URL}/functions/v1/process-articles`,
+                    `${process.env.SUPABASE_URL}/functions/v1/${edgeFunction}`,
                     {
                       method: 'POST',
                       headers: {
@@ -343,6 +358,7 @@ jobs:
                       body: JSON.stringify({
                         fileName: fileName,
                         xmlContent: xmlString,
+                        tenantId: tenant.id,
                       }),
                     }
                   );
