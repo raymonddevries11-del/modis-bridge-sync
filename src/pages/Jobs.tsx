@@ -176,6 +176,25 @@ const Jobs = () => {
     },
   });
 
+  const deleteErrorJobsMutation = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase
+        .from("jobs")
+        .delete()
+        .eq("state", "error")
+        .eq("type", "SYNC_TO_WOO");
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      toast.success("Error jobs verwijderd");
+    },
+    onError: (error: any) => {
+      toast.error(`Fout bij verwijderen: ${error.message}`);
+    },
+  });
+
   const getJobStateColor = (state: string) => {
     switch (state) {
       case "done":
@@ -246,6 +265,13 @@ const Jobs = () => {
               disabled={cleanupErrorJobsMutation.isPending}
             >
               Retry alle errors
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteErrorJobsMutation.mutate()}
+              disabled={deleteErrorJobsMutation.isPending}
+            >
+              Verwijder error jobs
             </Button>
             <Button
               variant="outline"
