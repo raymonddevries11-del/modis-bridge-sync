@@ -106,12 +106,29 @@ Deno.serve(async (req) => {
               console.log(`  Processing variant maat_id: ${maatId}, EAN: ${ean}, Total: ${totaalAantal}`);
 
               // Find variant by product_id and maat_id
-              const { data: variant } = await supabase
+              // Try to find exact match first, then with prefix pattern
+              let { data: variant } = await supabase
                 .from('variants')
                 .select('id')
                 .eq('product_id', product.id)
                 .eq('maat_id', maatId)
                 .maybeSingle();
+
+              // If not found, try with wildcard matching (e.g., '040' matches '002040')
+              if (!variant) {
+                const { data: variantWithPrefix } = await supabase
+                  .from('variants')
+                  .select('id, maat_id')
+                  .eq('product_id', product.id)
+                  .like('maat_id', `%${maatId}`)
+                  .maybeSingle();
+                
+                variant = variantWithPrefix;
+                
+                if (variant) {
+                  console.log(`  Found variant with prefix: maat_id ${(variant as any).maat_id} matches ${maatId}`);
+                }
+              }
 
               if (!variant) {
                 console.log(`  Variant not found for SKU: ${sku}, maat_id: ${maatId}`);
