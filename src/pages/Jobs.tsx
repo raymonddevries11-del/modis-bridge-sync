@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
 import { useState, useEffect } from "react";
 import { RotateCw } from "lucide-react";
 import { toast } from "sonner";
@@ -54,6 +55,28 @@ const Jobs = () => {
     },
     refetchInterval: 3000,
   });
+
+  // Calculate sync progress
+  const syncProgress = jobs?.reduce((acc, job: any) => {
+    if (job.type !== 'SYNC_TO_WOO') return acc;
+    
+    const productCount = job.payload?.productIds?.length || 0;
+    
+    if (job.state === 'done') {
+      acc.completed += productCount;
+    } else if (job.state === 'processing') {
+      acc.processing += productCount;
+    } else if (job.state === 'ready') {
+      acc.pending += productCount;
+    }
+    acc.total += productCount;
+    
+    return acc;
+  }, { completed: 0, processing: 0, pending: 0, total: 0 }) || { completed: 0, processing: 0, pending: 0, total: 0 };
+
+  const progressPercentage = syncProgress.total > 0 
+    ? Math.round((syncProgress.completed / syncProgress.total) * 100) 
+    : 0;
 
   const retryJobMutation = useMutation({
     mutationFn: async (jobId: string) => {
@@ -141,6 +164,40 @@ const Jobs = () => {
             </SelectContent>
           </Select>
         </div>
+
+        {/* Sync Progress Bar */}
+        {syncProgress.total > 0 && (
+          <Card className="border-primary/20 bg-primary/5">
+            <CardContent className="pt-6">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold">WooCommerce Sync Voortgang</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {syncProgress.completed} van {syncProgress.total} producten gesynchroniseerd
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold">{progressPercentage}%</p>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {syncProgress.processing > 0 && (
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
+                          {syncProgress.processing} processing
+                        </Badge>
+                      )}
+                      {syncProgress.pending > 0 && (
+                        <Badge variant="outline" className="bg-muted">
+                          {syncProgress.pending} wachtend
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <Progress value={progressPercentage} className="h-3" />
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {isLoading ? (
           <div className="text-center py-12">
