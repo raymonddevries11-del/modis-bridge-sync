@@ -88,7 +88,7 @@ const Products = () => {
         query = query.eq("supplier_id", supplierFilter);
       }
 
-      const { data } = await query.limit(50);
+      const { data } = await query.limit(500); // Verhoogd naar 500 producten
       return data || [];
     },
   });
@@ -126,11 +126,13 @@ const Products = () => {
   return (
     <Layout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Products</h1>
-          <p className="text-muted-foreground">
-            Browse and manage your product catalog
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Products</h1>
+            <p className="text-muted-foreground">
+              Browse and manage your product catalog {products && `(${products.length} items)`}
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-4">
