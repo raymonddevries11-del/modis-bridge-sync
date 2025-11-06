@@ -344,6 +344,7 @@ jobs:
                         {
                           method: 'POST',
                           headers: {
+                            'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
                             'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
                             'Content-Type': 'image/jpeg',
                           },
