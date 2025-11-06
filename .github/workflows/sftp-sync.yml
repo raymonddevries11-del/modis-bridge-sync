@@ -75,19 +75,20 @@ jobs:
                 return;
               }
               
-              // Get tenant configs separately
+              // Get tenant configs separately (using service role key for privileged access)
               const configsResponse = await fetch(
                 `${process.env.SUPABASE_URL}/rest/v1/tenant_config?select=*`,
                 {
                   headers: {
-                    'apikey': process.env.SUPABASE_ANON_KEY,
-                    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
+                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
                   }
                 }
               );
               
               if (!configsResponse.ok) {
-                throw new Error(`Failed to fetch tenant configs: ${configsResponse.status}`);
+                const errorText = await configsResponse.text();
+                throw new Error(`Failed to fetch tenant configs: ${configsResponse.status} - ${errorText}`);
               }
               
               const configs = await configsResponse.json();
