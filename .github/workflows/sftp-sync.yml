@@ -276,43 +276,12 @@ jobs:
                     console.log(`Found ${imageFiles.length} image files to sync (no SKU filtering)`);
                   }
                   
-                  for (const photoFile of imageFiles) {
-                    try {
-                      const photoPath = `${webfotoPath}/${photoFile.name}`;
-                      
-                      // Check if photo already exists in Supabase Storage
-                      // List all files in the bucket root directory
-                      const listResponse = await fetch(
-                        `${process.env.SUPABASE_URL}/storage/v1/object/list/product-images`,
-                        {
-                          method: 'POST',
-                          headers: {
-                            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-                            'Content-Type': 'application/json',
-                          },
-                          body: JSON.stringify({
-                            limit: 10000,
-                            offset: 0,
-                            sortBy: { column: 'name', order: 'asc' },
-                          }),
-                        }
-                      );
-                      
-                      // Skip if photo already exists
-                      if (listResponse.ok) {
-                        const files = await listResponse.json();
-                        const fileExists = Array.isArray(files) && files.some(f => f.name === photoFile.name);
-                        if (fileExists) {
-                          console.log(`⊘ Skipped (already exists): ${photoFile.name}`);
-                          continue;
-                        }
-                        console.log(`✓ Photo doesn't exist yet, uploading: ${photoFile.name}`);
-                      } else {
-                        console.log(`⚠ Could not check existence for ${photoFile.name}, proceeding with upload`);
-                      }
-                      
-                      // Photo doesn't exist (404), proceed with upload
-                      const imageBuffer = await sftp.get(photoPath);
+              for (const photoFile of imageFiles) {
+                try {
+                  const photoPath = `${webfotoPath}/${photoFile.name}`;
+                  
+                  // Download image from SFTP
+                  const imageBuffer = await sftp.get(photoPath);
                       
                       // Upload via edge function instead of direct storage API
                       const FormData = (await import('form-data')).default;
