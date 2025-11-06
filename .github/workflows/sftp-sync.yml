@@ -194,7 +194,7 @@ jobs:
                 console.log('\n=== Extracting SKUs from XML files ===');
                 for (const xmlFile of xmlFiles) {
                   try {
-                    const xmlPath = `${readyPath}/${xmlFile.name}`;
+                    const xmlPath = `${basePath}/${xmlFile.name}`;
                     const xmlContent = await sftp.get(xmlPath);
                     const xmlString = xmlContent.toString('utf-8');
                     
@@ -213,6 +213,9 @@ jobs:
                   }
                 }
                 console.log(`Found ${skusToSync.size} unique SKUs in XML files`);
+                if (skusToSync.size > 0) {
+                  console.log('Sample SKUs:', Array.from(skusToSync).slice(0, 5).join(', '));
+                }
               }
               
               // Sync photos from webfoto directory (at tenant level, not inside modis-to-wp)
@@ -236,12 +239,22 @@ jobs:
                   
                   // If we have SKUs from XML, filter images to only those matching SKUs
                   if (skusToSync.size > 0) {
+                    console.log('Filtering images by SKUs...');
+                    console.log('Sample image names:', imageFiles.slice(0, 5).map(f => f.name).join(', '));
+                    
                     imageFiles = imageFiles.filter(f => {
-                      // Check if filename starts with any of the SKUs
-                      const filename = f.name.split('_')[0]; // Get part before first underscore
-                      return Array.from(skusToSync).some(sku => 
-                        filename.includes(sku) || f.name.startsWith(sku)
-                      );
+                      // Extract potential SKU from filename (before first underscore or before .jpg)
+                      const nameWithoutExt = f.name.replace(/\.(jpg|jpeg|png|gif|webp)$/i, '');
+                      const parts = nameWithoutExt.split('_');
+                      
+                      // Check if any part of the filename matches any SKU
+                      return Array.from(skusToSync).some(sku => {
+                        const match = parts.some(part => part.includes(sku) || sku.includes(part));
+                        if (match) {
+                          console.log(`✓ Match found: ${f.name} contains SKU ${sku}`);
+                        }
+                        return match;
+                      });
                     });
                     console.log(`Found ${imageFiles.length} image files matching XML SKUs (from ${photoFiles.length} total)`);
                   } else {
