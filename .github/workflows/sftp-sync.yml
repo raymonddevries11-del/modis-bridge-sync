@@ -38,6 +38,7 @@ jobs:
           SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           node << 'EOF'
           const SftpClient = require('ssh2-sftp-client');
@@ -318,7 +319,7 @@ jobs:
                         {
                           method: 'POST',
                           headers: {
-                            'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
                             'Content-Type': 'image/jpeg',
                           },
                           body: imageBuffer,
