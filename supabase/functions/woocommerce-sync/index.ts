@@ -669,6 +669,8 @@ async function updateProductInWooCommerce(
 ) {
   const { sku, title, variants, images, product_prices, webshop_text, meta_description, categories, brands, attributes, color } = product;
 
+  console.log(`Updating product ${sku}, will set prices on variations`);
+
   // Fetch current WooCommerce product to get existing images
   const getProductUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
   getProductUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
@@ -778,10 +780,12 @@ async function updateProductInWooCommerce(
   }
   
   // Update categories - ensure they exist first
+  console.log(`Product ${sku} has categories:`, categories);
   if (categories && Array.isArray(categories) && categories.length > 0) {
     const categoryIds: number[] = [];
     for (const cat of categories) {
       if (cat.name) {
+        console.log(`Ensuring category exists: ${cat.name}`);
         const catId = await ensureCategoryExists(cat.name, wooConfig);
         if (catId) {
           categoryIds.push(catId);
@@ -790,12 +794,15 @@ async function updateProductInWooCommerce(
     }
     if (categoryIds.length > 0) {
       updateData.categories = categoryIds.map(id => ({ id }));
+      console.log(`Added ${categoryIds.length} categories to product`);
     }
   } else if (brands?.name) {
     // Fallback to brand as category
+    console.log(`Using brand "${brands.name}" as category`);
     const brandCatId = await ensureCategoryExists(brands.name, wooConfig);
     if (brandCatId) {
       updateData.categories = [{ id: brandCatId }];
+      console.log(`Added brand "${brands.name}" as category`);
     }
   }
 
@@ -822,9 +829,11 @@ async function updateProductInWooCommerce(
   }
 
   // Ensure all custom attributes exist first
+  console.log(`Product ${sku} has attributes:`, attributes);
   if (attributes && typeof attributes === 'object') {
     for (const [key, value] of Object.entries(attributes)) {
       if (value && String(value).trim()) {
+        console.log(`Ensuring attribute exists: ${key}`);
         await ensureAttributeExists(key, wooConfig);
       }
     }
