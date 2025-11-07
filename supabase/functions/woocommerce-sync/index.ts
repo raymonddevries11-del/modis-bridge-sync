@@ -66,55 +66,6 @@ async function ensureCategoryExists(categoryName: string, wooConfig: WooCommerce
   }
 }
 
-// Helper function to ensure attribute exists in WooCommerce
-async function ensureAttributeExists(attributeName: string, wooConfig: WooCommerceConfig): Promise<number | null> {
-  try {
-    // Search for existing attribute
-    const searchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes`);
-    searchUrl.searchParams.append("consumer_key", wooConfig.consumerKey);
-    searchUrl.searchParams.append("consumer_secret", wooConfig.consumerSecret);
-
-    const searchResponse = await fetch(searchUrl.toString());
-    if (searchResponse.ok) {
-      const existingAttributes = await searchResponse.json();
-      const exactMatch = existingAttributes.find((attr: any) => attr.name === attributeName);
-      if (exactMatch) {
-        console.log(`Attribute "${attributeName}" already exists with ID ${exactMatch.id}`);
-        return exactMatch.id;
-      }
-    }
-
-    // Create new attribute
-    const createUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes`);
-    createUrl.searchParams.append("consumer_key", wooConfig.consumerKey);
-    createUrl.searchParams.append("consumer_secret", wooConfig.consumerSecret);
-
-    const createResponse = await fetch(createUrl.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: attributeName,
-        slug: attributeName.toLowerCase().replace(/\s+/g, '-'),
-        type: 'select',
-        order_by: 'menu_order',
-        has_archives: false
-      }),
-    });
-
-    if (createResponse.ok) {
-      const newAttribute = await createResponse.json();
-      console.log(`Created attribute "${attributeName}" with ID ${newAttribute.id}`);
-      return newAttribute.id;
-    } else {
-      const errorText = await createResponse.text();
-      console.error(`Failed to create attribute "${attributeName}": ${errorText}`);
-      return null;
-    }
-  } catch (error) {
-    console.error(`Error ensuring attribute "${attributeName}" exists:`, error);
-    return null;
-  }
-}
 
 
 Deno.serve(async (req) => {
@@ -519,18 +470,7 @@ async function createProductInWooCommerce(
     });
   }
 
-  // Ensure all custom attributes exist in WooCommerce first
-  console.log(`Product ${sku} has attributes:`, attributes);
-  if (attributes && typeof attributes === 'object') {
-    for (const [key, value] of Object.entries(attributes)) {
-      if (value && String(value).trim()) {
-        console.log(`Ensuring attribute exists: ${key}`);
-        await ensureAttributeExists(key, wooConfig);
-      }
-    }
-  }
-
-  // Add all product attributes from database (but skip numeric codes like '001', '002')
+  // Add all product attributes from database as custom attributes (but skip numeric codes like '001', '002')
   if (attributes && typeof attributes === 'object') {
     let position = productData.attributes.length;
     for (const [key, value] of Object.entries(attributes)) {
@@ -884,21 +824,7 @@ async function updateProductInWooCommerce(
     });
   }
 
-  // Ensure all custom attributes exist first (but skip numeric codes)
-  console.log(`Product ${sku} has attributes:`, attributes);
-  if (attributes && typeof attributes === 'object') {
-    for (const [key, value] of Object.entries(attributes)) {
-      const valueStr = String(value).trim();
-      const isNumericCode = /^\d{1,3}$/.test(valueStr);
-      
-      if (valueStr && !isNumericCode) {
-        console.log(`Ensuring attribute exists: ${key}`);
-        await ensureAttributeExists(key, wooConfig);
-      }
-    }
-  }
-
-  // Add all product attributes from database (but skip numeric codes like '001', '002')
+  // Add all product attributes from database as custom attributes (but skip numeric codes like '001', '002')
   if (attributes && typeof attributes === 'object') {
     let position = updatedAttributes.length;
     for (const [key, value] of Object.entries(attributes)) {
