@@ -48,6 +48,7 @@ Deno.serve(async (req) => {
       let updatedVariants = 0;
       let skippedVariants = 0;
       const errors: string[] = [];
+      const skippedItems: Array<{ sku: string; reason: string }> = [];
 
       for (const vrdNode of Array.from(stockItems)) {
         try {
@@ -60,6 +61,7 @@ Deno.serve(async (req) => {
           if (!sku) {
             console.log('Skipping vrd - missing artikelnummer');
             skippedVariants++;
+            skippedItems.push({ sku: 'ONBEKEND', reason: 'Geen artikelnummer in XML' });
             continue;
           }
 
@@ -76,19 +78,10 @@ Deno.serve(async (req) => {
           if (!product) {
             console.log(`❌ Product not found for SKU: ${sku} (tenant: ${tenantId}) - artikel bestand nog niet verwerkt?`);
             skippedVariants++;
-            
-            // Log to changelog for visibility
-            await supabase.from('changelog').insert({
-              tenant_id: tenantId,
-              event_type: 'STOCK_IMPORT',
-              description: `Voorraad overgeslagen: Product SKU ${sku} niet gevonden in database`,
-              metadata: {
-                filename: fileName,
-                sku: sku,
-                reason: 'product_not_found',
-              },
+            skippedItems.push({ 
+              sku: sku, 
+              reason: 'Product niet gevonden in database (artikel bestand nog niet verwerkt?)' 
             });
-            
             continue;
           }
 
@@ -98,6 +91,7 @@ Deno.serve(async (req) => {
           if (maatElements.length === 0) {
             console.log(`No maat elements found for SKU: ${sku}`);
             skippedVariants++;
+            skippedItems.push({ sku: sku, reason: 'Geen maat/variant informatie in XML' });
             continue;
           }
 
@@ -146,6 +140,10 @@ Deno.serve(async (req) => {
               if (!variant) {
                 console.log(`  Variant not found for SKU: ${sku}, maat_id: ${maatId}`);
                 skippedVariants++;
+                skippedItems.push({ 
+                  sku: `${sku} (maat: ${maatId})`, 
+                  reason: 'Variant niet gevonden in database' 
+                });
                 continue;
               }
 
@@ -251,17 +249,28 @@ Deno.serve(async (req) => {
         console.log(`Errors encountered (${errors.length}): ${errors.slice(0, 5).join(', ')}${errors.length > 5 ? '...' : ''}`);
       }
 
+      if (skippedItems.length > 0) {
+        console.log(`Skipped items (${skippedItems.length}):`);
+        skippedItems.forEach(item => console.log(`  - ${item.sku}: ${item.reason}`));
+      }
+
       // Log to changelog
       try {
+        const description = skippedItems.length > 0
+          ? `Voorraad bestand ${fileName} verwerkt: ${updatedVariants} variants bijgewerkt, ${skippedVariants} overgeslagen. Overgeslagen: ${skippedItems.map(i => i.sku).join(', ')}`
+          : `Voorraad bestand ${fileName} verwerkt: ${updatedVariants} variants bijgewerkt, ${skippedVariants} overgeslagen`;
+
         await supabase.from('changelog').insert({
           tenant_id: tenantId,
           event_type: 'STOCK_IMPORT',
-          description: `Voorraad bestand ${fileName} verwerkt: ${updatedVariants} variants bijgewerkt, ${skippedVariants} overgeslagen`,
+          description: description,
           metadata: {
             filename: fileName,
             updated_variants: updatedVariants,
             skipped_variants: skippedVariants,
             error_count: errors.length,
+            skipped_items: skippedItems,
+            errors: errors.slice(0, 10),
           },
         });
       } catch (logError) {
