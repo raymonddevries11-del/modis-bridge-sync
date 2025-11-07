@@ -470,14 +470,13 @@ async function createProductInWooCommerce(
     });
   }
 
-  // Add all product attributes from database as custom attributes (but skip numeric codes like '001', '002')
+  // Add all product attributes from database as custom attributes
   if (attributes && typeof attributes === 'object') {
     let position = productData.attributes.length;
     for (const [key, value] of Object.entries(attributes)) {
       const valueStr = String(value).trim();
-      const isNumericCode = /^\d{1,3}$/.test(valueStr);
       
-      if (valueStr && !isNumericCode) {
+      if (valueStr) {
         productData.attributes.push({
           name: key,
           position: position++,
@@ -824,14 +823,13 @@ async function updateProductInWooCommerce(
     });
   }
 
-  // Add all product attributes from database as custom attributes (but skip numeric codes like '001', '002')
+  // Add all product attributes from database as custom attributes
   if (attributes && typeof attributes === 'object') {
     let position = updatedAttributes.length;
     for (const [key, value] of Object.entries(attributes)) {
       const valueStr = String(value).trim();
-      const isNumericCode = /^\d{1,3}$/.test(valueStr);
       
-      if (valueStr && !isNumericCode) {
+      if (valueStr) {
         updatedAttributes.push({
           name: key,
           position: position++,
