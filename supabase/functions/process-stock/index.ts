@@ -74,8 +74,21 @@ Deno.serve(async (req) => {
             .maybeSingle();
 
           if (!product) {
-            console.log(`Product not found for SKU: ${sku} (might not be synced yet)`);
+            console.log(`❌ Product not found for SKU: ${sku} (tenant: ${tenantId}) - artikel bestand nog niet verwerkt?`);
             skippedVariants++;
+            
+            // Log to changelog for visibility
+            await supabase.from('changelog').insert({
+              tenant_id: tenantId,
+              event_type: 'STOCK_IMPORT',
+              description: `Voorraad overgeslagen: Product SKU ${sku} niet gevonden in database`,
+              metadata: {
+                filename: fileName,
+                sku: sku,
+                reason: 'product_not_found',
+              },
+            });
+            
             continue;
           }
 
