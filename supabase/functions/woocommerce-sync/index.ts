@@ -208,6 +208,29 @@ Deno.serve(async (req) => {
   }
 });
 
+async function logChangeToChangelog(
+  supabase: any,
+  tenantId: string,
+  eventType: string,
+  description: string,
+  metadata: any
+) {
+  try {
+    await supabase
+      .from('changelog')
+      .insert({
+        tenant_id: tenantId,
+        event_type: eventType,
+        description,
+        metadata
+      });
+    console.log(`Logged to changelog: ${eventType} - ${description}`);
+  } catch (error) {
+    console.error('Failed to log to changelog:', error);
+  }
+}
+
+
 async function processJob(
   job: any,
   supabase: any,
@@ -306,7 +329,7 @@ async function processJob(
 
     // Process each product
     for (const product of products) {
-      await syncProductToWooCommerce(product, wooConfig, variantIds);
+      await syncProductToWooCommerce(product, wooConfig, variantIds, supabase, job.tenant_id);
     }
 
     // Only mark as done and log if NOT invoked by scheduler (scheduler handles state)
@@ -383,7 +406,9 @@ async function processJob(
 async function syncProductToWooCommerce(
   product: any,
   wooConfig: WooCommerceConfig,
-  variantIdsFilter?: string[]
+  variantIdsFilter?: string[],
+  supabase?: any,
+  tenantId?: string
 ) {
   const { sku, title, product_prices, variants, images, color, brands } = product;
 
@@ -421,7 +446,7 @@ async function syncProductToWooCommerce(
   // If product doesn't exist, create it
   if (!wooProducts || wooProducts.length === 0) {
     console.log(`Product ${sku} not found in WooCommerce, creating new product`);
-    await createProductInWooCommerce(product, wooConfig, variantIdsFilter);
+    await createProductInWooCommerce(product, wooConfig, variantIdsFilter, supabase, tenantId);
     return;
   }
 
@@ -430,13 +455,15 @@ async function syncProductToWooCommerce(
   const wooProductId = wooProduct.id;
   console.log(`Found WooCommerce product ID ${wooProductId} for SKU ${sku}, updating`);
 
-  await updateProductInWooCommerce(wooProductId, product, wooConfig, variantIdsFilter);
+  await updateProductInWooCommerce(wooProductId, product, wooConfig, variantIdsFilter, supabase, tenantId);
 }
 
 async function createProductInWooCommerce(
   product: any,
   wooConfig: WooCommerceConfig,
-  variantIdsFilter?: string[]
+  variantIdsFilter?: string[],
+  supabase?: any,
+  tenantId?: string
 ) {
   const { sku, title, product_prices, variants, images, color, brands, tax_code, webshop_text, meta_description, categories, attributes } = product;
 
@@ -590,7 +617,7 @@ async function createProductInWooCommerce(
         if (foundProducts && foundProducts.length > 0) {
           const existingProduct = foundProducts[0];
           console.log(`Found existing product ${sku} with ID ${existingProduct.id}, updating instead`);
-          await updateProductInWooCommerce(existingProduct.id, product, wooConfig, variantIdsFilter);
+          await updateProductInWooCommerce(existingProduct.id, product, wooConfig, variantIdsFilter, supabase, tenantId);
           return;
         }
       }
@@ -602,6 +629,23 @@ async function createProductInWooCommerce(
 
   const createdProduct = await createResponse.json();
   console.log(`Created product ${sku} with ID ${createdProduct.id}`);
+
+  // Log to changelog
+  if (supabase && tenantId) {
+    await logChangeToChangelog(
+      supabase,
+      tenantId,
+      'WOO_PRODUCT_CREATED',
+      `Nieuw product aangemaakt in WooCommerce: ${title} (${sku})`,
+      {
+        productId: product.id,
+        sku: sku,
+        title: title,
+        wooProductId: createdProduct.id,
+        variantCount: variantsToCreate?.length || 0
+      }
+    );
+  }
 
   // Create variations
   if (variantsToCreate && variantsToCreate.length > 0) {
@@ -672,7 +716,9 @@ async function updateProductInWooCommerce(
   wooProductId: number,
   product: any,
   wooConfig: WooCommerceConfig,
-  variantIdsFilter?: string[]
+  variantIdsFilter?: string[],
+  supabase?: any,
+  tenantId?: string
 ) {
   const { sku, title, variants, images, product_prices, webshop_text, meta_description, categories, brands, attributes, color } = product;
 
@@ -883,6 +929,29 @@ async function updateProductInWooCommerce(
       console.error(`Failed to update product data: ${errorText}`);
     } else {
       console.log(`Updated product ${sku} data (description, categories)`);
+      
+      // Log to changelog
+      if (supabase && tenantId) {
+        const changesArray = [];
+        if (updateData.description) changesArray.push('beschrijving');
+        if (updateData.short_description) changesArray.push('korte beschrijving');
+        if (updateData.categories) changesArray.push(`categorieën (${updateData.categories.length})`);
+        if (updateData.images) changesArray.push(`afbeeldingen (${updateData.images.length} nieuw)`);
+        
+        await logChangeToChangelog(
+          supabase,
+          tenantId,
+          'WOO_PRODUCT_UPDATED',
+          `Product geüpdatet in WooCommerce: ${title} (${sku}) - ${changesArray.join(', ')}`,
+          {
+            productId: product.id,
+            sku: sku,
+            title: title,
+            wooProductId: wooProductId,
+            changes: changesArray
+          }
+        );
+      }
     }
   }
 
@@ -899,7 +968,11 @@ async function updateProductInWooCommerce(
         wooProductId,
         variant,
         product_prices,
-        wooConfig
+        wooConfig,
+        supabase,
+        tenantId,
+        sku,
+        title
       );
     }
   }
@@ -909,7 +982,11 @@ async function syncVariantToWooCommerce(
   wooProductId: number,
   variant: any,
   product_prices: any,
-  wooConfig: WooCommerceConfig
+  wooConfig: WooCommerceConfig,
+  supabase?: any,
+  tenantId?: string,
+  productSku?: string,
+  productTitle?: string
 ) {
   // Find WooCommerce variation by size attribute
   const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
@@ -984,6 +1061,45 @@ async function syncVariantToWooCommerce(
   }
 
   console.log(`Updated stock for variation ${variant.size_label}: ${updateData.stock_quantity}`);
+  
+  // Log to changelog - track stock and price changes
+  if (supabase && tenantId) {
+    const changesArray = [];
+    
+    // Check if stock changed
+    if (matchingVariation.stock_quantity !== updateData.stock_quantity) {
+      changesArray.push(`voorraad ${matchingVariation.stock_quantity} → ${updateData.stock_quantity}`);
+    }
+    
+    // Check if prices changed
+    if (updateData.regular_price && matchingVariation.regular_price !== updateData.regular_price) {
+      changesArray.push(`normale prijs ${matchingVariation.regular_price} → ${updateData.regular_price}`);
+    }
+    if (updateData.sale_price && matchingVariation.sale_price !== updateData.sale_price) {
+      changesArray.push(`aanbiedingsprijs ${matchingVariation.sale_price} → ${updateData.sale_price}`);
+    }
+    
+    if (changesArray.length > 0) {
+      await logChangeToChangelog(
+        supabase,
+        tenantId,
+        'WOO_VARIANT_UPDATED',
+        `Variant geüpdatet in WooCommerce: ${productTitle || 'Product'} (${productSku || 'N/A'}) - Maat ${variant.size_label}: ${changesArray.join(', ')}`,
+        {
+          variantId: variant.id,
+          productSku: productSku,
+          size: variant.size_label,
+          wooProductId: wooProductId,
+          wooVariationId: matchingVariation.id,
+          changes: changesArray,
+          oldStock: matchingVariation.stock_quantity,
+          newStock: updateData.stock_quantity,
+          oldPrice: matchingVariation.regular_price,
+          newPrice: updateData.regular_price
+        }
+      );
+    }
+  }
 }
 
 async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
