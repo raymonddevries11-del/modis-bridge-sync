@@ -19,6 +19,45 @@ interface SyncJob {
   };
 }
 
+// Helper function to map attribute codes to values
+async function mapAttributeCodes(
+  attributes: Record<string, any>,
+  tenantId: string,
+  supabase: any
+): Promise<Record<string, string>> {
+  const mappedAttributes: Record<string, string> = {};
+  
+  // Get all attribute mappings for this tenant
+  const { data: mappings } = await supabase
+    .from('attribute_mappings')
+    .select('attribute_name, code, value')
+    .or(`tenant_id.eq.${tenantId},tenant_id.is.null`);
+  
+  if (!mappings) return attributes;
+  
+  // Create a lookup map
+  const lookupMap = new Map<string, string>();
+  for (const mapping of mappings) {
+    const key = `${mapping.attribute_name}|${mapping.code}`;
+    lookupMap.set(key, mapping.value);
+  }
+  
+  // Map each attribute
+  for (const [attrName, attrCode] of Object.entries(attributes)) {
+    const key = `${attrName}|${attrCode}`;
+    const mappedValue = lookupMap.get(key);
+    
+    if (mappedValue) {
+      mappedAttributes[attrName] = mappedValue;
+    } else {
+      // Keep original if no mapping found
+      mappedAttributes[attrName] = String(attrCode);
+    }
+  }
+  
+  return mappedAttributes;
+}
+
 // Helper function to ensure category exists in WooCommerce
 async function ensureCategoryExists(categoryName: string, wooConfig: WooCommerceConfig): Promise<number | null> {
   try {
@@ -470,10 +509,15 @@ async function createProductInWooCommerce(
     });
   }
 
+  // Map attribute codes to readable values
+  const mappedAttributes = tenantId && attributes 
+    ? await mapAttributeCodes(attributes, tenantId, supabase)
+    : attributes;
+
   // Add all product attributes from database as custom attributes
-  if (attributes && typeof attributes === 'object') {
+  if (mappedAttributes && typeof mappedAttributes === 'object') {
     let position = productData.attributes.length;
-    for (const [key, value] of Object.entries(attributes)) {
+    for (const [key, value] of Object.entries(mappedAttributes)) {
       const valueStr = String(value).trim();
       
       if (valueStr) {
@@ -823,10 +867,15 @@ async function updateProductInWooCommerce(
     });
   }
 
+  // Map attribute codes to readable values
+  const mappedAttributes = tenantId && attributes 
+    ? await mapAttributeCodes(attributes, tenantId, supabase)
+    : attributes;
+
   // Add all product attributes from database as custom attributes
-  if (attributes && typeof attributes === 'object') {
+  if (mappedAttributes && typeof mappedAttributes === 'object') {
     let position = updatedAttributes.length;
-    for (const [key, value] of Object.entries(attributes)) {
+    for (const [key, value] of Object.entries(mappedAttributes)) {
       const valueStr = String(value).trim();
       
       if (valueStr) {

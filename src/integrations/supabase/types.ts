@@ -38,6 +38,44 @@ export type Database = {
         }
         Relationships: []
       }
+      attribute_mappings: {
+        Row: {
+          attribute_name: string
+          code: string
+          created_at: string
+          id: string
+          tenant_id: string | null
+          updated_at: string
+          value: string
+        }
+        Insert: {
+          attribute_name: string
+          code: string
+          created_at?: string
+          id?: string
+          tenant_id?: string | null
+          updated_at?: string
+          value: string
+        }
+        Update: {
+          attribute_name?: string
+          code?: string
+          created_at?: string
+          id?: string
+          tenant_id?: string | null
+          updated_at?: string
+          value?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attribute_mappings_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       brands: {
         Row: {
           created_at: string
