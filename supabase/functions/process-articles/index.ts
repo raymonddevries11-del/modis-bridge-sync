@@ -55,7 +55,15 @@ function extractAttributes(artikel: any) {
     
     if (attrName && attrValue && attrValue !== '000') {
       // Use the readable description (oms) if available, otherwise fallback to code
-      attrs[attrName] = attrValueOms || attrValue;
+      const finalValue = attrValueOms || attrValue;
+      
+      // Skip codes like '001', '002', etc. (3 or less digits) - these are not descriptive
+      // But allow actual descriptive values even if they contain numbers
+      const isNumericCode = /^\d{1,3}$/.test(finalValue);
+      
+      if (!isNumericCode) {
+        attrs[attrName] = finalValue;
+      }
     }
   }
   
