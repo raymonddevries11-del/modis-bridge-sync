@@ -530,17 +530,20 @@ async function createProductInWooCommerce(
     }
   }
 
-  // Add all product attributes from database
+  // Add all product attributes from database (but skip numeric codes like '001', '002')
   if (attributes && typeof attributes === 'object') {
     let position = productData.attributes.length;
     for (const [key, value] of Object.entries(attributes)) {
-      if (value && String(value).trim()) {
+      const valueStr = String(value).trim();
+      const isNumericCode = /^\d{1,3}$/.test(valueStr);
+      
+      if (valueStr && !isNumericCode) {
         productData.attributes.push({
           name: key,
           position: position++,
           visible: true,
           variation: false,
-          options: [String(value)]
+          options: [valueStr]
         });
       }
     }
@@ -881,28 +884,34 @@ async function updateProductInWooCommerce(
     });
   }
 
-  // Ensure all custom attributes exist first
+  // Ensure all custom attributes exist first (but skip numeric codes)
   console.log(`Product ${sku} has attributes:`, attributes);
   if (attributes && typeof attributes === 'object') {
     for (const [key, value] of Object.entries(attributes)) {
-      if (value && String(value).trim()) {
+      const valueStr = String(value).trim();
+      const isNumericCode = /^\d{1,3}$/.test(valueStr);
+      
+      if (valueStr && !isNumericCode) {
         console.log(`Ensuring attribute exists: ${key}`);
         await ensureAttributeExists(key, wooConfig);
       }
     }
   }
 
-  // Add all product attributes from database
+  // Add all product attributes from database (but skip numeric codes like '001', '002')
   if (attributes && typeof attributes === 'object') {
     let position = updatedAttributes.length;
     for (const [key, value] of Object.entries(attributes)) {
-      if (value && String(value).trim()) {
+      const valueStr = String(value).trim();
+      const isNumericCode = /^\d{1,3}$/.test(valueStr);
+      
+      if (valueStr && !isNumericCode) {
         updatedAttributes.push({
           name: key,
           position: position++,
           visible: true,
           variation: false,
-          options: [String(value)]
+          options: [valueStr]
         });
       }
     }
