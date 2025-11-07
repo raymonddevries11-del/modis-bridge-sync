@@ -50,11 +50,12 @@ function extractAttributes(artikel: any) {
   // Extract attribute names and values (attribuut-nm-1 through attribuut-nm-20)
   for (let i = 1; i <= 20; i++) {
     const attrName = artikel.querySelector(`attribuut-nm-${i}`)?.textContent?.trim();
+    const attrValueOms = artikel.querySelector(`attribuut-waarde-oms-${i}`)?.textContent?.trim();
     const attrValue = artikel.querySelector(`attribuut-waarde-${i}`)?.textContent?.trim();
     
     if (attrName && attrValue && attrValue !== '000') {
-      // Use the attribute name as the key for better readability
-      attrs[attrName] = attrValue;
+      // Use the readable description (oms) if available, otherwise fallback to code
+      attrs[attrName] = attrValueOms || attrValue;
     }
   }
   
