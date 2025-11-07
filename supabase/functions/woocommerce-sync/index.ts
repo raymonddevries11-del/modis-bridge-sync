@@ -263,8 +263,8 @@ async function processJob(
     } as WooCommerceConfig;
     const { productIds, variantIds } = job.payload;
 
-    // Limit batch size to prevent timeouts
-    const BATCH_SIZE = 10;
+    // Limit batch size to prevent timeouts - smaller batches for reliability
+    const BATCH_SIZE = 3;
     let productIdsToProcess = productIds || [];
     
     // If we have more products than batch size, split the job

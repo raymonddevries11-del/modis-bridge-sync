@@ -21,6 +21,28 @@ serve(async (req) => {
   try {
     console.log('Starting job scheduler...');
 
+    // First, reset stuck jobs that have been processing for more than 5 minutes
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const { data: stuckJobs } = await supabase
+      .from('jobs')
+      .select('id, type, attempts')
+      .eq('state', 'processing')
+      .lt('updated_at', fiveMinutesAgo);
+    
+    if (stuckJobs && stuckJobs.length > 0) {
+      console.log(`Found ${stuckJobs.length} stuck jobs, resetting to ready`);
+      for (const stuckJob of stuckJobs) {
+        await supabase
+          .from('jobs')
+          .update({
+            state: 'ready',
+            error: `Reset from stuck processing state (attempt ${stuckJob.attempts})`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', stuckJob.id);
+      }
+    }
+
     // Get ready jobs with row locking
     const { data: jobs, error: jobsError } = await supabase
       .from('jobs')
