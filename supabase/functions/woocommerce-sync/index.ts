@@ -332,11 +332,11 @@ async function processJob(
       await syncProductToWooCommerce(product, wooConfig, variantIds, supabase, job.tenant_id);
     }
 
-    // Only mark as done and log if NOT invoked by scheduler (scheduler handles state)
-    if (!isSchedulerInvoked) {
-      await supabase.from('jobs').update({ state: 'done', error: null }).eq('id', job.id);
+    // Always mark job as done on success
+    await supabase.from('jobs').update({ state: 'done', error: null }).eq('id', job.id);
       
-      // Add changelog entry
+    // Add changelog entry only if NOT invoked by scheduler
+    if (!isSchedulerInvoked) {
       await supabase.from('changelog').insert({
         tenant_id: job.tenant_id,
         event_type: 'SYNC_COMPLETED',
@@ -375,17 +375,17 @@ async function processJob(
         })
         .eq('id', job.id);
     } else {
-      // Permanent failure - only update if not scheduler invoked
+      // Permanent failure - always update to error state
+      await supabase
+        .from('jobs')
+        .update({ 
+          state: 'error', 
+          error: errorMessage 
+        })
+        .eq('id', job.id);
+      
+      // Log failed sync to changelog only if not scheduler invoked
       if (!isSchedulerInvoked) {
-        await supabase
-          .from('jobs')
-          .update({ 
-            state: 'error', 
-            error: errorMessage 
-          })
-          .eq('id', job.id);
-        
-        // Log failed sync to changelog
         await supabase.from('changelog').insert({
           tenant_id: job.tenant_id,
           event_type: 'SYNC_FAILED',
