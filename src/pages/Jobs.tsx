@@ -195,6 +195,25 @@ const Jobs = () => {
     },
   });
 
+  const deletePendingJobsMutation = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase
+        .from("jobs")
+        .delete()
+        .in("state", ["ready", "processing"])
+        .eq("type", "SYNC_TO_WOO");
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      toast.success("Openstaande jobs verwijderd");
+    },
+    onError: (error: any) => {
+      toast.error(`Fout bij verwijderen: ${error.message}`);
+    },
+  });
+
   const getJobStateColor = (state: string) => {
     switch (state) {
       case "done":
@@ -259,6 +278,13 @@ const Jobs = () => {
           </Select>
 
           <div className="ml-auto flex gap-2">
+            <Button
+              variant="destructive"
+              onClick={() => deletePendingJobsMutation.mutate()}
+              disabled={deletePendingJobsMutation.isPending}
+            >
+              Verwijder openstaande jobs
+            </Button>
             <Button
               variant="outline"
               onClick={() => cleanupErrorJobsMutation.mutate()}
