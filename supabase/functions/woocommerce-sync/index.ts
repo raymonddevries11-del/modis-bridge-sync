@@ -253,8 +253,9 @@ async function processJob(
     } as WooCommerceConfig;
     const { productIds, variantIds } = job.payload;
 
-    // Process products one at a time to avoid overwhelming WooCommerce API
-    const BATCH_SIZE = 1;
+    // CRITICAL: Very small batches to prevent overwhelming hosting provider
+    // SiteGround has blocked us for making too many requests (19/sec)
+    const BATCH_SIZE = 5;
     let productIdsToProcess = productIds || [];
     
     // If we have more products than batch size, split the job
@@ -323,13 +324,14 @@ async function processJob(
 
     console.log(`Syncing ${products.length} products to WooCommerce`);
 
-    // Process each product sequentially with delay to avoid rate limiting
+    // CRITICAL: Process very slowly to avoid overwhelming hosting provider
+    // SiteGround blocked us for 19 req/sec - now we do max ~0.5 req/sec
     for (const product of products) {
       await syncProductToWooCommerce(product, wooConfig, variantIds, supabase, job.tenant_id);
       
-      // Add delay between products to prevent overwhelming the API
+      // Add substantial delay between products (3 seconds)
       if (products.indexOf(product) < products.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
     }
 
@@ -1103,8 +1105,9 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 5)
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      // Add delay before ALL requests - helps with TLS connection issues
-      const initialDelay = attempt === 1 ? 300 : Math.pow(2, attempt) * 1000;
+      // CRITICAL: Add delay before ALL requests to prevent overwhelming host
+      // SiteGround blocked us for making 19 req/sec
+      const initialDelay = attempt === 1 ? 1000 : Math.pow(2, attempt) * 1500;
       await new Promise(resolve => setTimeout(resolve, initialDelay));
       
       const fetchOptions: RequestInit = {
