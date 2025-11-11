@@ -253,8 +253,8 @@ async function processJob(
     } as WooCommerceConfig;
     const { productIds, variantIds } = job.payload;
 
-    // Limit batch size to prevent timeouts - smaller batches for reliability
-    const BATCH_SIZE = 3;
+    // Limit batch size to prevent timeouts and connection issues - smaller batches for reliability
+    const BATCH_SIZE = 2;
     let productIdsToProcess = productIds || [];
     
     // If we have more products than batch size, split the job
@@ -1093,7 +1093,7 @@ async function syncVariantToWooCommerce(
 // Create HTTP/1.1 client to prevent HTTP/2 protocol errors
 const http11Client = Deno.createHttpClient({ http2: false });
 
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 5): Promise<Response> {
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -1132,22 +1132,26 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
       lastError = error instanceof Error ? error : new Error('Unknown error');
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       
-      // Check if it's an HTTP/2 or network protocol error
-      const isProtocolError = 
+      // Check if it's a retryable network/protocol error
+      const isRetryableError = 
         errorMsg.includes('http2 error') ||
         errorMsg.includes('protocol error') ||
         errorMsg.includes('stream error') ||
         errorMsg.includes('ECONNRESET') ||
-        errorMsg.includes('ETIMEDOUT');
+        errorMsg.includes('ETIMEDOUT') ||
+        errorMsg.includes('close_notify') ||
+        errorMsg.includes('connection error') ||
+        errorMsg.includes('peer closed') ||
+        errorMsg.includes('unexpected eof');
       
-      if (attempt < maxRetries && isProtocolError) {
+      if (attempt < maxRetries && isRetryableError) {
         const waitTime = Math.pow(2, attempt) * 1000;
-        console.log(`Protocol error detected (${errorMsg}), retrying with HTTP/1.1 in ${waitTime}ms (${attempt}/${maxRetries})`);
+        console.log(`Network/TLS error (${errorMsg.substring(0, 100)}), retry ${attempt}/${maxRetries} in ${waitTime}ms`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
         continue;
       } else if (attempt < maxRetries) {
         const waitTime = Math.pow(2, attempt) * 1000;
-        console.log(`Request failed, retrying in ${waitTime}ms (${attempt}/${maxRetries}):`, errorMsg);
+        console.log(`Request failed, retrying in ${waitTime}ms (${attempt}/${maxRetries}):`, errorMsg.substring(0, 100));
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
     }
