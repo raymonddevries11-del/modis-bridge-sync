@@ -1090,16 +1090,19 @@ async function syncVariantToWooCommerce(
   }
 }
 
+// Create HTTP/1.1 client to prevent HTTP/2 protocol errors
+const http11Client = Deno.createHttpClient({ http2: false });
+
 async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      // Force HTTP/1.1 to prevent HTTP/2 protocol errors with WooCommerce
+      // Use HTTP/1.1 client to prevent protocol errors with WooCommerce
       const fetchOptions: RequestInit = {
         ...options,
-        // @ts-ignore - Deno supports http2 client option
-        client: { http2: false }
+        // @ts-ignore - Deno.createHttpClient is not in RequestInit types
+        client: http11Client
       };
 
       const response = await fetch(url, fetchOptions);
