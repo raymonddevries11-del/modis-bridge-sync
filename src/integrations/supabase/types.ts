@@ -333,6 +333,27 @@ export type Database = {
           },
         ]
       }
+      pending_product_syncs: {
+        Row: {
+          created_at: string
+          product_id: string
+          reason: string
+          tenant_id: string
+        }
+        Insert: {
+          created_at?: string
+          product_id: string
+          reason: string
+          tenant_id: string
+        }
+        Update: {
+          created_at?: string
+          product_id?: string
+          reason?: string
+          tenant_id?: string
+        }
+        Relationships: []
+      }
       product_prices: {
         Row: {
           currency: string | null
@@ -688,6 +709,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_batch_sync_jobs: { Args: never; Returns: undefined }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
