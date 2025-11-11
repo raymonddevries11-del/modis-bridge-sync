@@ -119,19 +119,22 @@ jobs:
                 
                 console.log(`Found ${artikelFiles.length} artikel files`);
                 
-                // Extract SKUs for photo sync
-                const skusToSync = new Set();
+                // Extract image filenames from XML to sync only those
+                const imagesToSync = new Set();
                 for (const xmlFile of artikelFiles) {
                   try {
                     const xmlPath = `${basePath}/${xmlFile.name}`;
                     const xmlContent = await sftp.get(xmlPath);
                     const xmlString = xmlContent.toString('utf-8');
                     
-                    const skuMatches = xmlString.match(/<ArtikelNummer[^>]*>([^<]+)<\/ArtikelNummer>/gi);
-                    if (skuMatches) {
-                      skuMatches.forEach(match => {
-                        const sku = match.replace(/<[^>]+>/g, '').trim();
-                        if (sku) skusToSync.add(sku);
+                    // Extract image filenames from <Foto> tags
+                    const fotoMatches = xmlString.match(/<Foto[^>]*>([^<]+)<\/Foto>/gi);
+                    if (fotoMatches) {
+                      fotoMatches.forEach(match => {
+                        const filename = match.replace(/<[^>]+>/g, '').trim();
+                        if (filename && /\.(jpg|jpeg|png|gif|webp)$/i.test(filename)) {
+                          imagesToSync.add(filename);
+                        }
                       });
                     }
                   } catch (error) {
@@ -139,48 +142,65 @@ jobs:
                   }
                 }
                 
-                console.log(`Found ${skusToSync.size} unique SKUs`);
+                console.log(`Found ${imagesToSync.size} unique images in XML`);
                 
-                // Sync photos
+                // Check which images already exist in Supabase storage
+                const existingImages = new Set();
+                if (imagesToSync.size > 0) {
+                  try {
+                    const storageResponse = await fetch(
+                      `${process.env.SUPABASE_URL}/storage/v1/object/list/product-images`,
+                      {
+                        headers: {
+                          'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                          'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                        }
+                      }
+                    );
+                    
+                    if (storageResponse.ok) {
+                      const existingFiles = await storageResponse.json();
+                      existingFiles.forEach(file => {
+                        if (file.name) {
+                          existingImages.add(file.name);
+                        }
+                      });
+                      console.log(`Found ${existingImages.size} existing images in storage`);
+                    }
+                  } catch (error) {
+                    console.error('Error checking existing images:', error.message);
+                  }
+                }
+                
+                // Sync only new photos from XML that don't exist yet
                 const tenantBasePath = basePath.replace('/modis-to-wp', '');
                 const webfotoPath = `${tenantBasePath}/webfoto`;
                 
                 const webfotoExists = await sftp.exists(webfotoPath);
-                if (webfotoExists) {
-                  const photoFiles = await sftp.list(webfotoPath);
-                  let imageFiles = photoFiles.filter(f => 
-                    /\.(jpg|jpeg|png|gif|webp)$/i.test(f.name) && f.type === '-'
-                  );
+                if (webfotoExists && imagesToSync.size > 0) {
+                  const imagesToUpload = Array.from(imagesToSync).filter(img => !existingImages.has(img));
+                  console.log(`Need to upload ${imagesToUpload.length} new images`);
                   
-                  // Filter by SKUs
-                  if (skusToSync.size > 0) {
-                    imageFiles = imageFiles.filter(f => {
-                      const nameWithoutExt = f.name.replace(/\.(jpg|jpeg|png|gif|webp)$/i, '');
-                      const underscoreIndex = nameWithoutExt.lastIndexOf('_');
-                      if (underscoreIndex === -1) return false;
-                      
-                      const skuFromFilename = nameWithoutExt.substring(underscoreIndex + 1);
-                      return Array.from(skusToSync).some(sku => 
-                        sku.startsWith(skuFromFilename) || skuFromFilename.startsWith(sku)
-                      );
-                    });
-                  }
-                  
-                  console.log(`Syncing ${imageFiles.length} images`);
-                  
-                  for (const photoFile of imageFiles) {
+                  for (const imageName of imagesToUpload) {
                     try {
-                      const photoPath = `${webfotoPath}/${photoFile.name}`;
+                      const photoPath = `${webfotoPath}/${imageName}`;
+                      const photoExists = await sftp.exists(photoPath);
+                      
+                      if (!photoExists) {
+                        console.log(`⚠ Image not found on SFTP: ${imageName}`);
+                        continue;
+                      }
+                      
                       const imageBuffer = await sftp.get(photoPath);
                       
                       const FormData = (await import('form-data')).default;
                       const formData = new FormData();
                       formData.append('file', imageBuffer, {
-                        filename: photoFile.name,
+                        filename: imageName,
                         contentType: 'image/jpeg'
                       });
                       formData.append('tenantId', tenant.slug);
-                      formData.append('fileName', photoFile.name);
+                      formData.append('fileName', imageName);
                       
                       const uploadResponse = await fetch(
                         `${process.env.SUPABASE_URL}/functions/v1/upload-product-image`,
@@ -195,12 +215,16 @@ jobs:
                       );
                       
                       if (uploadResponse.ok) {
-                        console.log(`✓ Uploaded: ${photoFile.name}`);
+                        console.log(`✓ Uploaded: ${imageName}`);
+                      } else {
+                        console.error(`✗ Upload failed for ${imageName}: ${uploadResponse.status}`);
                       }
                     } catch (error) {
-                      console.error(`Error uploading ${photoFile.name}:`, error.message);
+                      console.error(`Error uploading ${imageName}:`, error.message);
                     }
                   }
+                } else if (!webfotoExists) {
+                  console.log('⚠ Webfoto directory does not exist');
                 }
                 
                 // Process artikel files
