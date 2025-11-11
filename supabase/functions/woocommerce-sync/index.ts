@@ -1095,7 +1095,14 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const response = await fetch(url, options);
+      // Force HTTP/1.1 to prevent HTTP/2 protocol errors with WooCommerce
+      const fetchOptions: RequestInit = {
+        ...options,
+        // @ts-ignore - Deno supports http2 client option
+        client: { http2: false }
+      };
+
+      const response = await fetch(url, fetchOptions);
 
       // Handle rate limiting
       if (response.status === 429) {
@@ -1120,9 +1127,23 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
       return response;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error('Unknown error');
-      if (attempt < maxRetries) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Check if it's an HTTP/2 or network protocol error
+      const isProtocolError = 
+        errorMsg.includes('http2 error') ||
+        errorMsg.includes('protocol error') ||
+        errorMsg.includes('stream error') ||
+        errorMsg.includes('ECONNRESET') ||
+        errorMsg.includes('ETIMEDOUT');
+      
+      if (attempt < maxRetries && isProtocolError) {
         const waitTime = Math.pow(2, attempt) * 1000;
-        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        console.log(`Protocol error detected (${errorMsg}), retrying with HTTP/1.1 in ${waitTime}ms (${attempt}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        continue;
+      } else if (attempt < maxRetries) {
+        const waitTime = Math.pow(2, attempt) * 1000;
         console.log(`Request failed, retrying in ${waitTime}ms (${attempt}/${maxRetries}):`, errorMsg);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
