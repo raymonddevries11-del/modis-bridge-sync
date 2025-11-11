@@ -1098,20 +1098,23 @@ async function syncVariantToWooCommerce(
 // Create HTTP/1.1 client to prevent HTTP/2 protocol errors
 const http11Client = Deno.createHttpClient({ http2: false });
 
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 5): Promise<Response> {
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      // Use HTTP/1.1 client and add delay before request
-      if (attempt > 1) {
-        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms between retries
-      }
+      // Add delay before ALL requests - helps with TLS connection issues
+      const initialDelay = attempt === 1 ? 300 : Math.pow(2, attempt) * 1000;
+      await new Promise(resolve => setTimeout(resolve, initialDelay));
       
       const fetchOptions: RequestInit = {
         ...options,
         // @ts-ignore - Deno.createHttpClient is not in RequestInit types
-        client: http11Client
+        client: http11Client,
+        headers: {
+          ...options.headers,
+          'Connection': 'close', // Force connection closure to avoid TLS issues
+        },
       };
 
       const response = await fetch(url, fetchOptions);
