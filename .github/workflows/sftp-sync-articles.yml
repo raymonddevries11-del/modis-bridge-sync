@@ -1,0 +1,287 @@
+name: SFTP Articles Sync
+
+on:
+  schedule:
+    # Runs daily at 01:00 AM
+    - cron: '0 1 * * *'
+  workflow_dispatch: # Allow manual trigger via Actions tab
+
+jobs:
+  sync-articles:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install SSH client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install ssh2-sftp-client node-fetch form-data
+
+      - name: Sync Article Files
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          node << 'EOF'
+          const SftpClient = require('ssh2-sftp-client');
+          const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+
+          async function syncArticles() {
+            const sftp = new SftpClient();
+            
+            try {
+              console.log('=== SFTP Article Sync ===');
+              
+              // Get active tenants
+              const tenantsResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/tenants?active=eq.true&select=id,name,slug`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_ANON_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
+                  }
+                }
+              );
+              
+              const tenants = await tenantsResponse.json();
+              console.log(`✓ Found ${tenants.length} active tenants`);
+              
+              // Get tenant configs
+              const configsResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/tenant_config?select=*`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                  }
+                }
+              );
+              
+              const configs = await configsResponse.json();
+              const configMap = {};
+              for (const config of configs) {
+                configMap[config.tenant_id] = config;
+              }
+              
+              // Connect to SFTP
+              await sftp.connect({
+                host: process.env.SFTP_HOST,
+                port: parseInt(process.env.SFTP_PORT),
+                username: process.env.SFTP_USERNAME,
+                privateKey: Buffer.from(process.env.SFTP_PRIVATE_KEY, 'utf-8'),
+                passphrase: process.env.SFTP_PASSPHRASE || undefined,
+                readyTimeout: 30000,
+              });
+              console.log('✓ Connected to SFTP');
+              
+              // Process each tenant
+              for (const tenant of tenants) {
+                const tenantConfig = configMap[tenant.id];
+                if (!tenantConfig?.sftp_inbound_path) continue;
+                
+                console.log(`\n=== Processing tenant: ${tenant.name} ===`);
+                
+                const basePath = tenantConfig.sftp_inbound_path;
+                const processingPath = `${basePath}/processing`;
+                const archivePath = `${basePath}/archive`;
+                const errorPath = `${basePath}/error`;
+                
+                // Ensure directories exist
+                for (const dir of [processingPath, archivePath, errorPath]) {
+                  await sftp.mkdir(dir, true).catch(() => {});
+                }
+                
+                // List artikel files
+                const files = await sftp.list(basePath);
+                const artikelFiles = files.filter(f => 
+                  f.name.toLowerCase().endsWith('.xml') &&
+                  f.type === '-' &&
+                  f.name.toLowerCase().includes('artikel')
+                );
+                
+                console.log(`Found ${artikelFiles.length} artikel files`);
+                
+                // Extract SKUs for photo sync
+                const skusToSync = new Set();
+                for (const xmlFile of artikelFiles) {
+                  try {
+                    const xmlPath = `${basePath}/${xmlFile.name}`;
+                    const xmlContent = await sftp.get(xmlPath);
+                    const xmlString = xmlContent.toString('utf-8');
+                    
+                    const skuMatches = xmlString.match(/<ArtikelNummer[^>]*>([^<]+)<\/ArtikelNummer>/gi);
+                    if (skuMatches) {
+                      skuMatches.forEach(match => {
+                        const sku = match.replace(/<[^>]+>/g, '').trim();
+                        if (sku) skusToSync.add(sku);
+                      });
+                    }
+                  } catch (error) {
+                    console.error(`Error reading ${xmlFile.name}:`, error.message);
+                  }
+                }
+                
+                console.log(`Found ${skusToSync.size} unique SKUs`);
+                
+                // Sync photos
+                const tenantBasePath = basePath.replace('/modis-to-wp', '');
+                const webfotoPath = `${tenantBasePath}/webfoto`;
+                
+                const webfotoExists = await sftp.exists(webfotoPath);
+                if (webfotoExists) {
+                  const photoFiles = await sftp.list(webfotoPath);
+                  let imageFiles = photoFiles.filter(f => 
+                    /\.(jpg|jpeg|png|gif|webp)$/i.test(f.name) && f.type === '-'
+                  );
+                  
+                  // Filter by SKUs
+                  if (skusToSync.size > 0) {
+                    imageFiles = imageFiles.filter(f => {
+                      const nameWithoutExt = f.name.replace(/\.(jpg|jpeg|png|gif|webp)$/i, '');
+                      const underscoreIndex = nameWithoutExt.lastIndexOf('_');
+                      if (underscoreIndex === -1) return false;
+                      
+                      const skuFromFilename = nameWithoutExt.substring(underscoreIndex + 1);
+                      return Array.from(skusToSync).some(sku => 
+                        sku.startsWith(skuFromFilename) || skuFromFilename.startsWith(sku)
+                      );
+                    });
+                  }
+                  
+                  console.log(`Syncing ${imageFiles.length} images`);
+                  
+                  for (const photoFile of imageFiles) {
+                    try {
+                      const photoPath = `${webfotoPath}/${photoFile.name}`;
+                      const imageBuffer = await sftp.get(photoPath);
+                      
+                      const FormData = (await import('form-data')).default;
+                      const formData = new FormData();
+                      formData.append('file', imageBuffer, {
+                        filename: photoFile.name,
+                        contentType: 'image/jpeg'
+                      });
+                      formData.append('tenantId', tenant.slug);
+                      formData.append('fileName', photoFile.name);
+                      
+                      const uploadResponse = await fetch(
+                        `${process.env.SUPABASE_URL}/functions/v1/upload-product-image`,
+                        {
+                          method: 'POST',
+                          headers: {
+                            'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                            ...formData.getHeaders()
+                          },
+                          body: formData
+                        }
+                      );
+                      
+                      if (uploadResponse.ok) {
+                        console.log(`✓ Uploaded: ${photoFile.name}`);
+                      }
+                    } catch (error) {
+                      console.error(`Error uploading ${photoFile.name}:`, error.message);
+                    }
+                  }
+                }
+                
+                // Process artikel files
+                for (const file of artikelFiles) {
+                  const fileName = file.name;
+                  const readyFilePath = `${basePath}/${fileName}`;
+                  const processingFilePath = `${processingPath}/${fileName}`;
+                  const archiveFilePath = `${archivePath}/${fileName}`;
+                  const errorFilePath = `${errorPath}/${fileName}`;
+                  
+                  try {
+                    console.log(`Processing: ${fileName}`);
+                    
+                    await sftp.rename(readyFilePath, processingFilePath);
+                    const xmlContent = await sftp.get(processingFilePath);
+                    const xmlString = xmlContent.toString('utf-8');
+                    
+                    const response = await fetch(
+                      `${process.env.SUPABASE_URL}/functions/v1/process-articles`,
+                      {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                        },
+                        body: JSON.stringify({
+                          fileName: fileName,
+                          xmlContent: xmlString,
+                          tenantId: tenant.id,
+                        }),
+                      }
+                    );
+                    
+                    if (!response.ok) {
+                      throw new Error(`Edge function failed: ${response.status}`);
+                    }
+                    
+                    // Log to changelog
+                    await fetch(
+                      `${process.env.SUPABASE_URL}/rest/v1/changelog`,
+                      {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                          'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                          'Prefer': 'return=minimal'
+                        },
+                        body: JSON.stringify({
+                          tenant_id: tenant.id,
+                          event_type: 'ARTICLE_IMPORT',
+                          description: `Artikel bestand ${fileName} gesynchroniseerd en verwerkt`,
+                          metadata: { filename: fileName }
+                        })
+                      }
+                    );
+                    
+                    await sftp.rename(processingFilePath, archiveFilePath);
+                    console.log(`✓ Archived: ${fileName}`);
+                    
+                  } catch (error) {
+                    console.error(`Error processing ${fileName}:`, error.message);
+                    try {
+                      await sftp.rename(processingFilePath, errorFilePath);
+                    } catch (e) {}
+                  }
+                }
+              }
+              
+              await sftp.end();
+              console.log('✓ Article sync complete');
+              
+            } catch (error) {
+              console.error('Fatal error:', error);
+              await sftp.end();
+              throw error;
+            }
+          }
+
+          syncArticles().catch(err => {
+            console.error('Sync failed:', err);
+            process.exit(1);
+          });
+          EOF

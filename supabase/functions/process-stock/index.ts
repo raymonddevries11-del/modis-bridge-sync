@@ -46,6 +46,7 @@ Deno.serve(async (req) => {
     // Start background processing
     const processStock = async () => {
       let updatedVariants = 0;
+      let updatedPrices = 0;
       let skippedVariants = 0;
       const errors: string[] = [];
       const skippedItems: Array<{ sku: string; reason: string }> = [];
@@ -57,6 +58,10 @@ Deno.serve(async (req) => {
           // Extract artikelnummer (SKU) and mutatiecode
           const sku = vrd.querySelector('artikelnummer')?.textContent?.trim();
           const mutatieCode = vrd.querySelector('mutatiecode')?.textContent?.trim();
+          
+          // Extract price information
+          const regularPriceText = vrd.querySelector('verkoopprijs')?.textContent?.trim();
+          const listPriceText = vrd.querySelector('lopende-verkoopprijs')?.textContent?.trim();
 
           if (!sku) {
             console.log('Skipping vrd - missing artikelnummer');
@@ -83,6 +88,30 @@ Deno.serve(async (req) => {
               reason: 'Product niet gevonden in database (artikel bestand nog niet verwerkt?)' 
             });
             continue;
+          }
+
+          // Update prices if present in XML
+          if (regularPriceText || listPriceText) {
+            const regularPrice = regularPriceText ? parseFloat(regularPriceText.replace(',', '.')) : null;
+            const listPrice = listPriceText ? parseFloat(listPriceText.replace(',', '.')) : null;
+
+            if (regularPrice !== null || listPrice !== null) {
+              const priceUpdate: any = { product_id: product.id };
+              if (regularPrice !== null) priceUpdate.regular = regularPrice;
+              if (listPrice !== null) priceUpdate.list = listPrice;
+              
+              const { error: priceError } = await supabase
+                .from('product_prices')
+                .upsert(priceUpdate, { onConflict: 'product_id' });
+
+              if (priceError) {
+                console.error(`Error updating price for SKU ${sku}:`, priceError);
+                errors.push(`Price error for ${sku}: ${priceError.message}`);
+              } else {
+                updatedPrices++;
+                console.log(`  Updated price: regular=${regularPrice}, list=${listPrice}`);
+              }
+            }
           }
 
           // Get all maat elements within this vrd
@@ -243,7 +272,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      console.log(`Stock import complete: ${updatedVariants} variants updated, ${skippedVariants} variants skipped`);
+      console.log(`Stock import complete: ${updatedVariants} variants updated, ${updatedPrices} prices updated, ${skippedVariants} variants skipped`);
       
       if (errors.length > 0) {
         console.log(`Errors encountered (${errors.length}): ${errors.slice(0, 5).join(', ')}${errors.length > 5 ? '...' : ''}`);
@@ -257,8 +286,8 @@ Deno.serve(async (req) => {
       // Log to changelog
       try {
         const description = skippedItems.length > 0
-          ? `Voorraad bestand ${fileName} verwerkt: ${updatedVariants} variants bijgewerkt, ${skippedVariants} overgeslagen. Overgeslagen: ${skippedItems.map(i => i.sku).join(', ')}`
-          : `Voorraad bestand ${fileName} verwerkt: ${updatedVariants} variants bijgewerkt, ${skippedVariants} overgeslagen`;
+          ? `Voorraad & prijs bestand ${fileName} verwerkt: ${updatedVariants} voorraad bijgewerkt, ${updatedPrices} prijzen bijgewerkt, ${skippedVariants} overgeslagen. Overgeslagen: ${skippedItems.map(i => i.sku).join(', ')}`
+          : `Voorraad & prijs bestand ${fileName} verwerkt: ${updatedVariants} voorraad bijgewerkt, ${updatedPrices} prijzen bijgewerkt, ${skippedVariants} overgeslagen`;
 
         await supabase.from('changelog').insert({
           tenant_id: tenantId,
@@ -267,6 +296,7 @@ Deno.serve(async (req) => {
           metadata: {
             filename: fileName,
             updated_variants: updatedVariants,
+            updated_prices: updatedPrices,
             skipped_variants: skippedVariants,
             error_count: errors.length,
             skipped_items: skippedItems,
