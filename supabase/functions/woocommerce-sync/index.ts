@@ -253,8 +253,8 @@ async function processJob(
     } as WooCommerceConfig;
     const { productIds, variantIds } = job.payload;
 
-    // Limit batch size to prevent timeouts and connection issues - smaller batches for reliability
-    const BATCH_SIZE = 2;
+    // Process products one at a time to avoid overwhelming WooCommerce API
+    const BATCH_SIZE = 1;
     let productIdsToProcess = productIds || [];
     
     // If we have more products than batch size, split the job
@@ -323,9 +323,14 @@ async function processJob(
 
     console.log(`Syncing ${products.length} products to WooCommerce`);
 
-    // Process each product
+    // Process each product sequentially with delay to avoid rate limiting
     for (const product of products) {
       await syncProductToWooCommerce(product, wooConfig, variantIds, supabase, job.tenant_id);
+      
+      // Add delay between products to prevent overwhelming the API
+      if (products.indexOf(product) < products.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+      }
     }
 
     // Always mark job as done on success
@@ -1093,12 +1098,16 @@ async function syncVariantToWooCommerce(
 // Create HTTP/1.1 client to prevent HTTP/2 protocol errors
 const http11Client = Deno.createHttpClient({ http2: false });
 
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 5): Promise<Response> {
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      // Use HTTP/1.1 client to prevent protocol errors with WooCommerce
+      // Use HTTP/1.1 client and add delay before request
+      if (attempt > 1) {
+        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms between retries
+      }
+      
       const fetchOptions: RequestInit = {
         ...options,
         // @ts-ignore - Deno.createHttpClient is not in RequestInit types
@@ -1146,12 +1155,12 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 5)
       
       if (attempt < maxRetries && isRetryableError) {
         const waitTime = Math.pow(2, attempt) * 1000;
-        console.log(`Network/TLS error (${errorMsg.substring(0, 100)}), retry ${attempt}/${maxRetries} in ${waitTime}ms`);
+        console.log(`TLS error, retry ${attempt}/${maxRetries} in ${waitTime}ms`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
         continue;
       } else if (attempt < maxRetries) {
         const waitTime = Math.pow(2, attempt) * 1000;
-        console.log(`Request failed, retrying in ${waitTime}ms (${attempt}/${maxRetries}):`, errorMsg.substring(0, 100));
+        console.log(`Request failed, retry ${attempt}/${maxRetries} in ${waitTime}ms`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
     }
