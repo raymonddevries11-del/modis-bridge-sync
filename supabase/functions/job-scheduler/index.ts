@@ -43,13 +43,13 @@ serve(async (req) => {
       }
     }
 
-    // Get ready jobs with row locking
+    // Get ready jobs with row locking - process 20 jobs per run for faster throughput
     const { data: jobs, error: jobsError } = await supabase
       .from('jobs')
       .select('*')
       .eq('state', 'ready')
       .order('created_at', { ascending: true })
-      .limit(5);
+      .limit(20);
 
     if (jobsError) {
       throw jobsError;
@@ -63,12 +63,13 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Processing ${jobs.length} jobs`);
+    console.log(`Processing ${jobs.length} jobs in parallel`);
 
     let processedCount = 0;
     let errorCount = 0;
 
-    for (const job of jobs) {
+    // Process jobs in parallel for much faster throughput
+    const jobPromises = jobs.map(async (job) => {
       try {
         // Update job to processing
         const { error: updateError } = await supabase
@@ -78,11 +79,12 @@ serve(async (req) => {
             attempts: (job.attempts || 0) + 1,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', job.id);
+          .eq('id', job.id)
+          .eq('state', 'ready'); // Only update if still ready (race condition protection)
 
         if (updateError) {
           console.error(`Error updating job ${job.id}:`, updateError);
-          continue;
+          return { success: false, jobId: job.id };
         }
 
         // Process based on job type
@@ -144,7 +146,7 @@ serve(async (req) => {
           .eq('id', job.id);
 
         console.log(`Job ${job.id} completed successfully`);
-        processedCount++;
+        return { success: true, jobId: job.id };
 
       } catch (error: any) {
         console.error(`Error processing job ${job.id}:`, error);
@@ -164,7 +166,7 @@ serve(async (req) => {
             .eq('id', job.id);
           
           console.log(`Job ${job.id} failed after ${attempts} attempts`);
-          errorCount++;
+          return { success: false, jobId: job.id, error: true };
         } else {
           // Retry - set back to ready
           await supabase
@@ -177,9 +179,23 @@ serve(async (req) => {
             .eq('id', job.id);
           
           console.log(`Job ${job.id} will be retried (attempt ${attempts}/${maxAttempts})`);
+          return { success: false, jobId: job.id, retry: true };
         }
       }
-    }
+    });
+
+    // Wait for all jobs to complete
+    const results = await Promise.allSettled(jobPromises);
+    
+    results.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        if (result.value.success) {
+          processedCount++;
+        } else if (result.value.error) {
+          errorCount++;
+        }
+      }
+    });
 
     console.log(`Job scheduler complete. Processed: ${processedCount}, Errors: ${errorCount}`);
 
