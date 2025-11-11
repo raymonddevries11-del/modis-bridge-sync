@@ -43,13 +43,13 @@ serve(async (req) => {
       }
     }
 
-    // Get ready jobs with row locking - process 20 jobs per run for faster throughput
+    // Get ready jobs - process maximum 3 jobs per run to avoid overwhelming hosting
     const { data: jobs, error: jobsError } = await supabase
       .from('jobs')
       .select('*')
       .eq('state', 'ready')
       .order('created_at', { ascending: true })
-      .limit(20);
+      .limit(3);
 
     if (jobsError) {
       throw jobsError;
@@ -63,13 +63,13 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Processing ${jobs.length} jobs in parallel`);
+    console.log(`Processing ${jobs.length} jobs sequentially to avoid overwhelming hosting`);
 
     let processedCount = 0;
     let errorCount = 0;
 
-    // Process jobs in parallel for much faster throughput
-    const jobPromises = jobs.map(async (job) => {
+    // Process jobs sequentially instead of parallel to avoid overwhelming hosting
+    for (const job of jobs) {
       try {
         // Update job to processing
         const { error: updateError } = await supabase
@@ -80,11 +80,11 @@ serve(async (req) => {
             updated_at: new Date().toISOString(),
           })
           .eq('id', job.id)
-          .eq('state', 'ready'); // Only update if still ready (race condition protection)
+          .eq('state', 'ready');
 
         if (updateError) {
           console.error(`Error updating job ${job.id}:`, updateError);
-          return { success: false, jobId: job.id };
+          continue;
         }
 
         // Process based on job type
@@ -146,7 +146,12 @@ serve(async (req) => {
           .eq('id', job.id);
 
         console.log(`Job ${job.id} completed successfully`);
-        return { success: true, jobId: job.id };
+        processedCount++;
+
+        // Add delay between jobs to avoid overwhelming hosting provider
+        if (jobs.indexOf(job) < jobs.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay
+        }
 
       } catch (error: any) {
         console.error(`Error processing job ${job.id}:`, error);
@@ -155,7 +160,6 @@ serve(async (req) => {
         const maxAttempts = 3;
 
         if (attempts >= maxAttempts) {
-          // Max retries reached, mark as error
           await supabase
             .from('jobs')
             .update({
@@ -166,9 +170,8 @@ serve(async (req) => {
             .eq('id', job.id);
           
           console.log(`Job ${job.id} failed after ${attempts} attempts`);
-          return { success: false, jobId: job.id, error: true };
+          errorCount++;
         } else {
-          // Retry - set back to ready
           await supabase
             .from('jobs')
             .update({
@@ -179,23 +182,9 @@ serve(async (req) => {
             .eq('id', job.id);
           
           console.log(`Job ${job.id} will be retried (attempt ${attempts}/${maxAttempts})`);
-          return { success: false, jobId: job.id, retry: true };
         }
       }
-    });
-
-    // Wait for all jobs to complete
-    const results = await Promise.allSettled(jobPromises);
-    
-    results.forEach((result) => {
-      if (result.status === 'fulfilled') {
-        if (result.value.success) {
-          processedCount++;
-        } else if (result.value.error) {
-          errorCount++;
-        }
-      }
-    });
+    }
 
     console.log(`Job scheduler complete. Processed: ${processedCount}, Errors: ${errorCount}`);
 
