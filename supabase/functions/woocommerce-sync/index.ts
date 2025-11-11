@@ -291,6 +291,7 @@ async function processJob(
       `)
       .eq('tenant_id', job.tenant_id);
 
+    // CRITICAL: Only process products if specific IDs are provided
     if (productIdsToProcess && productIdsToProcess.length > 0) {
       query = query.in('id', productIdsToProcess);
     } else if (variantIds && variantIds.length > 0) {
@@ -304,6 +305,11 @@ async function processJob(
         const parentIds = [...new Set(variantData.map((v: any) => v.product_id))];
         query = query.in('id', parentIds);
       }
+    } else {
+      // No specific products or variants to sync - job is invalid
+      console.log('No productIds or variantIds in job payload - marking as done');
+      await supabase.from('jobs').update({ state: 'done', error: 'No products specified' }).eq('id', job.id);
+      return;
     }
 
     const { data: products, error: productsError } = await query;
