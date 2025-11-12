@@ -21,13 +21,13 @@ serve(async (req) => {
   try {
     console.log('Starting job scheduler...');
 
-    // First, reset stuck jobs that have been processing for more than 5 minutes
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    // First, reset stuck jobs that have been processing for more than 15 minutes
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
     const { data: stuckJobs } = await supabase
       .from('jobs')
       .select('id, type, attempts')
       .eq('state', 'processing')
-      .lt('updated_at', fiveMinutesAgo);
+      .lt('updated_at', fifteenMinutesAgo);
     
     if (stuckJobs && stuckJobs.length > 0) {
       console.log(`Found ${stuckJobs.length} stuck jobs, resetting to ready`);
