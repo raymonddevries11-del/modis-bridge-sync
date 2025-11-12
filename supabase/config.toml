@@ -29,3 +29,6 @@ verify_jwt = false
 
 [functions.sftp-upload]
 verify_jwt = false
+
+[functions.daily-bulk-sync]
+verify_jwt = false
