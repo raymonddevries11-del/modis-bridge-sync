@@ -32,3 +32,9 @@ verify_jwt = false
 
 [functions.daily-bulk-sync]
 verify_jwt = false
+
+[functions.count-woo-products]
+verify_jwt = false
+
+[functions.compare-missing-products]
+verify_jwt = false
