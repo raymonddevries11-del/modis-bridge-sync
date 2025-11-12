@@ -167,24 +167,26 @@ Deno.serve(async (req) => {
       });
     }
 
-    console.log(`Processing ${jobs.length} sync jobs`);
+    console.log(`Processing ${jobs.length} sync jobs in background`);
 
-    // Process each job (each job now has its own tenant configuration)
-    const results = await Promise.allSettled(
+    // Start background processing without awaiting
+    // This allows us to return a response immediately
+    Promise.allSettled(
       jobs.map((job) => processJob(job, supabase, isSchedulerInvoked))
-    );
+    ).then(results => {
+      const successCount = results.filter((r) => r.status === 'fulfilled').length;
+      const failureCount = results.filter((r) => r.status === 'rejected').length;
+      console.log(`Background sync complete: ${successCount} succeeded, ${failureCount} failed`);
+    }).catch(err => {
+      console.error('Background sync error:', err);
+    });
 
-    const successCount = results.filter((r) => r.status === 'fulfilled').length;
-    const failureCount = results.filter((r) => r.status === 'rejected').length;
-
-    console.log(`Sync complete: ${successCount} succeeded, ${failureCount} failed`);
-
+    // Return immediate response so job-scheduler doesn't timeout
     return new Response(
       JSON.stringify({
         success: true,
-        processed: jobs.length,
-        succeeded: successCount,
-        failed: failureCount,
+        message: `Started processing ${jobs.length} sync jobs in background`,
+        jobIds: jobs.map((j: any) => j.id),
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
