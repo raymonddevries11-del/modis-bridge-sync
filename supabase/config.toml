@@ -38,3 +38,9 @@ verify_jwt = false
 
 [functions.compare-missing-products]
 verify_jwt = false
+
+[functions.force-create-missing]
+verify_jwt = false
+
+[functions.bulk-create-missing]
+verify_jwt = false
