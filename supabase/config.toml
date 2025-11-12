@@ -44,3 +44,9 @@ verify_jwt = false
 
 [functions.bulk-create-missing]
 verify_jwt = false
+
+[functions.sync-new-products]
+verify_jwt = false
+
+[functions.sync-product-updates]
+verify_jwt = false

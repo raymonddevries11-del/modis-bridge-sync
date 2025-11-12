@@ -99,6 +99,12 @@ serve(async (req) => {
           case 'SYNC_TO_WOO':
             functionName = 'woocommerce-sync';
             break;
+          case 'CREATE_NEW_PRODUCTS':
+            functionName = 'woocommerce-sync'; // Use existing function for creation
+            break;
+          case 'UPDATE_PRODUCTS':
+            functionName = 'woocommerce-sync'; // Use existing function for updates
+            break;
           default:
             throw new Error(`Unknown job type: ${job.type}`);
         }
