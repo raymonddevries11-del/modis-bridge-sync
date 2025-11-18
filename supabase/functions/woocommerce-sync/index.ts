@@ -133,8 +133,8 @@ Deno.serve(async (req) => {
         .from('jobs')
         .select('*')
         .eq('id', body.jobId)
-        .eq('type', 'SYNC_TO_WOO')
-        .in('state', ['ready', 'processing'])
+        .in('type', ['SYNC_TO_WOO', 'CREATE_NEW_PRODUCTS', 'UPDATE_PRODUCTS'])
+        .eq('state', 'processing')
         .single();
       
       if (error || !data) {
