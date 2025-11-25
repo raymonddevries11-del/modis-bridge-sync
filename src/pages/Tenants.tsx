@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Plug } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
 interface Tenant {
@@ -157,6 +157,40 @@ export default function Tenants() {
     },
     onError: (error) => {
       toast.error(`Failed to delete tenant: ${error.message}`);
+    },
+  });
+
+  const testConnection = useMutation({
+    mutationFn: async (tenantId: string) => {
+      const { data: config } = await supabase
+        .from("tenant_config")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .single();
+
+      if (!config) throw new Error("No config found");
+
+      // Test WooCommerce connection by fetching system status
+      const auth = btoa(`${config.woocommerce_consumer_key}:${config.woocommerce_consumer_secret}`);
+      const response = await fetch(`${config.woocommerce_url}/wp-json/wc/v3/system_status`, {
+        headers: {
+          'Authorization': `Basic ${auth}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`WooCommerce API error: ${response.status} ${errorText}`);
+      }
+
+      const data = await response.json();
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`✓ WooCommerce verbinding succesvol! Versie: ${data.environment?.version || 'Unknown'}`);
+    },
+    onError: (error: Error) => {
+      toast.error(`✗ Verbinding mislukt: ${error.message}`);
     },
   });
 
@@ -327,6 +361,15 @@ export default function Tenants() {
                       <TableCell>{new Date(tenant.created_at).toLocaleDateString()}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => testConnection.mutate(tenant.id)}
+                            disabled={testConnection.isPending}
+                            title="Test WooCommerce verbinding"
+                          >
+                            <Plug className="w-4 h-4" />
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
