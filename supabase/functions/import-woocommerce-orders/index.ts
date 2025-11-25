@@ -59,7 +59,23 @@ Deno.serve(async (req) => {
     ordersUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
     ordersUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
     
-    const ordersResponse = await fetch(ordersUrl.toString());
+    let ordersResponse;
+    try {
+      ordersResponse = await fetch(ordersUrl.toString());
+    } catch (error) {
+      // Handle SSL certificate errors for temporary domains
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('invalid peer certificate')) {
+        throw new Error(
+          'SSL certificaat fout: De WooCommerce URL gebruikt een tijdelijk domein zonder geldig SSL certificaat. ' +
+          'Probeer één van deze oplossingen: ' +
+          '1) Wacht tot het definitieve domein is ingesteld, ' +
+          '2) Gebruik tijdelijk HTTP in plaats van HTTPS in de tenant instellingen (niet veilig), ' +
+          '3) Zorg dat het SSL certificaat correct is geconfigureerd op de server.'
+        );
+      }
+      throw error;
+    }
     
     if (!ordersResponse.ok) {
       throw new Error(`Failed to fetch orders: ${ordersResponse.status} ${ordersResponse.statusText}`);
