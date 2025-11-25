@@ -51,7 +51,7 @@ Deno.serve(async (req) => {
       consumerSecret: config.woocommerce_consumer_secret,
     } as WooCommerceConfig;
 
-    // Fetch recent orders from WooCommerce (last 30 days, processing/completed status)
+    // Fetch recent orders from WooCommerce with automatic HTTP fallback for SSL errors
     const ordersUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/orders`);
     ordersUrl.searchParams.append('per_page', '100');
     ordersUrl.searchParams.append('orderby', 'date');
@@ -63,18 +63,15 @@ Deno.serve(async (req) => {
     try {
       ordersResponse = await fetch(ordersUrl.toString());
     } catch (error) {
-      // Handle SSL certificate errors for temporary domains
+      // Automatic HTTP fallback for SSL certificate errors on temporary domains
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (errorMessage.includes('invalid peer certificate')) {
-        throw new Error(
-          'SSL certificaat fout: De WooCommerce URL gebruikt een tijdelijk domein zonder geldig SSL certificaat. ' +
-          'Probeer één van deze oplossingen: ' +
-          '1) Wacht tot het definitieve domein is ingesteld, ' +
-          '2) Gebruik tijdelijk HTTP in plaats van HTTPS in de tenant instellingen (niet veilig), ' +
-          '3) Zorg dat het SSL certificaat correct is geconfigureerd op de server.'
-        );
+        console.log('SSL error detected, falling back to HTTP...');
+        const httpUrl = ordersUrl.toString().replace('https://', 'http://');
+        ordersResponse = await fetch(httpUrl);
+      } else {
+        throw error;
       }
-      throw error;
     }
     
     if (!ordersResponse.ok) {
