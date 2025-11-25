@@ -52,23 +52,30 @@ Deno.serve(async (req) => {
     } as WooCommerceConfig;
 
     // Fetch recent orders from WooCommerce with automatic HTTP fallback for SSL errors
-    const ordersUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/orders`);
-    ordersUrl.searchParams.append('per_page', '100');
-    ordersUrl.searchParams.append('orderby', 'date');
-    ordersUrl.searchParams.append('order', 'desc');
-    ordersUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-    ordersUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+    let ordersUrl = `${wooConfig.url}/wp-json/wc/v3/orders?per_page=100&orderby=date&order=desc&consumer_key=${wooConfig.consumerKey}&consumer_secret=${wooConfig.consumerSecret}`;
     
     let ordersResponse;
+    let usedHttpFallback = false;
+    
     try {
-      ordersResponse = await fetch(ordersUrl.toString());
+      console.log('Attempting HTTPS connection to WooCommerce...');
+      ordersResponse = await fetch(ordersUrl);
     } catch (error) {
-      // Automatic HTTP fallback for SSL certificate errors on temporary domains
       const errorMessage = error instanceof Error ? error.message : String(error);
-      if (errorMessage.includes('invalid peer certificate')) {
-        console.log('SSL error detected, falling back to HTTP...');
-        const httpUrl = ordersUrl.toString().replace('https://', 'http://');
-        ordersResponse = await fetch(httpUrl);
+      
+      // Automatic HTTP fallback for SSL certificate errors on temporary domains
+      if (errorMessage.includes('invalid peer certificate') || errorMessage.includes('UnknownIssuer')) {
+        console.log('SSL certificate error detected, falling back to HTTP...');
+        ordersUrl = ordersUrl.replace('https://', 'http://');
+        usedHttpFallback = true;
+        
+        try {
+          ordersResponse = await fetch(ordersUrl);
+          console.log('HTTP fallback successful');
+        } catch (httpError) {
+          const httpErrorMessage = httpError instanceof Error ? httpError.message : String(httpError);
+          throw new Error(`Both HTTPS and HTTP failed. HTTPS error: ${errorMessage}. HTTP error: ${httpErrorMessage}`);
+        }
       } else {
         throw error;
       }
@@ -79,7 +86,8 @@ Deno.serve(async (req) => {
     }
 
     const wooOrders = await ordersResponse.json();
-    console.log(`Found ${wooOrders.length} orders in WooCommerce`);
+    console.log(`Found ${wooOrders.length} orders in WooCommerce${usedHttpFallback ? ' (using HTTP fallback)' : ''}`);
+
 
     let imported = 0;
     let skipped = 0;
