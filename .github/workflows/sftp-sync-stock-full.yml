@@ -1,0 +1,198 @@
+name: SFTP Stock Full Correction Sync
+
+on:
+  schedule:
+    # Elke zaterdag om 02:00 uur (vrijdagnacht)
+    - cron: '0 2 * * 6'
+  workflow_dispatch: # Sta handmatig starten toe
+
+jobs:
+  sync-stock-full:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+          npm install ssh2-sftp-client node-fetch
+
+      - name: Sync Full Stock from SFTP
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          node << 'EOF'
+          const Client = require('ssh2-sftp-client');
+          const fetch = require('node-fetch');
+
+          async function syncFullStock() {
+            const sftp = new Client();
+            
+            try {
+              console.log('Connecting to SFTP...');
+              await sftp.connect({
+                host: process.env.SFTP_HOST,
+                port: parseInt(process.env.SFTP_PORT || '22'),
+                username: process.env.SFTP_USER,
+                privateKey: process.env.SFTP_PRIVATE_KEY
+              });
+
+              console.log('Fetching active tenants from Supabase...');
+              const tenantsResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/tenants?active=eq.true&select=id,name,slug`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                  }
+                }
+              );
+
+              if (!tenantsResponse.ok) {
+                throw new Error(`Failed to fetch tenants: ${tenantsResponse.statusText}`);
+              }
+
+              const tenants = await tenantsResponse.json();
+              console.log(`Found ${tenants.length} active tenants`);
+
+              for (const tenant of tenants) {
+                console.log(`\n--- Processing tenant: ${tenant.name} ---`);
+                
+                // Fetch tenant config
+                const configResponse = await fetch(
+                  `${process.env.SUPABASE_URL}/rest/v1/tenant_config?tenant_id=eq.${tenant.id}&select=*`,
+                  {
+                    headers: {
+                      'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                    }
+                  }
+                );
+
+                if (!configResponse.ok) {
+                  console.log(`No config found for tenant ${tenant.name}, skipping`);
+                  continue;
+                }
+
+                const configs = await configResponse.json();
+                if (configs.length === 0) {
+                  console.log(`No config found for tenant ${tenant.name}, skipping`);
+                  continue;
+                }
+
+                const config = configs[0];
+                const inboundPath = config.sftp_inbound_path;
+
+                console.log(`Checking SFTP path: ${inboundPath}`);
+                
+                try {
+                  const files = await sftp.list(inboundPath);
+                  
+                  // Zoek naar volledige voorraad bestanden (bevat "volledig" of "volledige" in naam)
+                  const fullStockFiles = files.filter(file => 
+                    file.name.toLowerCase().includes('volledig') && 
+                    file.name.endsWith('.xml')
+                  );
+
+                  if (fullStockFiles.length === 0) {
+                    console.log(`No full stock files found for tenant ${tenant.name}`);
+                    continue;
+                  }
+
+                  for (const file of fullStockFiles) {
+                    const fileName = file.name;
+                    const filePath = `${inboundPath}/${fileName}`;
+                    const processingPath = `${inboundPath}/processing/${fileName}`;
+                    const archivePath = `${inboundPath}/archive/${fileName}`;
+                    const errorPath = `${inboundPath}/error/${fileName}`;
+
+                    console.log(`Processing file: ${fileName}`);
+
+                    try {
+                      // Ensure processing directory exists
+                      try {
+                        await sftp.mkdir(`${inboundPath}/processing`, true);
+                      } catch (e) {
+                        // Directory might already exist
+                      }
+
+                      // Move to processing
+                      await sftp.rename(filePath, processingPath);
+                      console.log(`Moved to processing: ${fileName}`);
+
+                      // Get file content
+                      const xmlContent = await sftp.get(processingPath);
+                      const xmlString = xmlContent.toString('utf-8');
+
+                      // Send to process-stock-full function
+                      console.log(`Sending to process-stock-full function...`);
+                      const response = await fetch(
+                        `${process.env.SUPABASE_URL}/functions/v1/process-stock-full`,
+                        {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                          },
+                          body: JSON.stringify({
+                            fileName: fileName,
+                            xmlContent: xmlString,
+                            tenantId: tenant.id
+                          })
+                        }
+                      );
+
+                      if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`Edge function error: ${response.status} ${errorText}`);
+                      }
+
+                      const result = await response.json();
+                      console.log(`✓ Full stock correction started for ${tenant.name}: ${result.message}`);
+
+                      // Ensure archive directory exists
+                      try {
+                        await sftp.mkdir(`${inboundPath}/archive`, true);
+                      } catch (e) {
+                        // Directory might already exist
+                      }
+
+                      // Move to archive
+                      await sftp.rename(processingPath, archivePath);
+                      console.log(`Archived: ${fileName}`);
+
+                    } catch (fileError) {
+                      console.error(`Error processing file ${fileName}:`, fileError.message);
+                      
+                      // Try to move to error folder
+                      try {
+                        await sftp.mkdir(`${inboundPath}/error`, true);
+                        await sftp.rename(processingPath, errorPath);
+                        console.log(`Moved to error folder: ${fileName}`);
+                      } catch (moveError) {
+                        console.error(`Could not move to error folder:`, moveError.message);
+                      }
+                    }
+                  }
+                } catch (pathError) {
+                  console.error(`Error accessing path ${inboundPath}:`, pathError.message);
+                }
+              }
+
+              console.log('\n✓ Full stock correction sync completed');
+
+            } catch (error) {
+              console.error('Fatal error:', error);
+              process.exit(1);
+            } finally {
+              await sftp.end();
+            }
+          }
+
+          syncFullStock();
+          EOF
