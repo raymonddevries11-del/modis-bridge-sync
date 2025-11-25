@@ -85,7 +85,8 @@ serve(async (req) => {
           const maten = vrd.querySelectorAll('maat');
 
           for (const maat of (maten as any)) {
-            const maatId = maat.querySelector('maat-alfa')?.textContent?.trim();
+            // Use the id attribute from <maat id="011390"> instead of maat-alfa
+            const maatId = maat.getAttribute('id')?.trim();
             const maatWeb = maat.querySelector('maat-web')?.textContent?.trim();
             const eanBarcode = maat.querySelector('ean-barcode')?.textContent?.trim();
             const totaalAantal = maat.querySelector('totaal-aantal')?.textContent?.trim();
