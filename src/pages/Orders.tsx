@@ -59,7 +59,9 @@ const Orders = () => {
 
   const importOrders = useMutation({
     mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke('import-woocommerce-orders');
+      const { data, error } = await supabase.functions.invoke('import-woocommerce-orders', {
+        body: { tenantId: selectedTenant }
+      });
       if (error) throw error;
       return data;
     },
@@ -75,7 +77,7 @@ const Orders = () => {
   const exportOrder = useMutation({
     mutationFn: async (orderNumber: string) => {
       const { data, error } = await supabase.functions.invoke('export-orders', {
-        body: { orderNumber }
+        body: { orderNumber, tenantId: selectedTenant }
       });
       if (error) throw error;
       return data;
