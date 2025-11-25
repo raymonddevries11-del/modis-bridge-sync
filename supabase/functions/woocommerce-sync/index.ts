@@ -439,11 +439,13 @@ async function syncProductToWooCommerce(
     throw new Error(`Failed to search for product ${sku}: ${searchResponse.status} ${searchResponse.statusText} - ${errorText.substring(0, 200)}`);
   }
 
+  // Read response as text first to avoid "Body already consumed" error
+  const responseText = await searchResponse.text();
+  
   let wooProducts;
   try {
-    wooProducts = await searchResponse.json();
+    wooProducts = JSON.parse(responseText);
   } catch (parseError) {
-    const responseText = await searchResponse.text();
     console.error('Failed to parse JSON response:', responseText.substring(0, 500));
     throw new Error(`Invalid JSON response from WooCommerce API. Response starts with: ${responseText.substring(0, 100)}. This often indicates a Cloudflare/CDN block or incorrect WooCommerce URL.`);
   }
@@ -587,11 +589,13 @@ async function createProductInWooCommerce(
   });
 
   if (!createResponse.ok) {
+    // Read response as text first to avoid "Body already consumed" error
+    const errorText = await createResponse.text();
+    
     let errorData;
     try {
-      errorData = await createResponse.json();
+      errorData = JSON.parse(errorText);
     } catch {
-      const errorText = await createResponse.text();
       throw new Error(`Failed to create product ${sku}: ${createResponse.status} - ${errorText}`);
     }
     
@@ -624,8 +628,8 @@ async function createProductInWooCommerce(
       }
     }
     
-    const errorText = JSON.stringify(errorData);
-    throw new Error(`Failed to create product ${sku}: ${createResponse.status} - ${errorText}`);
+    const errorMessage = JSON.stringify(errorData);
+    throw new Error(`Failed to create product ${sku}: ${createResponse.status} - ${errorMessage}`);
   }
 
   const createdProduct = await createResponse.json();
