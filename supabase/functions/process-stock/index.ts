@@ -50,6 +50,8 @@ Deno.serve(async (req) => {
       let skippedVariants = 0;
       const errors: string[] = [];
       const skippedItems: Array<{ sku: string; reason: string }> = [];
+      const changedProductIds = new Set<string>();
+      const changedVariantIds = new Set<string>();
 
       for (const vrdNode of Array.from(stockItems)) {
         try {
@@ -96,6 +98,13 @@ Deno.serve(async (req) => {
             const listPrice = listPriceText ? parseFloat(listPriceText.replace(',', '.')) : null;
 
             if (regularPrice !== null || listPrice !== null) {
+              // Check existing price to detect changes
+              const { data: existingPrice } = await supabase
+                .from('product_prices')
+                .select('regular, list')
+                .eq('product_id', product.id)
+                .maybeSingle();
+
               const priceUpdate: any = { product_id: product.id };
               if (regularPrice !== null) priceUpdate.regular = regularPrice;
               if (listPrice !== null) priceUpdate.list = listPrice;
@@ -110,6 +119,13 @@ Deno.serve(async (req) => {
               } else {
                 updatedPrices++;
                 console.log(`  Updated price: regular=${regularPrice}, list=${listPrice}`);
+                
+                // Track if price actually changed
+                if (!existingPrice || 
+                    existingPrice.regular !== regularPrice || 
+                    existingPrice.list !== listPrice) {
+                  changedProductIds.add(product.id);
+                }
               }
             }
           }
@@ -242,6 +258,13 @@ Deno.serve(async (req) => {
 
               console.log(`  Total stock for variant ${variant.id}: ${totalQty}`);
 
+              // Check existing stock to detect changes
+              const { data: existingStock } = await supabase
+                .from('stock_totals')
+                .select('qty')
+                .eq('variant_id', variant.id)
+                .maybeSingle();
+
               const { error: totalError } = await supabase
                 .from('stock_totals')
                 .upsert({
@@ -257,6 +280,11 @@ Deno.serve(async (req) => {
                 errors.push(`Stock total error for ${sku}/${maatId}: ${totalError.message}`);
               } else {
                 updatedVariants++;
+                
+                // Track if stock actually changed
+                if (!existingStock || existingStock.qty !== totalQty) {
+                  changedVariantIds.add(variant.id);
+                }
               }
 
             } catch (maatError) {
@@ -273,6 +301,7 @@ Deno.serve(async (req) => {
       }
 
       console.log(`Stock import complete: ${updatedVariants} variants updated, ${updatedPrices} prices updated, ${skippedVariants} variants skipped`);
+      console.log(`Changed: ${changedProductIds.size} products (price), ${changedVariantIds.size} variants (stock)`);
       
       if (errors.length > 0) {
         console.log(`Errors encountered (${errors.length}): ${errors.slice(0, 5).join(', ')}${errors.length > 5 ? '...' : ''}`);
@@ -283,11 +312,39 @@ Deno.serve(async (req) => {
         skippedItems.forEach(item => console.log(`  - ${item.sku}: ${item.reason}`));
       }
 
+      // Create sync job if there are changes
+      if (changedProductIds.size > 0 || changedVariantIds.size > 0) {
+        const jobPayload: any = {};
+        
+        if (changedProductIds.size > 0) {
+          jobPayload.productIds = Array.from(changedProductIds);
+        }
+        
+        if (changedVariantIds.size > 0) {
+          jobPayload.variantIds = Array.from(changedVariantIds);
+        }
+
+        const { error: jobError } = await supabase
+          .from('jobs')
+          .insert({
+            type: 'SYNC_TO_WOO',
+            state: 'ready',
+            payload: jobPayload,
+            tenant_id: tenantId,
+          });
+
+        if (jobError) {
+          console.error('Error creating sync job:', jobError);
+        } else {
+          console.log(`Created SYNC_TO_WOO job for ${changedProductIds.size} products and ${changedVariantIds.size} variants`);
+        }
+      }
+
       // Log to changelog
       try {
         const description = skippedItems.length > 0
-          ? `Voorraad & prijs bestand ${fileName} verwerkt: ${updatedVariants} voorraad bijgewerkt, ${updatedPrices} prijzen bijgewerkt, ${skippedVariants} overgeslagen. Overgeslagen: ${skippedItems.map(i => i.sku).join(', ')}`
-          : `Voorraad & prijs bestand ${fileName} verwerkt: ${updatedVariants} voorraad bijgewerkt, ${updatedPrices} prijzen bijgewerkt, ${skippedVariants} overgeslagen`;
+          ? `Voorraad & prijs bestand ${fileName} verwerkt: ${updatedVariants} voorraad bijgewerkt, ${updatedPrices} prijzen bijgewerkt, ${skippedVariants} overgeslagen. ${changedProductIds.size} producten en ${changedVariantIds.size} varianten gewijzigd. Overgeslagen: ${skippedItems.map(i => i.sku).join(', ')}`
+          : `Voorraad & prijs bestand ${fileName} verwerkt: ${updatedVariants} voorraad bijgewerkt, ${updatedPrices} prijzen bijgewerkt, ${skippedVariants} overgeslagen. ${changedProductIds.size} producten en ${changedVariantIds.size} varianten gewijzigd.`;
 
         await supabase.from('changelog').insert({
           tenant_id: tenantId,
@@ -298,6 +355,8 @@ Deno.serve(async (req) => {
             updated_variants: updatedVariants,
             updated_prices: updatedPrices,
             skipped_variants: skippedVariants,
+            changedProducts: changedProductIds.size,
+            changedVariants: changedVariantIds.size,
             error_count: errors.length,
             skipped_items: skippedItems,
             errors: errors.slice(0, 10),

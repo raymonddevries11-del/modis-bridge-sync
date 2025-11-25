@@ -130,6 +130,8 @@ serve(async (req) => {
     const processArticles = async () => {
       let processedCount = 0;
       let variantCount = 0;
+      const changedProductIds = new Set<string>();
+      const changedVariantIds = new Set<string>();
 
       // Process each article
       for (const artikel of (artikelen as any)) {
@@ -191,7 +193,14 @@ serve(async (req) => {
           description: articleGroupEl.querySelector('omschrijving')?.textContent || ''
         } : null;
 
-        // 4. Upsert Product
+        // 4. Check if product exists to detect new/changed products
+        const { data: existingProduct } = await supabase
+          .from('products')
+          .select('id, title, images, attributes, categories')
+          .eq('sku', sku)
+          .maybeSingle();
+
+        // 5. Upsert Product
         const { data: product, error: productError } = await supabase
           .from('products')
           .upsert({
@@ -228,9 +237,23 @@ serve(async (req) => {
           continue;
         }
 
-        // 5. Upsert Product Price
+        // Track if product is new or has changes in images/attributes/categories
+        if (!existingProduct || 
+            JSON.stringify(existingProduct.images) !== JSON.stringify(images) ||
+            JSON.stringify(existingProduct.attributes) !== JSON.stringify(attributes) ||
+            JSON.stringify(existingProduct.categories) !== JSON.stringify(categories)) {
+          changedProductIds.add(product.id);
+        }
+
+        // 6. Check and upsert Product Price
         const regularPrice = parsePrice(artikel.querySelector('verkoopprijs')?.textContent || '0');
         const listPrice = parsePrice(artikel.querySelector('lopende-verkoopprijs')?.textContent || '0');
+
+        const { data: existingPrice } = await supabase
+          .from('product_prices')
+          .select('regular, list')
+          .eq('product_id', product.id)
+          .maybeSingle();
 
         await supabase
           .from('product_prices')
@@ -241,7 +264,14 @@ serve(async (req) => {
             currency: 'EUR',
           }, { onConflict: 'product_id' });
 
-        // 6. Process Variants
+        // Track if price changed
+        if (!existingPrice || 
+            existingPrice.regular !== regularPrice || 
+            existingPrice.list !== listPrice) {
+          changedProductIds.add(product.id);
+        }
+
+        // 7. Process Variants
         const maten = artikel.querySelectorAll('maten maat');
         const existingVariantIds: string[] = [];
 
@@ -252,6 +282,14 @@ serve(async (req) => {
           const ean = maat.querySelector('ean-barcode')?.textContent || null;
           const active = maat.querySelector('maat-actief')?.textContent === '1';
           const allowBackorder = maat.querySelector('GIERMAN backorder-toestaan')?.textContent !== 'no';
+
+          // Check if variant exists to detect changes
+          const { data: existingVariant } = await supabase
+            .from('variants')
+            .select('id, ean, active, allow_backorder')
+            .eq('product_id', product.id)
+            .eq('maat_id', maatId)
+            .maybeSingle();
 
           // Upsert Variant
           const { data: variant, error: variantError } = await supabase
@@ -275,15 +313,34 @@ serve(async (req) => {
 
           existingVariantIds.push(variant.id);
 
-          // Upsert Stock Total
+          // Track if variant attributes changed (EAN, active status)
+          if (!existingVariant || 
+              existingVariant.ean !== ean || 
+              existingVariant.active !== active ||
+              existingVariant.allow_backorder !== allowBackorder) {
+            changedVariantIds.add(variant.id);
+          }
+
+          // Check and upsert Stock Total
           const totalQty = parseInteger(maat.querySelector('voorraad totaal-aantal')?.textContent || '0');
           
+          const { data: existingStock } = await supabase
+            .from('stock_totals')
+            .select('qty')
+            .eq('variant_id', variant.id)
+            .maybeSingle();
+
           await supabase
             .from('stock_totals')
             .upsert({
               variant_id: variant.id,
               qty: totalQty,
             }, { onConflict: 'variant_id' });
+
+          // Track if stock changed
+          if (!existingStock || existingStock.qty !== totalQty) {
+            changedVariantIds.add(variant.id);
+          }
 
           // Delete old stock_by_store
           await supabase
@@ -325,16 +382,47 @@ serve(async (req) => {
     }
 
       console.log(`Import complete: ${processedCount} products, ${variantCount} variants`);
+      console.log(`Changed: ${changedProductIds.size} products, ${changedVariantIds.size} variants`);
+      
+      // Create sync job if there are changes
+      if (changedProductIds.size > 0 || changedVariantIds.size > 0) {
+        const jobPayload: any = {};
+        
+        if (changedProductIds.size > 0) {
+          jobPayload.productIds = Array.from(changedProductIds);
+        }
+        
+        if (changedVariantIds.size > 0) {
+          jobPayload.variantIds = Array.from(changedVariantIds);
+        }
+
+        const { error: jobError } = await supabase
+          .from('jobs')
+          .insert({
+            type: 'SYNC_TO_WOO',
+            state: 'ready',
+            payload: jobPayload,
+            tenant_id: tenantId,
+          });
+
+        if (jobError) {
+          console.error('Error creating sync job:', jobError);
+        } else {
+          console.log(`Created SYNC_TO_WOO job for ${changedProductIds.size} products and ${changedVariantIds.size} variants`);
+        }
+      }
       
       // Add changelog entry
       if (tenantId) {
         await supabase.from('changelog').insert({
           tenant_id: tenantId,
           event_type: 'PRODUCTS_IMPORTED',
-          description: `${processedCount} producten geïmporteerd van ${fileName}`,
+          description: `${processedCount} producten geïmporteerd van ${fileName}. ${changedProductIds.size} producten en ${changedVariantIds.size} varianten gewijzigd.`,
           metadata: {
             productCount: processedCount,
             variantCount: variantCount,
+            changedProducts: changedProductIds.size,
+            changedVariants: changedVariantIds.size,
             fileName: fileName
           }
         });

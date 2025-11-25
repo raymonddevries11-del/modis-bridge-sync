@@ -55,6 +55,7 @@ serve(async (req) => {
       let variantsUpdated = 0;
       let skippedCount = 0;
       const errors: string[] = [];
+      const changedVariantIds = new Set<string>();
 
       for (const vrd of (vrdElements as any)) {
         try {
@@ -137,6 +138,13 @@ serve(async (req) => {
               stockQty = 0; // Delete = set to 0
             }
 
+            // Check existing stock to detect changes
+            const { data: existingStock } = await supabase
+              .from('stock_totals')
+              .select('qty')
+              .eq('variant_id', variant.id)
+              .maybeSingle();
+
             // Update stock_totals directly with totaal-aantal
             const { error: stockError } = await supabase
               .from('stock_totals')
@@ -150,6 +158,11 @@ serve(async (req) => {
               console.error(`Error updating stock for variant ${variant.id}:`, stockError);
               errors.push(`${sku}-${maatId}: ${stockError.message}`);
               continue;
+            }
+
+            // Track if stock changed
+            if (!existingStock || existingStock.qty !== stockQty) {
+              changedVariantIds.add(variant.id);
             }
 
             // Update variant maat_web and ean if they differ
@@ -191,8 +204,30 @@ serve(async (req) => {
       }
 
       console.log(`Full stock correction complete: ${processedCount} products, ${variantsUpdated} variants updated, ${skippedCount} skipped`);
+      console.log(`Changed: ${changedVariantIds.size} variants (stock)`);
+      
       if (errors.length > 0) {
         console.log(`Errors encountered: ${errors.length}`, errors.slice(0, 10));
+      }
+      
+      // Create sync job if there are changes
+      if (changedVariantIds.size > 0) {
+        const { error: jobError } = await supabase
+          .from('jobs')
+          .insert({
+            type: 'SYNC_TO_WOO',
+            state: 'ready',
+            payload: {
+              variantIds: Array.from(changedVariantIds)
+            },
+            tenant_id: tenantId,
+          });
+
+        if (jobError) {
+          console.error('Error creating sync job:', jobError);
+        } else {
+          console.log(`Created SYNC_TO_WOO job for ${changedVariantIds.size} variants`);
+        }
       }
       
       // Add changelog entry
@@ -200,10 +235,11 @@ serve(async (req) => {
         await supabase.from('changelog').insert({
           tenant_id: tenantId,
           event_type: 'STOCK_FULL_CORRECTION',
-          description: `Volledige voorraad correctie uitgevoerd: ${variantsUpdated} varianten bijgewerkt van ${fileName}`,
+          description: `Volledige voorraad correctie uitgevoerd: ${variantsUpdated} varianten bijgewerkt van ${fileName}. ${changedVariantIds.size} varianten gewijzigd.`,
           metadata: {
             productsProcessed: processedCount,
             variantsUpdated: variantsUpdated,
+            changedVariants: changedVariantIds.size,
             skipped: skippedCount,
             errors: errors.slice(0, 10),
             fileName: fileName
