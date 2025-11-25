@@ -50,3 +50,6 @@ verify_jwt = false
 
 [functions.sync-product-updates]
 verify_jwt = false
+
+[functions.process-stock-full]
+verify_jwt = false
