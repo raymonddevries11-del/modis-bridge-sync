@@ -18,12 +18,13 @@ serve(async (req) => {
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     let tenantId: string | null = null;
+    let tenantSlug: string | null = null;
 
     // Handle both GET and POST requests
     if (req.method === 'GET') {
       // Parse query parameters
       const url = new URL(req.url);
-      const tenantSlug = url.searchParams.get('tenant');
+      tenantSlug = url.searchParams.get('tenant');
       const tenantIdParam = url.searchParams.get('tenantId');
 
       if (tenantIdParam) {
@@ -113,8 +114,8 @@ serve(async (req) => {
     const xml = generateProductsXML(products || []);
     
     if (download === '1') {
-      // Save to storage and return URL
-      const fileName = `products-export-${Date.now()}.xml`;
+      // Save to storage and return URL with fixed filename for WP All Import
+      const fileName = tenantSlug ? `products-${tenantSlug}.xml` : 'products.xml';
       const encoder = new TextEncoder();
       const xmlBytes = encoder.encode(xml);
       
@@ -122,7 +123,7 @@ serve(async (req) => {
         .from('order-exports')
         .upload(fileName, xmlBytes, {
           contentType: 'application/xml',
-          upsert: false,
+          upsert: true, // Overwrite existing file for stable URL
         });
 
       if (uploadError) {
