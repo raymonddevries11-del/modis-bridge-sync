@@ -16,8 +16,63 @@ serve(async (req) => {
   }
 
   try {
-    const { tenantId } = await req.json();
-    
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    let tenantId: string | null = null;
+
+    // Handle both GET and POST requests
+    if (req.method === 'GET') {
+      // Parse query parameters
+      const url = new URL(req.url);
+      const tenantSlug = url.searchParams.get('tenant');
+      const tenantIdParam = url.searchParams.get('tenantId');
+
+      if (tenantIdParam) {
+        tenantId = tenantIdParam;
+      } else if (tenantSlug) {
+        // Look up tenant by slug
+        const { data: tenant, error: tenantError } = await supabase
+          .from('tenants')
+          .select('id')
+          .eq('slug', tenantSlug)
+          .eq('active', true)
+          .single();
+
+        if (tenantError || !tenant) {
+          return new Response(
+            JSON.stringify({ error: `Tenant not found with slug: ${tenantSlug}` }),
+            { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        tenantId = tenant.id;
+      } else {
+        // No parameter provided - get the single active tenant
+        const { data: tenants, error: tenantsError } = await supabase
+          .from('tenants')
+          .select('id')
+          .eq('active', true);
+
+        if (tenantsError || !tenants || tenants.length === 0) {
+          return new Response(
+            JSON.stringify({ error: 'No active tenants found' }),
+            { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        if (tenants.length > 1) {
+          return new Response(
+            JSON.stringify({ error: 'Multiple tenants found. Please specify tenant using ?tenant=slug or ?tenantId=id' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        tenantId = tenants[0].id;
+      }
+    } else if (req.method === 'POST') {
+      // Original POST handling
+      const body = await req.json();
+      tenantId = body.tenantId;
+    }
+
     if (!tenantId) {
       return new Response(
         JSON.stringify({ error: 'tenantId is required' }),
@@ -25,8 +80,6 @@ serve(async (req) => {
       );
     }
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    
     console.log(`Exporting products for tenant ${tenantId}`);
 
     // Fetch all products with related data
@@ -59,8 +112,7 @@ serve(async (req) => {
       status: 200,
       headers: {
         ...corsHeaders,
-        'Content-Type': 'application/xml',
-        'Content-Disposition': `attachment; filename="products-export-${new Date().toISOString().split('T')[0]}.xml"`,
+        'Content-Type': 'application/xml; charset=utf-8',
       },
     });
 
