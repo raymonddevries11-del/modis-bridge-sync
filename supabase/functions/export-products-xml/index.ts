@@ -107,13 +107,19 @@ serve(async (req) => {
 
     // Generate XML
     const xml = generateProductsXML(products || []);
+    
+    // Encode to get byte length for Content-Length header
+    const encoder = new TextEncoder();
+    const xmlBytes = encoder.encode(xml);
 
-    return new Response(xml, {
+    return new Response(xmlBytes, {
       status: 200,
       headers: {
         ...corsHeaders,
         'Content-Type': 'application/xml; charset=utf-8',
         'Content-Disposition': 'inline; filename="products.xml"',
+        'Content-Length': String(xmlBytes.length),
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
       },
     });
 
