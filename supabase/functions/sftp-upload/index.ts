@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import SftpClient from 'https://esm.sh/ssh2-sftp-client@10.0.3';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -52,42 +53,25 @@ serve(async (req) => {
 
     console.log(`Uploading to remote path: ${remotePath}`);
 
-    // Write private key to temp file
-    const keyFile = await Deno.makeTempFile();
-    await Deno.writeTextFile(keyFile, privateKey);
-    // Note: Deno.chmod is not available in Edge Runtime, but temp files have safe permissions by default
-
-    // Write content to temp file
-    const contentFile = await Deno.makeTempFile();
-    await Deno.writeTextFile(contentFile, content);
-
+    // Use ssh2-sftp-client library
+    const sftp = new SftpClient();
+    
     try {
-      // Use scp command to upload file
-      const command = new Deno.Command("scp", {
-        args: [
-          "-i", keyFile,
-          "-o", "StrictHostKeyChecking=no",
-          "-o", "UserKnownHostsFile=/dev/null",
-          "-P", String(sftpConfig.port || 22),
-          contentFile,
-          `${sftpConfig.username}@${sftpConfig.host}:${remotePath}`
-        ],
-        stdout: "piped",
-        stderr: "piped",
+      // Connect to SFTP server
+      await sftp.connect({
+        host: sftpConfig.host,
+        port: sftpConfig.port || 22,
+        username: sftpConfig.username,
+        privateKey: privateKey,
       });
 
-      const process = command.spawn();
-      const { code, stdout, stderr } = await process.output();
+      console.log('Connected to SFTP server');
 
-      const stdoutText = new TextDecoder().decode(stdout);
-      const stderrText = new TextDecoder().decode(stderr);
-
-      if (code !== 0) {
-        console.error('SCP failed:', stderrText);
-        throw new Error(`SCP upload failed: ${stderrText}`);
-      }
-
-      console.log('SCP success:', stdoutText);
+      // Upload the content (convert string to Uint8Array)
+      const encoder = new TextEncoder();
+      await sftp.put(encoder.encode(content), remotePath);
+      
+      console.log('File uploaded successfully');
       
       return new Response(
         JSON.stringify({
@@ -99,13 +83,8 @@ serve(async (req) => {
       );
 
     } finally {
-      // Clean up temp files
-      try {
-        await Deno.remove(keyFile);
-        await Deno.remove(contentFile);
-      } catch (e) {
-        console.error('Failed to clean up temp files:', e);
-      }
+      // Close SFTP connection
+      await sftp.end();
     }
 
   } catch (error: any) {
