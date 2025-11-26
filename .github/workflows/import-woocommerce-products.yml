@@ -1,0 +1,240 @@
+name: Import WooCommerce Products
+
+on:
+  workflow_dispatch: # Manual trigger only
+
+jobs:
+  import-products:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install csv-parser node-fetch
+
+      - name: Import Products
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          node << 'EOF'
+          const fs = require('fs');
+          const csv = require('csv-parser');
+          const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+
+          async function importProducts() {
+            try {
+              console.log('=== WooCommerce Product Import ===');
+              
+              // Get tenant ID (assuming single tenant for now)
+              const tenantsResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/tenants?select=id&limit=1`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                  }
+                }
+              );
+              
+              const tenants = await tenantsResponse.json();
+              if (!tenants || tenants.length === 0) {
+                throw new Error('No tenant found');
+              }
+              const tenantId = tenants[0].id;
+              console.log(`Using tenant: ${tenantId}`);
+              
+              // Get existing SKUs
+              const existingResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/products?select=sku&tenant_id=eq.${tenantId}`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                  }
+                }
+              );
+              
+              const existingProducts = await existingResponse.json();
+              const existingSkus = new Set(existingProducts.map(p => p.sku));
+              console.log(`Found ${existingSkus.size} existing products`);
+              
+              // Parse CSV
+              const products = [];
+              const variants = [];
+              const prices = [];
+              const stockTotals = [];
+              
+              await new Promise((resolve, reject) => {
+                fs.createReadStream('.github/data/woocommerce-products.csv')
+                  .pipe(csv())
+                  .on('data', (row) => {
+                    const sku = row['Artikelnummer'];
+                    const type = row['Type'];
+                    
+                    // Skip if no SKU or already exists
+                    if (!sku || existingSkus.has(sku)) return;
+                    
+                    if (type === 'variable') {
+                      // Main product
+                      const productId = `prod_${sku}`;
+                      products.push({
+                        id: productId,
+                        tenant_id: tenantId,
+                        sku: sku,
+                        title: row['Naam'] || sku,
+                        webshop_text: row['Beschrijving'] || null,
+                        images: row['Afbeeldingen'] ? [row['Afbeeldingen']] : [],
+                        categories: row['Categorieën'] ? row['Categorieën'].split(', ') : [],
+                        attributes: {}
+                      });
+                      
+                      // Price
+                      const regularPrice = parseFloat(row['Reguliere prijs']?.replace(',', '.') || '0');
+                      const salePrice = parseFloat(row['Actieprijs']?.replace(',', '.') || '0');
+                      
+                      prices.push({
+                        product_id: productId,
+                        regular: regularPrice > 0 ? regularPrice : null,
+                        list: salePrice > 0 ? salePrice : null,
+                        currency: 'EUR'
+                      });
+                      
+                    } else if (type === 'variation') {
+                      // Variant
+                      const parentSku = row['Hoofd'];
+                      if (!parentSku || existingSkus.has(parentSku)) return;
+                      
+                      const productId = `prod_${parentSku}`;
+                      const variantId = `var_${sku}`;
+                      const maatValue = row['Waarde eigenschap 1'] || row['Standaardeigenschap 1'] || '';
+                      
+                      variants.push({
+                        id: variantId,
+                        product_id: productId,
+                        maat_id: maatValue,
+                        size_label: maatValue,
+                        ean: row['GTIN, UPC, EAN of ISBN'] || null,
+                        active: row['Op voorraad?'] === '1'
+                      });
+                      
+                      // Stock
+                      const qty = parseInt(row['Voorraad'] || '0');
+                      stockTotals.push({
+                        variant_id: variantId,
+                        qty: qty
+                      });
+                    }
+                  })
+                  .on('end', resolve)
+                  .on('error', reject);
+              });
+              
+              console.log(`\nParsed: ${products.length} products, ${variants.length} variants`);
+              
+              // Insert in batches
+              const batchSize = 100;
+              
+              if (products.length > 0) {
+                console.log('\nInserting products...');
+                for (let i = 0; i < products.length; i += batchSize) {
+                  const batch = products.slice(i, i + batchSize);
+                  await fetch(
+                    `${process.env.SUPABASE_URL}/rest/v1/products`,
+                    {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                        'Prefer': 'return=minimal'
+                      },
+                      body: JSON.stringify(batch)
+                    }
+                  );
+                  console.log(`Inserted batch ${Math.floor(i / batchSize) + 1}`);
+                }
+              }
+              
+              if (prices.length > 0) {
+                console.log('\nInserting prices...');
+                for (let i = 0; i < prices.length; i += batchSize) {
+                  const batch = prices.slice(i, i + batchSize);
+                  await fetch(
+                    `${process.env.SUPABASE_URL}/rest/v1/product_prices`,
+                    {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                        'Prefer': 'return=minimal'
+                      },
+                      body: JSON.stringify(batch)
+                    }
+                  );
+                  console.log(`Inserted batch ${Math.floor(i / batchSize) + 1}`);
+                }
+              }
+              
+              if (variants.length > 0) {
+                console.log('\nInserting variants...');
+                for (let i = 0; i < variants.length; i += batchSize) {
+                  const batch = variants.slice(i, i + batchSize);
+                  await fetch(
+                    `${process.env.SUPABASE_URL}/rest/v1/variants`,
+                    {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                        'Prefer': 'return=minimal'
+                      },
+                      body: JSON.stringify(batch)
+                    }
+                  );
+                  console.log(`Inserted batch ${Math.floor(i / batchSize) + 1}`);
+                }
+              }
+              
+              if (stockTotals.length > 0) {
+                console.log('\nInserting stock...');
+                for (let i = 0; i < stockTotals.length; i += batchSize) {
+                  const batch = stockTotals.slice(i, i + batchSize);
+                  await fetch(
+                    `${process.env.SUPABASE_URL}/rest/v1/stock_totals`,
+                    {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                        'Prefer': 'return=minimal'
+                      },
+                      body: JSON.stringify(batch)
+                    }
+                  );
+                  console.log(`Inserted batch ${Math.floor(i / batchSize) + 1}`);
+                }
+              }
+              
+              console.log('\n✓ Import complete!');
+              
+            } catch (error) {
+              console.error('Fatal error:', error);
+              process.exit(1);
+            }
+          }
+
+          importProducts();
+          EOF
