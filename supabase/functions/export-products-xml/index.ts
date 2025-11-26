@@ -153,15 +153,33 @@ function generateProductsXML(products: any[]): string {
 
   for (const product of products) {
     xml += '  <artikel>\n';
-    xml += `    <artnr>${escapeXML(product.sku)}</artnr>\n`;
-    xml += `    <omschrijving>${escapeXML(product.title)}</omschrijving>\n`;
     
-    if (product.brands?.name) {
-      xml += `    <merk>${escapeXML(product.brands.name)}</merk>\n`;
+    // Artikelnummer (SKU) - required by WP All Import template
+    xml += `    <artikelnummer>${escapeXML(product.sku)}</artikelnummer>\n`;
+    
+    // Interne omschrijving - used in title mapping
+    if (product.internal_description) {
+      xml += `    <interne-omschrijving>${escapeXML(product.internal_description)}</interne-omschrijving>\n`;
     }
     
+    // Leveranciers omschrijving
     if (product.suppliers?.name) {
-      xml += `    <leverancier>${escapeXML(product.suppliers.name)}</leverancier>\n`;
+      xml += `    <leveranciers-omschrijving>${escapeXML(product.suppliers.name)}</leveranciers-omschrijving>\n`;
+    }
+    
+    // Merk met geneste merknaam structuur
+    if (product.brands?.name) {
+      xml += '    <merk>\n';
+      xml += `      <merknaam>${escapeXML(product.brands.name)}</merknaam>\n`;
+      xml += '    </merk>\n';
+    }
+
+    // Webshop titel
+    xml += `    <webshop-titel>${escapeXML(product.title)}</webshop-titel>\n`;
+
+    // Webshop tekst
+    if (product.webshop_text) {
+      xml += `    <webshop-tekst><![CDATA[${escapeCDATA(product.webshop_text)}]]></webshop-tekst>\n`;
     }
 
     // Prices
@@ -170,100 +188,97 @@ function generateProductsXML(products: any[]): string {
       if (price.regular) {
         xml += `    <verkoopprijs>${formatPrice(price.regular)}</verkoopprijs>\n`;
       }
-      if (price.list) {
-        xml += `    <adviesprijs>${formatPrice(price.list)}</adviesprijs>\n`;
+      // Sale price als "lopende verkoopprijs"
+      if (price.list && price.list !== price.regular) {
+        xml += `    <lopende-verkoopprijs>${formatPrice(price.list)}</lopende-verkoopprijs>\n`;
       }
     }
 
-    if (product.cost_price) {
-      xml += `    <inkoopprijs>${formatPrice(product.cost_price)}</inkoopprijs>\n`;
-    }
-
-    // Categories
-    if (product.categories && Array.isArray(product.categories)) {
-      xml += '    <categorien>\n';
-      for (const category of product.categories) {
-        const categoryName = typeof category === 'object' ? category.name : String(category);
-        xml += `      <categorie>${escapeXML(categoryName)}</categorie>\n`;
-      }
-      xml += '    </categorien>\n';
-    }
-
-    // Color
+    // Kleur informatie
     if (product.color) {
-      xml += '    <kleur>\n';
-      if (product.color.code) {
-        xml += `      <code>${escapeXML(product.color.code)}</code>\n`;
-      }
       if (product.color.name) {
-        xml += `      <naam>${escapeXML(product.color.name)}</naam>\n`;
+        xml += `    <kleur-oms>${escapeXML(product.color.name)}</kleur-oms>\n`;
+        xml += `    <webfilter-kleur>${escapeXML(product.color.name)}</webfilter-kleur>\n`;
       }
-      xml += '    </kleur>\n';
     }
 
-    // Attributes
+    // Categories - WP All Import verwacht webshop-groep structuur
+    if (product.categories && Array.isArray(product.categories)) {
+      product.categories.forEach((category: any, index: number) => {
+        if (index < 8) { // Max 8 categorieën zoals in template
+          const categoryName = typeof category === 'object' ? category.name : String(category);
+          const groupNum = index + 1;
+          xml += `    <webshop-groep-${groupNum}>${escapeXML(categoryName.split(' - ')[0] || '')}</webshop-groep-${groupNum}>\n`;
+          xml += `    <wgp-omschrijving-${groupNum}>${escapeXML(categoryName)}</wgp-omschrijving-${groupNum}>\n`;
+        }
+      });
+    }
+
+    // Attributes - map naar attribuut-nm en attribuut-waarde-oms
     if (product.attributes) {
       const attrs = typeof product.attributes === 'string' 
         ? JSON.parse(product.attributes) 
         : product.attributes;
       
-      if (Object.keys(attrs).length > 0) {
-        xml += '    <kenmerken>\n';
-        for (const [key, value] of Object.entries(attrs)) {
-          xml += `      <kenmerk naam="${escapeXML(key)}">${escapeXML(String(value))}</kenmerk>\n`;
+      const attrEntries = Object.entries(attrs);
+      attrEntries.forEach(([key, value]: [string, any], index: number) => {
+        if (index < 20) { // Max 20 attributen zoals in template
+          const attrNum = index + 1;
+          xml += `    <attribuut-nm-${attrNum}>${escapeXML(key)}</attribuut-nm-${attrNum}>\n`;
+          xml += `    <attribuut-waarde-oms-${attrNum}>${escapeXML(String(value))}</attribuut-waarde-oms-${attrNum}>\n`;
         }
-        xml += '    </kenmerken>\n';
-      }
+      });
     }
 
-    // Images
+    // Images - foto-01 tot foto-06 formaat
     if (product.images && Array.isArray(product.images)) {
-      xml += '    <fotos>\n';
-      for (const image of product.images) {
-        xml += `      <foto>${escapeXML(image)}</foto>\n`;
-      }
-      xml += '    </fotos>\n';
+      product.images.forEach((image: string, index: number) => {
+        if (index < 6) { // Max 6 foto's zoals in template
+          const fotoNum = String(index + 1).padStart(2, '0');
+          xml += `    <foto-${fotoNum}>${escapeXML(image)}</foto-${fotoNum}>\n`;
+        }
+      });
     }
 
-    // Webshop text
-    if (product.webshop_text) {
-      xml += `    <webshop_tekst><![CDATA[${escapeCDATA(product.webshop_text)}]]></webshop_tekst>\n`;
+    // SEO velden
+    if (product.meta_title) {
+      xml += `    <seo-titel-voor-google-feed>${escapeXML(product.meta_title)}</seo-titel-voor-google-feed>\n`;
+    }
+    if (product.meta_description) {
+      xml += `    <meta-oms-1>${escapeXML(product.meta_description)}</meta-oms-1>\n`;
+    }
+    if (product.meta_keywords) {
+      xml += `    <meta-keywords-1>${escapeXML(product.meta_keywords)}</meta-keywords-1>\n`;
     }
 
-    // Variants (maten)
+    // Webshopdatum
+    if (product.webshop_date) {
+      xml += `    <webshopdatum>${escapeXML(product.webshop_date)}</webshopdatum>\n`;
+    }
+
+    // Variants (maten) - cruciale structuur voor WP All Import
     if (product.variants && product.variants.length > 0) {
       xml += '    <maten>\n';
       for (const variant of product.variants) {
         xml += '      <maat>\n';
-        xml += `        <maatid>${escapeXML(variant.maat_id)}</maatid>\n`;
-        xml += `        <maatlabel>${escapeXML(variant.size_label)}</maatlabel>\n`;
+        xml += `        <maat-id>${escapeXML(variant.maat_id)}</maat-id>\n`;
+        xml += `        <maat-label>${escapeXML(variant.size_label)}</maat-label>\n`;
         
         if (variant.maat_web) {
-          xml += `        <maatweb>${escapeXML(variant.maat_web)}</maatweb>\n`;
+          xml += `        <maat-web>${escapeXML(variant.maat_web)}</maat-web>\n`;
         }
         
         if (variant.ean) {
-          xml += `        <ean>${escapeXML(variant.ean)}</ean>\n`;
+          xml += `        <ean-barcode>${escapeXML(variant.ean)}</ean-barcode>\n`;
         }
         
         xml += `        <actief>${variant.active ? '1' : '0'}</actief>\n`;
         
-        // Stock total
-        if (variant.stock_totals) {
-          xml += `        <voorraad>${variant.stock_totals.qty}</voorraad>\n`;
-        }
-        
-        // Stock by store
-        if (variant.stock_by_store && variant.stock_by_store.length > 0) {
-          xml += '        <filialen>\n';
-          for (const store of variant.stock_by_store) {
-            xml += '          <filiaal>\n';
-            xml += `            <filiaalid>${escapeXML(store.store_id)}</filiaalid>\n`;
-            xml += `            <aantal>${store.qty}</aantal>\n`;
-            xml += '          </filiaal>\n';
-          }
-          xml += '        </filialen>\n';
-        }
+        // Stock totaal - WP All Import verwacht voorraad/totaal-aantal structuur
+        xml += '        <voorraad>\n';
+        const stockQty = variant.stock_totals?.qty || 0;
+        xml += `          <totaal-aantal>${stockQty}</totaal-aantal>\n`;
+        xml += '        </voorraad>\n';
         
         xml += '      </maat>\n';
       }
