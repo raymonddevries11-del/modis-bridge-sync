@@ -72,6 +72,20 @@ jobs:
                 const remotePath = `${tenantDir}/${tenant.file}`;
                 
                 try {
+                  // Trigger fresh XML export first
+                  console.log(`Triggering fresh XML export for ${tenant.slug}...`);
+                  const exportUrl = `${process.env.SUPABASE_URL}/functions/v1/export-products-xml?tenant=${tenant.slug}`;
+                  const exportResponse = await fetch(exportUrl);
+                  
+                  if (exportResponse.ok) {
+                    console.log(`✓ Fresh XML generated for ${tenant.slug}`);
+                  } else {
+                    console.log(`Warning: Could not trigger fresh export, using existing file`);
+                  }
+                  
+                  // Small delay to ensure file is saved
+                  await new Promise(resolve => setTimeout(resolve, 2000));
+                  
                   // Ensure tenant directory exists
                   try {
                     await sftp.mkdir(tenantDir, true);
