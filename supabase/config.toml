@@ -1,5 +1,8 @@
 project_id = "dnllaaspkqqfuuxkvoma"
 
+[functions.export-products-xml]
+verify_jwt = false
+
 [functions.orders-api]
 verify_jwt = false
 
