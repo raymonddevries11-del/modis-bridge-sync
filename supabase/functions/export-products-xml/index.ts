@@ -19,6 +19,7 @@ serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     let tenantId: string | null = null;
     let tenantSlug: string | null = null;
+    let uploadToSftp = false;
 
     // Handle both GET and POST requests
     if (req.method === 'GET') {
@@ -26,6 +27,7 @@ serve(async (req) => {
       const url = new URL(req.url);
       tenantSlug = url.searchParams.get('tenant');
       const tenantIdParam = url.searchParams.get('tenantId');
+      uploadToSftp = url.searchParams.get('uploadToSftp') === 'true';
 
       if (tenantIdParam) {
         tenantId = tenantIdParam;
@@ -122,6 +124,27 @@ serve(async (req) => {
       });
 
     console.log(`Returning XML directly (${xmlBytes.length} bytes)`);
+
+    // Upload to SFTP if requested
+    if (uploadToSftp) {
+      console.log(`Uploading ${fileName} to SFTP...`);
+      try {
+        const { data: uploadResult, error: sftpError } = await supabase.functions.invoke('sftp-upload', {
+          body: {
+            filename: fileName,
+            content: xml
+          }
+        });
+
+        if (sftpError) {
+          console.error('SFTP upload error:', sftpError);
+        } else {
+          console.log('SFTP upload successful:', uploadResult);
+        }
+      } catch (sftpErr) {
+        console.error('SFTP upload failed:', sftpErr);
+      }
+    }
 
     // Return XML directly with proper headers for WP All Import
     return new Response(xmlBytes, {
