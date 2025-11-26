@@ -130,7 +130,14 @@ jobs:
                   try {
                     console.log(`Processing: ${fileName}`);
                     
-                    await sftp.rename(readyFilePath, processingFilePath);
+                    // Move to processing
+                    try {
+                      await sftp.rename(readyFilePath, processingFilePath);
+                    } catch (moveError) {
+                      console.error(`Failed to move to processing: ${moveError.message}`);
+                      throw moveError;
+                    }
+                    
                     const xmlContent = await sftp.get(processingFilePath);
                     const xmlString = xmlContent.toString('utf-8');
                     
@@ -174,14 +181,37 @@ jobs:
                       }
                     );
                     
-                    await sftp.rename(processingFilePath, archiveFilePath);
-                    console.log(`✓ Archived: ${fileName}`);
+                    // Move to archive - with explicit error handling
+                    try {
+                      await sftp.rename(processingFilePath, archiveFilePath);
+                      console.log(`✓ Archived: ${fileName}`);
+                    } catch (archiveError) {
+                      console.error(`Failed to archive ${fileName}: ${archiveError.message}`);
+                      // Try to move to error folder instead
+                      try {
+                        await sftp.rename(processingFilePath, errorFilePath);
+                        console.log(`✗ Moved to error folder: ${fileName}`);
+                      } catch (errorMoveError) {
+                        console.error(`Failed to move to error folder: ${errorMoveError.message}`);
+                      }
+                    }
                     
                   } catch (error) {
                     console.error(`Error processing ${fileName}:`, error.message);
+                    // Try to move from processing to error
                     try {
                       await sftp.rename(processingFilePath, errorFilePath);
-                    } catch (e) {}
+                      console.log(`✗ Moved to error folder after processing failure: ${fileName}`);
+                    } catch (e) {
+                      console.error(`Failed to move to error folder: ${e.message}`);
+                      // If file is still in original location, try to move it to error from there
+                      try {
+                        await sftp.rename(readyFilePath, errorFilePath);
+                        console.log(`✗ Moved to error folder from original location: ${fileName}`);
+                      } catch (e2) {
+                        console.error(`Could not move file anywhere: ${e2.message}`);
+                      }
+                    }
                   }
                 }
               }
