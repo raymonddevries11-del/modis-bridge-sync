@@ -154,44 +154,53 @@ function generateProductsXML(products: any[]): string {
   for (const product of products) {
     xml += '  <artikel>\n';
     
-    // Artikelnummer (SKU) - required by WP All Import template
+    // Basis product informatie
     xml += `    <artikelnummer>${escapeXML(product.sku)}</artikelnummer>\n`;
+    xml += `    <webshop-titel>${escapeXML(product.title)}</webshop-titel>\n`;
     
-    // Interne omschrijving - used in title mapping
+    // Omschrijvingen
     if (product.internal_description) {
       xml += `    <interne-omschrijving>${escapeXML(product.internal_description)}</interne-omschrijving>\n`;
     }
-    
-    // Leveranciers omschrijving
-    if (product.suppliers?.name) {
-      xml += `    <leveranciers-omschrijving>${escapeXML(product.suppliers.name)}</leveranciers-omschrijving>\n`;
+    if (product.webshop_text) {
+      xml += `    <webshop-tekst><![CDATA[${escapeCDATA(product.webshop_text)}]]></webshop-tekst>\n`;
+    }
+    if (product.webshop_text_en) {
+      xml += `    <webshop-tekst-en><![CDATA[${escapeCDATA(product.webshop_text_en)}]]></webshop-tekst-en>\n`;
     }
     
-    // Merk met geneste merknaam structuur
+    // Merk
     if (product.brands?.name) {
       xml += '    <merk>\n';
       xml += `      <merknaam>${escapeXML(product.brands.name)}</merknaam>\n`;
       xml += '    </merk>\n';
     }
-
-    // Webshop titel
-    xml += `    <webshop-titel>${escapeXML(product.title)}</webshop-titel>\n`;
-
-    // Webshop tekst
-    if (product.webshop_text) {
-      xml += `    <webshop-tekst><![CDATA[${escapeCDATA(product.webshop_text)}]]></webshop-tekst>\n`;
+    
+    // Leverancier
+    if (product.suppliers?.name) {
+      xml += `    <leveranciers-omschrijving>${escapeXML(product.suppliers.name)}</leveranciers-omschrijving>\n`;
     }
 
-    // Prices
+    // Prijzen
     if (product.product_prices) {
       const price = product.product_prices;
       if (price.regular) {
         xml += `    <verkoopprijs>${formatPrice(price.regular)}</verkoopprijs>\n`;
       }
-      // Sale price als "lopende verkoopprijs"
       if (price.list && price.list !== price.regular) {
         xml += `    <lopende-verkoopprijs>${formatPrice(price.list)}</lopende-verkoopprijs>\n`;
       }
+      if (price.currency) {
+        xml += `    <valuta>${escapeXML(price.currency)}</valuta>\n`;
+      }
+    }
+    
+    // Kostprijs en marges
+    if (product.cost_price) {
+      xml += `    <kostprijs>${formatPrice(product.cost_price)}</kostprijs>\n`;
+    }
+    if (product.discount_percentage) {
+      xml += `    <kortingspercentage>${product.discount_percentage}</kortingspercentage>\n`;
     }
 
     // Kleur informatie
@@ -200,12 +209,15 @@ function generateProductsXML(products: any[]): string {
         xml += `    <kleur-oms>${escapeXML(product.color.name)}</kleur-oms>\n`;
         xml += `    <webfilter-kleur>${escapeXML(product.color.name)}</webfilter-kleur>\n`;
       }
+      if (product.color.code) {
+        xml += `    <kleur-code>${escapeXML(product.color.code)}</kleur-code>\n`;
+      }
     }
 
-    // Categories - WP All Import verwacht webshop-groep structuur
+    // Categorieën
     if (product.categories && Array.isArray(product.categories)) {
       product.categories.forEach((category: any, index: number) => {
-        if (index < 8) { // Max 8 categorieën zoals in template
+        if (index < 8) {
           const categoryName = typeof category === 'object' ? category.name : String(category);
           const groupNum = index + 1;
           xml += `    <webshop-groep-${groupNum}>${escapeXML(categoryName.split(' - ')[0] || '')}</webshop-groep-${groupNum}>\n`;
@@ -214,7 +226,17 @@ function generateProductsXML(products: any[]): string {
       });
     }
 
-    // Attributes - map naar attribuut-nm en attribuut-waarde-oms
+    // Artikel groep
+    if (product.article_group && typeof product.article_group === 'object') {
+      if (product.article_group.code) {
+        xml += `    <artikelgroep-code>${escapeXML(product.article_group.code)}</artikelgroep-code>\n`;
+      }
+      if (product.article_group.name) {
+        xml += `    <artikelgroep-naam>${escapeXML(product.article_group.name)}</artikelgroep-naam>\n`;
+      }
+    }
+
+    // Attributen
     if (product.attributes) {
       const attrs = typeof product.attributes === 'string' 
         ? JSON.parse(product.attributes) 
@@ -222,7 +244,7 @@ function generateProductsXML(products: any[]): string {
       
       const attrEntries = Object.entries(attrs);
       attrEntries.forEach(([key, value]: [string, any], index: number) => {
-        if (index < 20) { // Max 20 attributen zoals in template
+        if (index < 20) {
           const attrNum = index + 1;
           xml += `    <attribuut-nm-${attrNum}>${escapeXML(key)}</attribuut-nm-${attrNum}>\n`;
           xml += `    <attribuut-waarde-oms-${attrNum}>${escapeXML(String(value))}</attribuut-waarde-oms-${attrNum}>\n`;
@@ -230,10 +252,10 @@ function generateProductsXML(products: any[]): string {
       });
     }
 
-    // Images - foto-01 tot foto-06 formaat
+    // Afbeeldingen
     if (product.images && Array.isArray(product.images)) {
       product.images.forEach((image: string, index: number) => {
-        if (index < 6) { // Max 6 foto's zoals in template
+        if (index < 6) {
           const fotoNum = String(index + 1).padStart(2, '0');
           xml += `    <foto-${fotoNum}>${escapeXML(image)}</foto-${fotoNum}>\n`;
         }
@@ -250,13 +272,28 @@ function generateProductsXML(products: any[]): string {
     if (product.meta_keywords) {
       xml += `    <meta-keywords-1>${escapeXML(product.meta_keywords)}</meta-keywords-1>\n`;
     }
+    if (product.url_key) {
+      xml += `    <url-key>${escapeXML(product.url_key)}</url-key>\n`;
+    }
 
-    // Webshopdatum
+    // Status velden
+    if (product.outlet_sale) {
+      xml += `    <outlet-sale>1</outlet-sale>\n`;
+    }
+    if (product.is_promotion) {
+      xml += `    <is-promotie>1</is-promotie>\n`;
+    }
     if (product.webshop_date) {
       xml += `    <webshopdatum>${escapeXML(product.webshop_date)}</webshopdatum>\n`;
     }
+    if (product.plan_period) {
+      xml += `    <plan-periode>${escapeXML(product.plan_period)}</plan-periode>\n`;
+    }
+    if (product.tax_code) {
+      xml += `    <btw-code>${escapeXML(product.tax_code)}</btw-code>\n`;
+    }
 
-    // Variants (maten) - cruciale structuur voor WP All Import
+    // Varianten (maten) met alle details
     if (product.variants && product.variants.length > 0) {
       xml += '    <maten>\n';
       for (const variant of product.variants) {
@@ -274,12 +311,26 @@ function generateProductsXML(products: any[]): string {
         
         xml += `        <actief>${variant.active ? '1' : '0'}</actief>\n`;
         
-        // Stock totaal - WP All Import verwacht voorraad/totaal-aantal structuur
+        if (variant.allow_backorder !== null && variant.allow_backorder !== undefined) {
+          xml += `        <nabestellen-toegestaan>${variant.allow_backorder ? '1' : '0'}</nabestellen-toegestaan>\n`;
+        }
+        
+        // Voorraad - totaal aantal
         xml += '        <voorraad>\n';
         const stockQty = variant.stock_totals?.qty || 0;
         xml += `          <totaal-aantal>${stockQty}</totaal-aantal>\n`;
-        xml += '        </voorraad>\n';
         
+        // Voorraad per filiaal
+        if (variant.stock_by_store && variant.stock_by_store.length > 0) {
+          for (const store of variant.stock_by_store) {
+            xml += '          <filiaal>\n';
+            xml += `            <filiaal-id>${escapeXML(store.store_id)}</filiaal-id>\n`;
+            xml += `            <aantal>${store.qty}</aantal>\n`;
+            xml += '          </filiaal>\n';
+          }
+        }
+        
+        xml += '        </voorraad>\n';
         xml += '      </maat>\n';
       }
       xml += '    </maten>\n';
