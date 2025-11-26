@@ -105,10 +105,56 @@ serve(async (req) => {
 
     console.log(`Found ${products?.length || 0} products to export`);
 
+    // Check if direct download is requested
+    const url = new URL(req.url);
+    const download = url.searchParams.get('download');
+
     // Generate XML
     const xml = generateProductsXML(products || []);
     
-    // Encode to get byte length for Content-Length header
+    if (download === '1') {
+      // Save to storage and return URL
+      const fileName = `products-export-${Date.now()}.xml`;
+      const encoder = new TextEncoder();
+      const xmlBytes = encoder.encode(xml);
+      
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('order-exports')
+        .upload(fileName, xmlBytes, {
+          contentType: 'application/xml',
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error('Storage upload error:', uploadError);
+        throw uploadError;
+      }
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('order-exports')
+        .getPublicUrl(fileName);
+
+      console.log(`XML saved to storage: ${publicUrl}`);
+
+      return new Response(
+        JSON.stringify({ 
+          success: true, 
+          url: publicUrl,
+          fileName: fileName,
+          productCount: products?.length || 0
+        }),
+        {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+    }
+    
+    // Direct XML response for backward compatibility
     const encoder = new TextEncoder();
     const xmlBytes = encoder.encode(xml);
 
@@ -117,7 +163,7 @@ serve(async (req) => {
       headers: {
         ...corsHeaders,
         'Content-Type': 'application/xml; charset=utf-8',
-        'Content-Disposition': 'inline; filename="products.xml"',
+        'Content-Disposition': 'attachment; filename="products.xml"',
         'Content-Length': String(xmlBytes.length),
         'Cache-Control': 'no-cache, no-store, must-revalidate',
       },
