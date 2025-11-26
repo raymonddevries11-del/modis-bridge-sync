@@ -3,6 +3,9 @@ project_id = "dnllaaspkqqfuuxkvoma"
 [functions.export-products-xml]
 verify_jwt = false
 
+[functions.export-test-xml]
+verify_jwt = false
+
 [functions.orders-api]
 verify_jwt = false
 
@@ -28,9 +31,6 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.woocommerce-webhook]
-verify_jwt = false
-
-[functions.sftp-upload]
 verify_jwt = false
 
 [functions.daily-bulk-sync]
