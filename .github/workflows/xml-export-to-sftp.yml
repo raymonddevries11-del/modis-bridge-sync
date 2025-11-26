@@ -1,0 +1,128 @@
+name: XML Export to SFTP
+
+on:
+  schedule:
+    # Runs daily at 3 AM
+    - cron: '0 3 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  export-and-sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install ssh2-sftp-client
+
+      - name: Download XML from Supabase Storage and Upload to SFTP
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          node << 'EOF'
+          const SftpClient = require('ssh2-sftp-client');
+
+          async function syncXmlToSftp() {
+            const sftp = new SftpClient();
+            
+            try {
+              console.log('=== Syncing Product XML to SFTP ===');
+              
+              // List of tenants and their XML files
+              const tenants = [
+                { slug: 'kosterschoenmode', file: 'products-kosterschoenmode.xml' }
+                // Add more tenants here as needed
+              ];
+              
+              // Connect to SFTP
+              const connectConfig = {
+                host: process.env.SFTP_HOST,
+                port: parseInt(process.env.SFTP_PORT),
+                username: process.env.SFTP_USERNAME,
+                privateKey: Buffer.from(process.env.SFTP_PRIVATE_KEY, 'utf-8'),
+                readyTimeout: 30000,
+              };
+              
+              if (process.env.SFTP_PASSPHRASE) {
+                connectConfig.passphrase = process.env.SFTP_PASSPHRASE;
+              }
+              
+              console.log('Connecting to SFTP...');
+              await sftp.connect(connectConfig);
+              console.log('✓ Connected to SFTP');
+              
+              let synced = 0;
+              
+              for (const tenant of tenants) {
+                const tenantDir = `/home/customer/www/modisbridge.nl/public_html/${tenant.slug}/wp-to-modis`;
+                const remotePath = `${tenantDir}/${tenant.file}`;
+                
+                try {
+                  // Ensure tenant directory exists
+                  try {
+                    await sftp.mkdir(tenantDir, true);
+                    console.log(`✓ Directory ensured: ${tenantDir}`);
+                  } catch (e) {
+                    console.log('Directory already exists or created');
+                  }
+                  
+                  // Download from Supabase Storage via public URL
+                  const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/order-exports/${tenant.file}`;
+                  console.log(`Downloading ${tenant.file} for tenant ${tenant.slug}`);
+                  
+                  const downloadResponse = await fetch(publicUrl);
+                  
+                  if (!downloadResponse.ok) {
+                    throw new Error(`Download failed: ${downloadResponse.status}`);
+                  }
+                  
+                  const arrayBuffer = await downloadResponse.arrayBuffer();
+                  const buffer = Buffer.from(arrayBuffer);
+                  
+                  console.log(`Uploading to: ${remotePath} (${buffer.length} bytes)`);
+                  
+                  await sftp.put(buffer, remotePath);
+                  console.log(`✓ Uploaded ${tenant.file} to ${tenant.slug}/wp-to-modis`);
+                  
+                  const exists = await sftp.exists(remotePath);
+                  if (!exists) {
+                    throw new Error(`File not found after upload: ${remotePath}`);
+                  }
+                  
+                  synced++;
+                  
+                } catch (error) {
+                  console.error(`Error syncing ${tenant.file}:`, error.message);
+                }
+              }
+              
+              console.log(`\n=== Sync Complete ===`);
+              console.log(`Synced: ${synced} XML files`);
+              
+            } catch (error) {
+              console.error('Sync failed:', error);
+              process.exit(1);
+            } finally {
+              await sftp.end();
+            }
+          }
+
+          syncXmlToSftp().catch(err => {
+            console.error('Fatal error:', err);
+            process.exit(1);
+          });
+          EOF
