@@ -196,8 +196,8 @@ function generateProductsXML(products: any[]): string {
     }
 
     // Prices
-    if (product.product_prices && product.product_prices.length > 0) {
-      const price = product.product_prices[0];
+    if (product.product_prices) {
+      const price = product.product_prices;
       if (price.regular) {
         xml += `    <verkoopprijs>${formatPrice(price.regular)}</verkoopprijs>\n`;
       }
@@ -214,7 +214,8 @@ function generateProductsXML(products: any[]): string {
     if (product.categories && Array.isArray(product.categories)) {
       xml += '    <categorien>\n';
       for (const category of product.categories) {
-        xml += `      <categorie>${escapeXML(category)}</categorie>\n`;
+        const categoryName = typeof category === 'object' ? category.name : String(category);
+        xml += `      <categorie>${escapeXML(categoryName)}</categorie>\n`;
       }
       xml += '    </categorien>\n';
     }
