@@ -106,67 +106,36 @@ serve(async (req) => {
 
     console.log(`Found ${products?.length || 0} products to export`);
 
-    // Check if direct download is requested
-    const url = new URL(req.url);
-    const download = url.searchParams.get('download');
-
     // Generate XML
     const xml = generateProductsXML(products || []);
     
-    if (download === '1') {
-      // Save to storage and return URL with fixed filename for WP All Import
-      const fileName = tenantSlug ? `products-${tenantSlug}.xml` : 'products.xml';
-      const encoder = new TextEncoder();
-      const xmlBytes = encoder.encode(xml);
-      
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('order-exports')
-        .upload(fileName, xmlBytes, {
-          contentType: 'application/xml',
-          upsert: true, // Overwrite existing file for stable URL
-        });
-
-      if (uploadError) {
-        console.error('Storage upload error:', uploadError);
-        throw uploadError;
-      }
-
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('order-exports')
-        .getPublicUrl(fileName);
-
-      console.log(`XML saved to storage: ${publicUrl}`);
-
-      return new Response(
-        JSON.stringify({ 
-          success: true, 
-          url: publicUrl,
-          fileName: fileName,
-          productCount: products?.length || 0
-        }),
-        {
-          status: 200,
-          headers: {
-            ...corsHeaders,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-    }
-    
-    // Direct XML response for backward compatibility
+    // Always save to storage with fixed filename for WP All Import
+    const fileName = tenantSlug ? `products-${tenantSlug}.xml` : 'products.xml';
     const encoder = new TextEncoder();
     const xmlBytes = encoder.encode(xml);
+    
+    const { error: uploadError } = await supabase.storage
+      .from('order-exports')
+      .upload(fileName, xmlBytes, {
+        contentType: 'application/xml',
+        upsert: true, // Overwrite existing file for stable URL
+      });
 
-    return new Response(xmlBytes, {
-      status: 200,
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError);
+      throw uploadError;
+    }
+
+    // Get public URL
+    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/order-exports/${fileName}`;
+    console.log(`XML saved to storage, redirecting to: ${publicUrl}`);
+
+    // HTTP 302 redirect to the .xml file - WP All Import follows this
+    return new Response(null, {
+      status: 302,
       headers: {
         ...corsHeaders,
-        'Content-Type': 'application/xml; charset=utf-8',
-        'Content-Disposition': 'attachment; filename="products.xml"',
-        'Content-Length': String(xmlBytes.length),
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Location': publicUrl,
       },
     });
 
