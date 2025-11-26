@@ -68,7 +68,7 @@ jobs:
               let synced = 0;
               
               for (const tenant of tenants) {
-                const tenantDir = `/home/customer/www/modisbridge.nl/public_html/${tenant.slug}/wp-to-modis`;
+                const tenantDir = `/home/customer/www/modisbridge.nl/public_html/${tenant.slug}/back-up-xml`;
                 const remotePath = `${tenantDir}/${tenant.file}`;
                 
                 try {
@@ -96,7 +96,7 @@ jobs:
                   console.log(`Uploading to: ${remotePath} (${buffer.length} bytes)`);
                   
                   await sftp.put(buffer, remotePath);
-                  console.log(`✓ Uploaded ${tenant.file} to ${tenant.slug}/wp-to-modis`);
+                  console.log(`✓ Uploaded ${tenant.file} to ${tenant.slug}/back-up-xml`);
                   
                   const exists = await sftp.exists(remotePath);
                   if (!exists) {
