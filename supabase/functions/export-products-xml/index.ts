@@ -113,6 +113,7 @@ serve(async (req) => {
       headers: {
         ...corsHeaders,
         'Content-Type': 'application/xml; charset=utf-8',
+        'Content-Disposition': 'inline; filename="products.xml"',
       },
     });
 
@@ -204,7 +205,7 @@ function generateProductsXML(products: any[]): string {
 
     // Webshop text
     if (product.webshop_text) {
-      xml += `    <webshop_tekst><![CDATA[${product.webshop_text}]]></webshop_tekst>\n`;
+      xml += `    <webshop_tekst><![CDATA[${escapeCDATA(product.webshop_text)}]]></webshop_tekst>\n`;
     }
 
     // Variants (maten)
@@ -262,6 +263,12 @@ function escapeXML(str: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function escapeCDATA(str: string): string {
+  if (!str) return '';
+  // Split ]]> into separate CDATA sections: ]]]]><![CDATA[>
+  return String(str).replace(/\]\]>/g, ']]]]><![CDATA[>');
 }
 
 function formatPrice(price: number): string {
