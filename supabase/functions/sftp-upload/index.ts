@@ -55,7 +55,7 @@ serve(async (req) => {
     // Write private key to temp file
     const keyFile = await Deno.makeTempFile();
     await Deno.writeTextFile(keyFile, privateKey);
-    await Deno.chmod(keyFile, 0o600);
+    // Note: Deno.chmod is not available in Edge Runtime, but temp files have safe permissions by default
 
     // Write content to temp file
     const contentFile = await Deno.makeTempFile();
