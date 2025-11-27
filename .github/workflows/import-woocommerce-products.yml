@@ -41,6 +41,32 @@ jobs:
             return (isNaN(parsed) || parsed === 0) ? null : parsed;
           }
 
+          // Extract brand from attributes or meta fields
+          function extractBrand(row) {
+            // Try "Merk" from attributes first
+            for (let i = 1; i <= 22; i++) {
+              const name = row[`Naam eigenschap ${i}`];
+              const value = row[`Waarde eigenschap ${i}`];
+              if (name && name.trim().toLowerCase() === 'merk' && value && value.trim()) {
+                return value.trim();
+              }
+            }
+            // Fallback to Meta: _merknaam
+            return row['Meta: _merknaam'] || null;
+          }
+
+          // Extract supplier from attributes
+          function extractSupplier(row) {
+            for (let i = 1; i <= 22; i++) {
+              const name = row[`Naam eigenschap ${i}`];
+              const value = row[`Waarde eigenschap ${i}`];
+              if (name && name.trim().toLowerCase() === 'leverancier' && value && value.trim()) {
+                return value.trim();
+              }
+            }
+            return null;
+          }
+
           // Parse attributes from "Naam eigenschap X" and "Waarde eigenschap X" columns
           function parseAttributes(row) {
             const attributes = {};
@@ -131,6 +157,62 @@ jobs:
               return;
             }
 
+            // Build brand and supplier maps
+            console.log('\n🏷️ Processing brands and suppliers...');
+            const brandMap = new Map();
+            const supplierMap = new Map();
+
+            // Collect unique brands and suppliers
+            const uniqueBrands = new Set();
+            const uniqueSuppliers = new Set();
+            
+            for (const row of newParents) {
+              const brand = extractBrand(row);
+              const supplier = extractSupplier(row);
+              if (brand) uniqueBrands.add(brand);
+              if (supplier) uniqueSuppliers.add(supplier);
+            }
+
+            console.log(`Found ${uniqueBrands.size} unique brands, ${uniqueSuppliers.size} unique suppliers`);
+
+            // Get existing brands
+            if (uniqueBrands.size > 0) {
+              const existingBrands = await supabaseRequest('brands?select=id,name', 'GET');
+              for (const brand of existingBrands) {
+                brandMap.set(brand.name, brand.id);
+              }
+
+              // Create missing brands
+              const brandsToCreate = Array.from(uniqueBrands).filter(name => !brandMap.has(name));
+              if (brandsToCreate.length > 0) {
+                const newBrands = await supabaseRequest('brands', 'POST', brandsToCreate.map(name => ({ name })));
+                const brands = Array.isArray(newBrands) ? newBrands : [newBrands];
+                for (const brand of brands) {
+                  brandMap.set(brand.name, brand.id);
+                }
+                console.log(`✓ Created ${brandsToCreate.length} new brands`);
+              }
+            }
+
+            // Get existing suppliers
+            if (uniqueSuppliers.size > 0) {
+              const existingSuppliers = await supabaseRequest('suppliers?select=id,name', 'GET');
+              for (const supplier of existingSuppliers) {
+                supplierMap.set(supplier.name, supplier.id);
+              }
+
+              // Create missing suppliers
+              const suppliersToCreate = Array.from(uniqueSuppliers).filter(name => !supplierMap.has(name));
+              if (suppliersToCreate.length > 0) {
+                const newSuppliers = await supabaseRequest('suppliers', 'POST', suppliersToCreate.map(name => ({ name })));
+                const suppliers = Array.isArray(newSuppliers) ? newSuppliers : [newSuppliers];
+                for (const supplier of suppliers) {
+                  supplierMap.set(supplier.name, supplier.id);
+                }
+                console.log(`✓ Created ${suppliersToCreate.length} new suppliers`);
+              }
+            }
+
             // PHASE 1: Insert products in batches
             console.log('\n📦 PHASE 1: Inserting products...');
             const skuToProductId = new Map();
@@ -139,15 +221,22 @@ jobs:
               const batch = newParents.slice(i, i + BATCH_SIZE);
               console.log(`Processing products batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(newParents.length / BATCH_SIZE)}`);
 
-              const productsToInsert = batch.map(row => ({
-                tenant_id: tenantId,
-                sku: row['Artikelnummer'],
-                title: row['Naam'] || row['Artikelnummer'],
-                webshop_text: row['Beschrijving'] || null,
-                categories: row['Categorieën'] ? row['Categorieën'].split(', ').map(c => c.trim()).filter(Boolean) : [],
-                images: parseImages(row),
-                attributes: parseAttributes(row)
-              }));
+              const productsToInsert = batch.map(row => {
+                const brand = extractBrand(row);
+                const supplier = extractSupplier(row);
+                
+                return {
+                  tenant_id: tenantId,
+                  sku: row['Artikelnummer'],
+                  title: row['Naam'] || row['Artikelnummer'],
+                  webshop_text: row['Beschrijving'] || null,
+                  categories: row['Categorieën'] ? row['Categorieën'].split(', ').map(c => c.trim()).filter(Boolean) : [],
+                  images: parseImages(row),
+                  attributes: parseAttributes(row),
+                  brand_id: brand ? brandMap.get(brand) : null,
+                  supplier_id: supplier ? supplierMap.get(supplier) : null
+                };
+              });
 
               try {
                 const inserted = await supabaseRequest('products', 'POST', productsToInsert);
@@ -171,14 +260,24 @@ jobs:
             // PHASE 2: Insert prices, variants, and stock
             console.log('\n💰 PHASE 2: Inserting prices, variants, and stock...');
 
-            // 2A: Insert prices (always insert, even if both prices are null)
+            // 2A: Insert prices (get from first variant if parent has no price)
             const pricesToInsert = [];
             for (const row of newParents) {
               const productId = skuToProductId.get(row['Artikelnummer']);
               if (!productId) continue;
 
-              const regularPrice = parsePrice(row['Reguliere prijs']);
-              const listPrice = parsePrice(row['Actieprijs']);
+              let regularPrice = parsePrice(row['Reguliere prijs']);
+              let listPrice = parsePrice(row['Actieprijs']);
+
+              // If parent has no prices, get from first variant
+              if (!regularPrice && !listPrice) {
+                const parentSku = row['Artikelnummer'];
+                const firstVariant = variantRows.find(v => v['Hoofd'] === parentSku);
+                if (firstVariant) {
+                  regularPrice = parsePrice(firstVariant['Reguliere prijs']);
+                  listPrice = parsePrice(firstVariant['Actieprijs']);
+                }
+              }
 
               pricesToInsert.push({
                 product_id: productId,
