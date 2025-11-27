@@ -35,10 +35,23 @@ jobs:
 
           // Parse price from Dutch format (e.g., "0199,95" -> 199.95)
           function parsePrice(priceStr) {
-            if (!priceStr) return null;
+            if (!priceStr || priceStr.trim() === '') return null;
             const cleaned = priceStr.replace(/^0+/, '').replace(',', '.');
             const parsed = parseFloat(cleaned);
-            return isNaN(parsed) ? null : parsed;
+            return (isNaN(parsed) || parsed === 0) ? null : parsed;
+          }
+
+          // Parse attributes from "Naam eigenschap X" and "Waarde eigenschap X" columns
+          function parseAttributes(row) {
+            const attributes = {};
+            for (let i = 1; i <= 22; i++) {
+              const name = row[`Naam eigenschap ${i}`];
+              const value = row[`Waarde eigenschap ${i}`];
+              if (name && name.trim() && value && value.trim()) {
+                attributes[name.trim()] = value.trim();
+              }
+            }
+            return attributes;
           }
 
           // Parse images from row
@@ -131,9 +144,9 @@ jobs:
                 sku: row['Artikelnummer'],
                 title: row['Naam'] || row['Artikelnummer'],
                 webshop_text: row['Beschrijving'] || null,
-                categories: row['Categorieën'] ? row['Categorieën'].split(', ') : [],
+                categories: row['Categorieën'] ? row['Categorieën'].split(', ').map(c => c.trim()).filter(Boolean) : [],
                 images: parseImages(row),
-                attributes: {}
+                attributes: parseAttributes(row)
               }));
 
               try {
@@ -158,7 +171,7 @@ jobs:
             // PHASE 2: Insert prices, variants, and stock
             console.log('\n💰 PHASE 2: Inserting prices, variants, and stock...');
 
-            // 2A: Insert prices
+            // 2A: Insert prices (always insert, even if both prices are null)
             const pricesToInsert = [];
             for (const row of newParents) {
               const productId = skuToProductId.get(row['Artikelnummer']);
@@ -167,14 +180,12 @@ jobs:
               const regularPrice = parsePrice(row['Reguliere prijs']);
               const listPrice = parsePrice(row['Actieprijs']);
 
-              if (regularPrice || listPrice) {
-                pricesToInsert.push({
-                  product_id: productId,
-                  regular: regularPrice,
-                  list: listPrice,
-                  currency: 'EUR'
-                });
-              }
+              pricesToInsert.push({
+                product_id: productId,
+                regular: regularPrice,
+                list: listPrice,
+                currency: 'EUR'
+              });
             }
 
             if (pricesToInsert.length > 0) {
