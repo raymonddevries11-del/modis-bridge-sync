@@ -51,8 +51,12 @@ jobs:
                 return value.trim();
               }
             }
-            // Fallback to Meta: _merknaam
-            return row['Meta: _merknaam'] || null;
+            // Fallback to Meta: _merknaam, but filter out ACF field names
+            const metaBrand = row['Meta: _merknaam'];
+            if (metaBrand && metaBrand.trim() && !metaBrand.startsWith('field_')) {
+              return metaBrand.trim();
+            }
+            return null;
           }
 
           // Extract supplier from attributes
@@ -60,8 +64,11 @@ jobs:
             for (let i = 1; i <= 22; i++) {
               const name = row[`Naam eigenschap ${i}`];
               const value = row[`Waarde eigenschap ${i}`];
-              if (name && name.trim().toLowerCase() === 'leverancier' && value && value.trim()) {
-                return value.trim();
+              if (name && value && value.trim()) {
+                const nameLower = name.trim().toLowerCase();
+                if (nameLower === 'leverancier' || nameLower === 'leveranciers naam') {
+                  return value.trim();
+                }
               }
             }
             return null;
