@@ -31,210 +31,247 @@ jobs:
           const csv = require('csv-parser');
           const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
-          async function importProducts() {
-            try {
-              console.log('=== WooCommerce Product Import ===');
-              
-              // Get tenant ID (assuming single tenant for now)
-              const tenantsResponse = await fetch(
-                `${process.env.SUPABASE_URL}/rest/v1/tenants?select=id&limit=1`,
-                {
-                  headers: {
-                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
-                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
-                  }
-                }
-              );
-              
-              const tenants = await tenantsResponse.json();
-              if (!tenants || tenants.length === 0) {
-                throw new Error('No tenant found');
-              }
-              const tenantId = tenants[0].id;
-              console.log(`Using tenant: ${tenantId}`);
-              
-              // Get existing SKUs
-              const existingResponse = await fetch(
-                `${process.env.SUPABASE_URL}/rest/v1/products?select=sku&tenant_id=eq.${tenantId}`,
-                {
-                  headers: {
-                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
-                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
-                  }
-                }
-              );
-              
-              const existingProducts = await existingResponse.json();
-              const existingSkus = new Set(existingProducts.map(p => p.sku));
-              console.log(`Found ${existingSkus.size} existing products`);
-              
-              // Parse CSV
-              const products = [];
-              const variants = [];
-              const prices = [];
-              const stockTotals = [];
-              
-              await new Promise((resolve, reject) => {
-                fs.createReadStream('.github/data/woocommerce-products.csv')
-                  .pipe(csv())
-                  .on('data', (row) => {
-                    const sku = row['Artikelnummer'];
-                    const type = row['Type'];
-                    
-                    // Skip if no SKU or already exists
-                    if (!sku || existingSkus.has(sku)) return;
-                    
-                    if (type === 'variable') {
-                      // Main product
-                      const productId = `prod_${sku}`;
-                      products.push({
-                        id: productId,
-                        tenant_id: tenantId,
-                        sku: sku,
-                        title: row['Naam'] || sku,
-                        webshop_text: row['Beschrijving'] || null,
-                        images: row['Afbeeldingen'] ? [row['Afbeeldingen']] : [],
-                        categories: row['Categorieën'] ? row['Categorieën'].split(', ') : [],
-                        attributes: {}
-                      });
-                      
-                      // Price
-                      const regularPrice = parseFloat(row['Reguliere prijs']?.replace(',', '.') || '0');
-                      const salePrice = parseFloat(row['Actieprijs']?.replace(',', '.') || '0');
-                      
-                      prices.push({
-                        product_id: productId,
-                        regular: regularPrice > 0 ? regularPrice : null,
-                        list: salePrice > 0 ? salePrice : null,
-                        currency: 'EUR'
-                      });
-                      
-                    } else if (type === 'variation') {
-                      // Variant
-                      const parentSku = row['Hoofd'];
-                      if (!parentSku || existingSkus.has(parentSku)) return;
-                      
-                      const productId = `prod_${parentSku}`;
-                      const variantId = `var_${sku}`;
-                      const maatValue = row['Waarde eigenschap 1'] || row['Standaardeigenschap 1'] || '';
-                      
-                      variants.push({
-                        id: variantId,
-                        product_id: productId,
-                        maat_id: maatValue,
-                        size_label: maatValue,
-                        ean: row['GTIN, UPC, EAN of ISBN'] || null,
-                        active: row['Op voorraad?'] === '1'
-                      });
-                      
-                      // Stock
-                      const qty = parseInt(row['Voorraad'] || '0');
-                      stockTotals.push({
-                        variant_id: variantId,
-                        qty: qty
-                      });
-                    }
-                  })
-                  .on('end', resolve)
-                  .on('error', reject);
-              });
-              
-              console.log(`\nParsed: ${products.length} products, ${variants.length} variants`);
-              
-              // Insert in batches
-              const batchSize = 100;
-              
-              if (products.length > 0) {
-                console.log('\nInserting products...');
-                for (let i = 0; i < products.length; i += batchSize) {
-                  const batch = products.slice(i, i + batchSize);
-                  await fetch(
-                    `${process.env.SUPABASE_URL}/rest/v1/products`,
-                    {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
-                        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-                        'Prefer': 'return=minimal'
-                      },
-                      body: JSON.stringify(batch)
-                    }
-                  );
-                  console.log(`Inserted batch ${Math.floor(i / batchSize) + 1}`);
-                }
-              }
-              
-              if (prices.length > 0) {
-                console.log('\nInserting prices...');
-                for (let i = 0; i < prices.length; i += batchSize) {
-                  const batch = prices.slice(i, i + batchSize);
-                  await fetch(
-                    `${process.env.SUPABASE_URL}/rest/v1/product_prices`,
-                    {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
-                        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-                        'Prefer': 'return=minimal'
-                      },
-                      body: JSON.stringify(batch)
-                    }
-                  );
-                  console.log(`Inserted batch ${Math.floor(i / batchSize) + 1}`);
-                }
-              }
-              
-              if (variants.length > 0) {
-                console.log('\nInserting variants...');
-                for (let i = 0; i < variants.length; i += batchSize) {
-                  const batch = variants.slice(i, i + batchSize);
-                  await fetch(
-                    `${process.env.SUPABASE_URL}/rest/v1/variants`,
-                    {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
-                        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-                        'Prefer': 'return=minimal'
-                      },
-                      body: JSON.stringify(batch)
-                    }
-                  );
-                  console.log(`Inserted batch ${Math.floor(i / batchSize) + 1}`);
-                }
-              }
-              
-              if (stockTotals.length > 0) {
-                console.log('\nInserting stock...');
-                for (let i = 0; i < stockTotals.length; i += batchSize) {
-                  const batch = stockTotals.slice(i, i + batchSize);
-                  await fetch(
-                    `${process.env.SUPABASE_URL}/rest/v1/stock_totals`,
-                    {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
-                        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-                        'Prefer': 'return=minimal'
-                      },
-                      body: JSON.stringify(batch)
-                    }
-                  );
-                  console.log(`Inserted batch ${Math.floor(i / batchSize) + 1}`);
-                }
-              }
-              
-              console.log('\n✓ Import complete!');
-              
-            } catch (error) {
-              console.error('Fatal error:', error);
-              process.exit(1);
-            }
+          const BATCH_SIZE = 50;
+
+          // Parse price from Dutch format (e.g., "0199,95" -> 199.95)
+          function parsePrice(priceStr) {
+            if (!priceStr) return null;
+            const cleaned = priceStr.replace(/^0+/, '').replace(',', '.');
+            const parsed = parseFloat(cleaned);
+            return isNaN(parsed) ? null : parsed;
           }
 
-          importProducts();
+          // Parse images from row
+          function parseImages(row) {
+            const images = [];
+            const imgField = row['Afbeeldingen'];
+            if (imgField && imgField.trim()) {
+              // Split by comma and clean
+              images.push(...imgField.split(',').map(i => i.trim()).filter(Boolean));
+            }
+            return images;
+          }
+
+          // Make Supabase request
+          async function supabaseRequest(endpoint, method, body = null) {
+            const options = {
+              method,
+              headers: {
+                'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=representation'
+              }
+            };
+            if (body) options.body = JSON.stringify(body);
+
+            const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${endpoint}`, options);
+            
+            if (!response.ok) {
+              const errorText = await response.text();
+              throw new Error(`Supabase error (${response.status}): ${errorText}`);
+            }
+
+            return response.status === 204 ? null : await response.json();
+          }
+
+          async function main() {
+            console.log('🚀 Starting import...');
+
+            // Get tenant ID
+            const tenants = await supabaseRequest('tenants?slug=eq.kosterschoenmode&select=id', 'GET');
+            if (!tenants || tenants.length === 0) {
+              throw new Error('Tenant not found');
+            }
+            const tenantId = tenants[0].id;
+            console.log(`✓ Tenant ID: ${tenantId}`);
+
+            // Get existing products
+            const existingProducts = await supabaseRequest(
+              `products?tenant_id=eq.${tenantId}&select=sku,id`,
+              'GET'
+            );
+            const existingSkus = new Set(existingProducts.map(p => p.sku));
+            console.log(`✓ Found ${existingSkus.size} existing products`);
+
+            // Parse CSV
+            const rows = [];
+            await new Promise((resolve, reject) => {
+              fs.createReadStream('.github/data/woocommerce-products.csv')
+                .pipe(csv())
+                .on('data', (row) => rows.push(row))
+                .on('end', resolve)
+                .on('error', reject);
+            });
+            console.log(`✓ Parsed ${rows.length} CSV rows`);
+
+            // Separate parent products and variants
+            const parentRows = rows.filter(r => r.Type === 'variable');
+            const variantRows = rows.filter(r => r.Type === 'variation');
+
+            // Filter new parents only
+            const newParents = parentRows.filter(r => !existingSkus.has(r['Artikelnummer']));
+            console.log(`✓ ${newParents.length} new parent products to import`);
+
+            if (newParents.length === 0) {
+              console.log('✅ No new products to import');
+              return;
+            }
+
+            // PHASE 1: Insert products in batches
+            console.log('\n📦 PHASE 1: Inserting products...');
+            const skuToProductId = new Map();
+            
+            for (let i = 0; i < newParents.length; i += BATCH_SIZE) {
+              const batch = newParents.slice(i, i + BATCH_SIZE);
+              console.log(`Processing products batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(newParents.length / BATCH_SIZE)}`);
+
+              const productsToInsert = batch.map(row => ({
+                tenant_id: tenantId,
+                sku: row['Artikelnummer'],
+                title: row['Naam'] || row['Artikelnummer'],
+                webshop_text: row['Beschrijving'] || null,
+                categories: row['Categorieën'] ? row['Categorieën'].split(', ') : [],
+                images: parseImages(row),
+                attributes: {}
+              }));
+
+              try {
+                const inserted = await supabaseRequest('products', 'POST', productsToInsert);
+                
+                // Map SKU to product ID
+                if (Array.isArray(inserted)) {
+                  inserted.forEach(p => skuToProductId.set(p.sku, p.id));
+                } else if (inserted && inserted.id) {
+                  skuToProductId.set(inserted.sku, inserted.id);
+                }
+                
+                console.log(`✓ Inserted ${batch.length} products`);
+              } catch (error) {
+                console.error(`❌ Failed to insert products batch:`, error.message);
+                throw error;
+              }
+            }
+
+            console.log(`✓ Total products inserted: ${skuToProductId.size}`);
+
+            // PHASE 2: Insert prices, variants, and stock
+            console.log('\n💰 PHASE 2: Inserting prices, variants, and stock...');
+
+            // 2A: Insert prices
+            const pricesToInsert = [];
+            for (const row of newParents) {
+              const productId = skuToProductId.get(row['Artikelnummer']);
+              if (!productId) continue;
+
+              const regularPrice = parsePrice(row['Reguliere prijs']);
+              const listPrice = parsePrice(row['Actieprijs']);
+
+              if (regularPrice || listPrice) {
+                pricesToInsert.push({
+                  product_id: productId,
+                  regular: regularPrice,
+                  list: listPrice,
+                  currency: 'EUR'
+                });
+              }
+            }
+
+            if (pricesToInsert.length > 0) {
+              for (let i = 0; i < pricesToInsert.length; i += BATCH_SIZE) {
+                const batch = pricesToInsert.slice(i, i + BATCH_SIZE);
+                try {
+                  await supabaseRequest('product_prices', 'POST', batch);
+                  console.log(`✓ Inserted ${batch.length} prices`);
+                } catch (error) {
+                  console.error(`❌ Failed to insert prices:`, error.message);
+                }
+              }
+            }
+
+            // 2B: Insert variants (only for new products)
+            const variantsToInsert = [];
+            const variantRowsForNewProducts = variantRows.filter(v => {
+              const parentSku = v['Hoofd'];
+              return skuToProductId.has(parentSku);
+            });
+
+            console.log(`Found ${variantRowsForNewProducts.length} variants for new products`);
+
+            for (const row of variantRowsForNewProducts) {
+              const parentSku = row['Hoofd'];
+              const productId = skuToProductId.get(parentSku);
+              if (!productId) continue;
+
+              // Extract size from attribute
+              const size = row['Waarde eigenschap 1'] || row['Standaardeigenschap 1'] || row['Artikelnummer'];
+
+              variantsToInsert.push({
+                product_id: productId,
+                maat_id: row['Artikelnummer'],
+                size_label: size,
+                ean: row['GTIN, UPC, EAN of ISBN'] || null,
+                active: row['Op voorraad?'] === '1'
+              });
+            }
+
+            const skuToVariantId = new Map();
+            
+            if (variantsToInsert.length > 0) {
+              for (let i = 0; i < variantsToInsert.length; i += BATCH_SIZE) {
+                const batch = variantsToInsert.slice(i, i + BATCH_SIZE);
+                try {
+                  const inserted = await supabaseRequest('variants', 'POST', batch);
+                  
+                  // Map variant maat_id to variant ID
+                  if (Array.isArray(inserted)) {
+                    inserted.forEach(v => skuToVariantId.set(v.maat_id, v.id));
+                  } else if (inserted && inserted.id) {
+                    skuToVariantId.set(inserted.maat_id, inserted.id);
+                  }
+                  
+                  console.log(`✓ Inserted ${batch.length} variants`);
+                } catch (error) {
+                  console.error(`❌ Failed to insert variants:`, error.message);
+                }
+              }
+            }
+
+            // 2C: Insert stock totals
+            const stockToInsert = [];
+            for (const row of variantRowsForNewProducts) {
+              const variantId = skuToVariantId.get(row['Artikelnummer']);
+              if (!variantId) continue;
+
+              const stock = parseInt(row['Voorraad']) || 0;
+              stockToInsert.push({
+                variant_id: variantId,
+                qty: stock
+              });
+            }
+
+            if (stockToInsert.length > 0) {
+              for (let i = 0; i < stockToInsert.length; i += BATCH_SIZE) {
+                const batch = stockToInsert.slice(i, i + BATCH_SIZE);
+                try {
+                  await supabaseRequest('stock_totals', 'POST', batch);
+                  console.log(`✓ Inserted ${batch.length} stock records`);
+                } catch (error) {
+                  console.error(`❌ Failed to insert stock:`, error.message);
+                }
+              }
+            }
+
+            console.log('\n✅ Import complete!');
+            console.log(`📊 Summary:`);
+            console.log(`   - Products: ${skuToProductId.size}`);
+            console.log(`   - Prices: ${pricesToInsert.length}`);
+            console.log(`   - Variants: ${skuToVariantId.size}`);
+            console.log(`   - Stock records: ${stockToInsert.length}`);
+          }
+
+          main().catch(error => {
+            console.error('❌ Fatal error:', error);
+            process.exit(1);
+          });
           EOF
