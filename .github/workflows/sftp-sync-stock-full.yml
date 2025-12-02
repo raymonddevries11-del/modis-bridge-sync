@@ -95,11 +95,12 @@ jobs:
                 try {
                   const files = await sftp.list(inboundPath);
                   
-                  // Zoek naar volledige voorraad bestanden (bevat "volledig" of "volledige" in naam)
-                  const fullStockFiles = files.filter(file => 
-                    file.name.toLowerCase().includes('volledig') && 
-                    file.name.endsWith('.xml')
-                  );
+                  // Zoek naar volledige voorraad bestanden (bevat "volledig", "volledige" of "totale" in naam)
+                  const fullStockFiles = files.filter(file => {
+                    const lowerName = file.name.toLowerCase();
+                    return (lowerName.includes('volledig') || lowerName.includes('totale-vrd')) && 
+                           lowerName.endsWith('.xml');
+                  });
 
                   if (fullStockFiles.length === 0) {
                     console.log(`No full stock files found for tenant ${tenant.name}`);
