@@ -4,7 +4,8 @@ import { Badge } from "@/components/ui/badge";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useEffect, useState } from "react";
-import { Clock, CheckCircle, XCircle, Loader2, FileText, Upload, Download } from "lucide-react";
+import { Clock, CheckCircle, XCircle, Loader2, FileText, Upload, Download, RefreshCw, Package } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface Job {
@@ -53,17 +54,18 @@ const Logs = () => {
     },
   });
 
-  const { data: sftpActivity, isLoading: sftpLoading } = useQuery({
+  const { data: sftpActivity, isLoading: sftpLoading, refetch: refetchActivity } = useQuery({
     queryKey: ["sftp-activity"],
     queryFn: async () => {
       const { data } = await supabase
         .from("changelog")
         .select("*, tenants!inner(name, slug)")
-        .in("event_type", ["SFTP_SYNC", "SFTP_UPLOAD", "STOCK_IMPORT", "PRODUCTS_IMPORTED", "SYNC_COMPLETED"])
+        .in("event_type", ["SFTP_SYNC", "SFTP_UPLOAD", "STOCK_IMPORT", "STOCK_FULL_CORRECTION", "PRODUCTS_IMPORTED", "SYNC_COMPLETED"])
         .order("created_at", { ascending: false })
         .limit(100);
       return data as ChangelogEntry[] || [];
     },
+    refetchInterval: 30000, // Auto-refresh every 30 seconds
   });
 
   // Realtime subscription for jobs
@@ -175,6 +177,8 @@ const Logs = () => {
         return <Upload className="h-4 w-4 text-green-600" />;
       case 'STOCK_IMPORT':
         return <Download className="h-4 w-4 text-purple-600" />;
+      case 'STOCK_FULL_CORRECTION':
+        return <Package className="h-4 w-4 text-indigo-600" />;
       case 'PRODUCTS_IMPORTED':
         return <Download className="h-4 w-4 text-orange-600" />;
       case 'SYNC_COMPLETED':
@@ -187,11 +191,17 @@ const Logs = () => {
   return (
     <Layout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Import Logs</h1>
-          <p className="text-muted-foreground">
-            XML bestandsverwerking (producten & voorraad) - updates automatisch
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Import Logs</h1>
+            <p className="text-muted-foreground">
+              XML bestandsverwerking (producten & voorraad) - auto-refresh elke 30 sec
+            </p>
+          </div>
+          <Button variant="outline" onClick={() => refetchActivity()}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Ververs
+          </Button>
         </div>
 
         <div className="space-y-3">
