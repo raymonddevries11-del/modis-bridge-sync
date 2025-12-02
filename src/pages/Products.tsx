@@ -74,7 +74,7 @@ const Products = () => {
           brands(id, name),
           suppliers(id, name),
           product_prices(*),
-          variants(*)
+          variants(*, stock_totals(*))
         `)
         .eq("tenant_id", selectedTenant)
         .order("updated_at", { ascending: false });

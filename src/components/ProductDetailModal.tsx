@@ -341,37 +341,43 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
           <TabsContent value="variants" className="space-y-4">
             {product.variants && product.variants.length > 0 ? (
               <div className="grid gap-3">
-                {product.variants.map((variant: any) => (
-                  <Card key={variant.id}>
-                    <CardHeader className="py-3">
-                      <CardTitle className="text-sm font-medium">
-                        Maat: {variant.size_label} {variant.maat_web && variant.maat_web !== variant.size_label && `(Web: ${variant.maat_web})`}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="grid grid-cols-4 gap-4 text-sm">
-                      <div>
-                        <span className="text-muted-foreground">EAN:</span>
-                        <p className="font-mono">{variant.ean || "N/A"}</p>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Status:</span>
-                        <Badge variant={variant.active ? "default" : "secondary"}>
-                          {variant.active ? "Actief" : "Inactief"}
-                        </Badge>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Backorder:</span>
-                        <Badge variant={variant.allow_backorder ? "default" : "outline"}>
-                          {variant.allow_backorder ? "Ja" : "Nee"}
-                        </Badge>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Updated:</span>
-                        <p>{new Date(variant.updated_at).toLocaleDateString()}</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+                {product.variants.map((variant: any) => {
+                  const stockQty = variant.stock_totals?.qty ?? 0;
+                  return (
+                    <Card key={variant.id}>
+                      <CardHeader className="py-3">
+                        <CardTitle className="text-sm font-medium flex items-center justify-between">
+                          <span>Maat: {variant.size_label} {variant.maat_web && variant.maat_web !== variant.size_label && `(Web: ${variant.maat_web})`}</span>
+                          <Badge variant={stockQty > 0 ? "default" : "destructive"}>
+                            Voorraad: {stockQty}
+                          </Badge>
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="grid grid-cols-4 gap-4 text-sm">
+                        <div>
+                          <span className="text-muted-foreground">EAN:</span>
+                          <p className="font-mono">{variant.ean || "N/A"}</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Status:</span>
+                          <Badge variant={variant.active ? "default" : "secondary"}>
+                            {variant.active ? "Actief" : "Inactief"}
+                          </Badge>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Backorder:</span>
+                          <Badge variant={variant.allow_backorder ? "default" : "outline"}>
+                            {variant.allow_backorder ? "Ja" : "Nee"}
+                          </Badge>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Updated:</span>
+                          <p>{new Date(variant.updated_at).toLocaleDateString()}</p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </div>
             ) : (
               <p className="text-center text-muted-foreground py-8">Geen variants beschikbaar</p>
