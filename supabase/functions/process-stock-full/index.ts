@@ -160,6 +160,16 @@ serve(async (req) => {
 
         // Process maten (variants)
         const maten = vrd.querySelectorAll('maat');
+        
+        // Debug: log first few products and their maten
+        if (processedCount < 3) {
+          console.log(`DEBUG SKU ${sku}: found ${maten.length} maten, productId: ${productId}`);
+          const productVariants = variantByProductId.get(productId);
+          console.log(`DEBUG: Product has ${productVariants?.length || 0} variants in DB`);
+          if (productVariants && productVariants.length > 0) {
+            console.log(`DEBUG: First variant maat_id: ${productVariants[0].maat_id}`);
+          }
+        }
 
         for (const maat of (maten as any)) {
           const maatId = maat.getAttribute('id')?.trim();
@@ -169,6 +179,11 @@ serve(async (req) => {
           const maatActief = maat.querySelector('maat-actief')?.textContent?.trim();
 
           if (!maatId) continue;
+          
+          // Debug: log first few maat lookups
+          if (processedCount < 3) {
+            console.log(`DEBUG maat id from XML: "${maatId}", building key: "${sku}-${maatId}"`);
+          }
 
           // Find variant using in-memory lookup
           // maat_id in database is in format "SKU-size" e.g. "102619001000-40 = 6½"
@@ -188,6 +203,11 @@ serve(async (req) => {
                 v.maat_id.endsWith(`-${maatId}`) ||
                 v.maat_id.includes(maatId)
               );
+              
+              // Debug
+              if (processedCount < 3 && !variant) {
+                console.log(`DEBUG: No variant match for maatId "${maatId}". Variants: ${productVariants.map(v => v.maat_id).join(', ')}`);
+              }
             }
           }
 
