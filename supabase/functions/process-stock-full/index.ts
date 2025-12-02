@@ -47,13 +47,77 @@ serve(async (req) => {
       throw new Error('No stock items found in XML');
     }
 
-    console.log(`Found ${vrdElements.length} stock items - starting background processing`);
+    console.log(`Found ${vrdElements.length} stock items`);
 
-    // Process stock synchronously
+    // STEP 1: Pre-fetch all products for this tenant (bulk query)
+    console.log('Fetching all products for tenant...');
+    const { data: allProducts, error: productsError } = await supabase
+      .from('products')
+      .select('id, sku')
+      .eq('tenant_id', tenantId);
+
+    if (productsError) {
+      throw new Error(`Failed to fetch products: ${productsError.message}`);
+    }
+
+    // Create SKU -> product map for fast lookup
+    const productMap = new Map<string, string>();
+    for (const p of allProducts || []) {
+      productMap.set(p.sku, p.id);
+    }
+    console.log(`Loaded ${productMap.size} products into memory`);
+
+    // STEP 2: Pre-fetch all variants for products (bulk query)
+    const productIds = Array.from(productMap.values());
+    console.log('Fetching all variants...');
+    const { data: allVariants, error: variantsError } = await supabase
+      .from('variants')
+      .select('id, product_id, maat_id, maat_web, ean')
+      .in('product_id', productIds);
+
+    if (variantsError) {
+      throw new Error(`Failed to fetch variants: ${variantsError.message}`);
+    }
+
+    // Create lookup maps for variants
+    // Key: productId-maatId -> variant
+    const variantMap = new Map<string, any>();
+    const variantByPrefix = new Map<string, any[]>();
+    
+    for (const v of allVariants || []) {
+      const exactKey = `${v.product_id}-${v.maat_id}`;
+      variantMap.set(exactKey, v);
+      
+      // Also index by prefix for fallback matching
+      const prefixKey = `${v.product_id}-${v.maat_id.substring(0, 6)}`;
+      if (!variantByPrefix.has(prefixKey)) {
+        variantByPrefix.set(prefixKey, []);
+      }
+      variantByPrefix.get(prefixKey)!.push(v);
+    }
+    console.log(`Loaded ${variantMap.size} variants into memory`);
+
+    // STEP 3: Pre-fetch existing stock totals (bulk query)
+    const variantIds = (allVariants || []).map(v => v.id);
+    console.log('Fetching existing stock totals...');
+    const { data: existingStocks } = await supabase
+      .from('stock_totals')
+      .select('variant_id, qty')
+      .in('variant_id', variantIds);
+
+    const stockMap = new Map<string, number>();
+    for (const s of existingStocks || []) {
+      stockMap.set(s.variant_id, s.qty);
+    }
+    console.log(`Loaded ${stockMap.size} stock records into memory`);
+
+    // STEP 4: Process XML and build batch operations
+    console.log('Processing XML items...');
     let processedCount = 0;
-    let variantsUpdated = 0;
     let skippedCount = 0;
     const errors: string[] = [];
+    const stockUpdates: { variant_id: string; qty: number; updated_at: string }[] = [];
+    const variantUpdates: { id: string; updates: any }[] = [];
     const changedVariantIds = new Set<string>();
 
     for (const vrd of (vrdElements as any)) {
@@ -62,21 +126,12 @@ serve(async (req) => {
         const mutatiecode = vrd.querySelector('mutatiecode')?.textContent?.trim();
 
         if (!sku) {
-          console.log('Skipping item: no SKU');
           skippedCount++;
           continue;
         }
 
-        // Find product by SKU and tenant_id
-        const { data: product, error: productError } = await supabase
-          .from('products')
-          .select('id')
-          .eq('sku', sku)
-          .eq('tenant_id', tenantId)
-          .maybeSingle();
-
-        if (productError || !product) {
-          console.log(`Product not found: ${sku}`);
+        const productId = productMap.get(sku);
+        if (!productId) {
           skippedCount++;
           continue;
         }
@@ -85,128 +140,107 @@ serve(async (req) => {
         const maten = vrd.querySelectorAll('maat');
 
         for (const maat of (maten as any)) {
-          // Use the id attribute from <maat id="011390"> instead of maat-alfa
           const maatId = maat.getAttribute('id')?.trim();
           const maatWeb = maat.querySelector('maat-web')?.textContent?.trim();
           const eanBarcode = maat.querySelector('ean-barcode')?.textContent?.trim();
           const totaalAantal = maat.querySelector('totaal-aantal')?.textContent?.trim();
           const maatActief = maat.querySelector('maat-actief')?.textContent?.trim();
 
-          if (!maatId) {
-            console.log(`Skipping variant for ${sku}: no maat-id`);
-            continue;
-          }
+          if (!maatId) continue;
 
-          // Find variant by maat_id (exact match first, then prefix fallback)
-          let variant = null;
+          // Find variant using in-memory lookup
+          const exactKey = `${productId}-${maatId}`;
+          let variant = variantMap.get(exactKey);
 
-          // Try exact match first
-          const exactMatch = await supabase
-            .from('variants')
-            .select('id, maat_web, ean')
-            .eq('product_id', product.id)
-            .eq('maat_id', maatId)
-            .maybeSingle();
-
-          if (exactMatch.data) {
-            variant = exactMatch.data;
-          } else {
-            // Try prefix matching (for backwards compatibility)
-            const prefixMatch = await supabase
-              .from('variants')
-              .select('id, maat_id, maat_web, ean')
-              .eq('product_id', product.id)
-              .like('maat_id', `${maatId}%`)
-              .maybeSingle();
-
-            if (prefixMatch.data) {
-              variant = prefixMatch.data;
-              console.log(`Found variant ${sku} by prefix: ${prefixMatch.data.maat_id}`);
+          if (!variant) {
+            // Try prefix matching
+            const prefixKey = `${productId}-${maatId.substring(0, 6)}`;
+            const prefixMatches = variantByPrefix.get(prefixKey);
+            if (prefixMatches && prefixMatches.length > 0) {
+              variant = prefixMatches.find(v => v.maat_id.startsWith(maatId));
             }
           }
 
-          if (!variant) {
-            console.log(`Variant not found for ${sku} - ${maatId}`);
-            continue;
-          }
+          if (!variant) continue;
 
-          // Determine stock quantity based on mutation code
+          // Determine stock quantity
           let stockQty = parseQty(totaalAantal || '0');
           if (mutatiecode === 'D') {
-            stockQty = 0; // Delete = set to 0
+            stockQty = 0;
           }
 
-          // Check existing stock to detect changes
-          const { data: existingStock } = await supabase
-            .from('stock_totals')
-            .select('qty')
-            .eq('variant_id', variant.id)
-            .maybeSingle();
-
-          // Update stock_totals directly with totaal-aantal
-          const { error: stockError } = await supabase
-            .from('stock_totals')
-            .upsert({
-              variant_id: variant.id,
-              qty: stockQty,
-              updated_at: new Date().toISOString(),
-            }, { onConflict: 'variant_id' });
-
-          if (stockError) {
-            console.error(`Error updating stock for variant ${variant.id}:`, stockError);
-            errors.push(`${sku}-${maatId}: ${stockError.message}`);
-            continue;
-          }
-
-          // Track if stock changed
-          if (!existingStock || existingStock.qty !== stockQty) {
+          // Track stock change
+          const currentStock = stockMap.get(variant.id);
+          if (currentStock === undefined || currentStock !== stockQty) {
             changedVariantIds.add(variant.id);
           }
 
-          // Update variant maat_web and ean if they differ
+          // Add to batch updates
+          stockUpdates.push({
+            variant_id: variant.id,
+            qty: stockQty,
+            updated_at: new Date().toISOString(),
+          });
+
+          // Check for variant attribute updates
           const updates: any = {};
-          
           if (maatWeb && maatWeb !== variant.maat_web) {
             updates.maat_web = maatWeb;
           }
-          
           if (eanBarcode && eanBarcode !== '0000000000000' && eanBarcode !== variant.ean) {
             updates.ean = eanBarcode;
           }
-
           if (maatActief !== undefined) {
             updates.active = maatActief === '1';
           }
 
-          // Apply variant updates if any
           if (Object.keys(updates).length > 0) {
-            const { error: variantUpdateError } = await supabase
-              .from('variants')
-              .update(updates)
-              .eq('id', variant.id);
-
-            if (variantUpdateError) {
-              console.error(`Error updating variant ${variant.id}:`, variantUpdateError);
-              errors.push(`${sku}-${maatId} variant update: ${variantUpdateError.message}`);
-            }
+            variantUpdates.push({ id: variant.id, updates });
           }
-
-          variantsUpdated++;
         }
 
         processedCount++;
       } catch (error: any) {
-        console.error('Error processing stock item:', error);
         errors.push(error.message);
       }
     }
 
-    console.log(`Full stock correction complete: ${processedCount} products, ${variantsUpdated} variants updated, ${skippedCount} skipped`);
-    console.log(`Changed: ${changedVariantIds.size} variants (stock)`);
-    
-    if (errors.length > 0) {
-      console.log(`Errors encountered: ${errors.length}`, errors.slice(0, 10));
+    console.log(`Parsed: ${processedCount} products, ${stockUpdates.length} stock updates, ${changedVariantIds.size} changes`);
+
+    // STEP 5: Execute batch stock updates
+    console.log('Executing batch stock updates...');
+    const BATCH_SIZE = 500;
+    let stockUpdateErrors = 0;
+
+    for (let i = 0; i < stockUpdates.length; i += BATCH_SIZE) {
+      const batch = stockUpdates.slice(i, i + BATCH_SIZE);
+      const { error: batchError } = await supabase
+        .from('stock_totals')
+        .upsert(batch, { onConflict: 'variant_id' });
+
+      if (batchError) {
+        console.error(`Batch ${i / BATCH_SIZE + 1} error:`, batchError);
+        stockUpdateErrors++;
+        errors.push(`Batch error: ${batchError.message}`);
+      }
     }
+    console.log(`Stock updates complete: ${stockUpdates.length} items in ${Math.ceil(stockUpdates.length / BATCH_SIZE)} batches`);
+
+    // STEP 6: Execute variant updates (individually, they're few)
+    console.log(`Executing ${variantUpdates.length} variant updates...`);
+    for (const { id, updates } of variantUpdates) {
+      const { error: variantUpdateError } = await supabase
+        .from('variants')
+        .update(updates)
+        .eq('id', id);
+
+      if (variantUpdateError) {
+        errors.push(`Variant ${id}: ${variantUpdateError.message}`);
+      }
+    }
+
+    console.log(`Full stock correction complete: ${processedCount} products, ${stockUpdates.length} variants`);
+    console.log(`Changed: ${changedVariantIds.size} variants`);
     
     // Create sync job if there are changes
     if (changedVariantIds.size > 0) {
@@ -233,10 +267,10 @@ serve(async (req) => {
       await supabase.from('changelog').insert({
         tenant_id: tenantId,
         event_type: 'STOCK_FULL_CORRECTION',
-        description: `Volledige voorraad correctie uitgevoerd: ${variantsUpdated} varianten bijgewerkt van ${fileName}. ${changedVariantIds.size} varianten gewijzigd.`,
+        description: `Volledige voorraad correctie uitgevoerd: ${stockUpdates.length} varianten bijgewerkt van ${fileName}. ${changedVariantIds.size} varianten gewijzigd.`,
         metadata: {
           productsProcessed: processedCount,
-          variantsUpdated: variantsUpdated,
+          variantsUpdated: stockUpdates.length,
           changedVariants: changedVariantIds.size,
           skipped: skippedCount,
           errors: errors.slice(0, 10),
@@ -245,14 +279,13 @@ serve(async (req) => {
       });
     }
 
-    // Return complete response with results
     return new Response(
       JSON.stringify({
         success: true,
         message: `Full stock correction completed for ${fileName}`,
         results: {
           productsProcessed: processedCount,
-          variantsUpdated: variantsUpdated,
+          variantsUpdated: stockUpdates.length,
           changedVariants: changedVariantIds.size,
           skipped: skippedCount,
           errors: errors.length,
