@@ -23,6 +23,7 @@ jobs:
           SFTP_PORT: ${{ secrets.SFTP_PORT }}
           SFTP_USER: ${{ secrets.SFTP_USER }}
           SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
@@ -39,7 +40,8 @@ jobs:
                 host: process.env.SFTP_HOST,
                 port: parseInt(process.env.SFTP_PORT || '22'),
                 username: process.env.SFTP_USER,
-                privateKey: process.env.SFTP_PRIVATE_KEY
+                privateKey: process.env.SFTP_PRIVATE_KEY,
+                passphrase: process.env.SFTP_PASSPHRASE
               });
 
               console.log('Fetching active tenants from Supabase...');
