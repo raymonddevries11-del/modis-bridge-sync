@@ -92,20 +92,19 @@ serve(async (req) => {
     }
 
     // Create lookup maps for variants
-    // Key: productId-maatId -> variant
+    // Key: maat_id (which is already in format SKU-size, e.g. "102619001000-40 = 6½")
     const variantMap = new Map<string, any>();
-    const variantByPrefix = new Map<string, any[]>();
+    const variantByProductId = new Map<string, any[]>();
     
     for (const v of allVariants || []) {
-      const exactKey = `${v.product_id}-${v.maat_id}`;
-      variantMap.set(exactKey, v);
+      // Direct maat_id lookup (maat_id already contains SKU prefix)
+      variantMap.set(v.maat_id, v);
       
-      // Also index by prefix for fallback matching
-      const prefixKey = `${v.product_id}-${v.maat_id.substring(0, 6)}`;
-      if (!variantByPrefix.has(prefixKey)) {
-        variantByPrefix.set(prefixKey, []);
+      // Also index by product_id for fallback matching
+      if (!variantByProductId.has(v.product_id)) {
+        variantByProductId.set(v.product_id, []);
       }
-      variantByPrefix.get(prefixKey)!.push(v);
+      variantByProductId.get(v.product_id)!.push(v);
     }
     console.log(`Loaded ${variantMap.size} variants into memory`);
 
@@ -172,15 +171,23 @@ serve(async (req) => {
           if (!maatId) continue;
 
           // Find variant using in-memory lookup
-          const exactKey = `${productId}-${maatId}`;
+          // maat_id in database is in format "SKU-size" e.g. "102619001000-40 = 6½"
+          // XML has: artikelnummer (sku) and maat id (size part)
+          // Build lookup key: SKU-maatId
+          const exactKey = `${sku}-${maatId}`;
           let variant = variantMap.get(exactKey);
 
           if (!variant) {
-            // Try prefix matching
-            const prefixKey = `${productId}-${maatId.substring(0, 6)}`;
-            const prefixMatches = variantByPrefix.get(prefixKey);
-            if (prefixMatches && prefixMatches.length > 0) {
-              variant = prefixMatches.find(v => v.maat_id.startsWith(maatId));
+            // Try fallback: search variants of this product by partial maat_id match
+            const productVariants = variantByProductId.get(productId);
+            if (productVariants) {
+              // Look for variant where maat_id ends with the maatId from XML
+              // or contains the maatId (handles different size label formats)
+              variant = productVariants.find(v => 
+                v.maat_id === `${sku}-${maatId}` ||
+                v.maat_id.endsWith(`-${maatId}`) ||
+                v.maat_id.includes(maatId)
+              );
             }
           }
 
