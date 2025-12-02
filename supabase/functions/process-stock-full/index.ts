@@ -67,16 +67,28 @@ serve(async (req) => {
     }
     console.log(`Loaded ${productMap.size} products into memory`);
 
-    // STEP 2: Pre-fetch all variants for products (bulk query)
+    // STEP 2: Pre-fetch all variants for products (batched to avoid URL length limits)
     const productIds = Array.from(productMap.values());
-    console.log('Fetching all variants...');
-    const { data: allVariants, error: variantsError } = await supabase
-      .from('variants')
-      .select('id, product_id, maat_id, maat_web, ean')
-      .in('product_id', productIds);
+    console.log(`Fetching variants for ${productIds.length} products...`);
+    
+    const allVariants: any[] = [];
+    const PRODUCT_BATCH_SIZE = 100;
+    
+    for (let i = 0; i < productIds.length; i += PRODUCT_BATCH_SIZE) {
+      const batchIds = productIds.slice(i, i + PRODUCT_BATCH_SIZE);
+      const { data: batchVariants, error: variantsError } = await supabase
+        .from('variants')
+        .select('id, product_id, maat_id, maat_web, ean')
+        .in('product_id', batchIds);
 
-    if (variantsError) {
-      throw new Error(`Failed to fetch variants: ${variantsError.message}`);
+      if (variantsError) {
+        console.error(`Batch ${i / PRODUCT_BATCH_SIZE + 1} variants error:`, variantsError);
+        continue;
+      }
+      
+      if (batchVariants) {
+        allVariants.push(...batchVariants);
+      }
     }
 
     // Create lookup maps for variants
@@ -97,13 +109,24 @@ serve(async (req) => {
     }
     console.log(`Loaded ${variantMap.size} variants into memory`);
 
-    // STEP 3: Pre-fetch existing stock totals (bulk query)
-    const variantIds = (allVariants || []).map(v => v.id);
-    console.log('Fetching existing stock totals...');
-    const { data: existingStocks } = await supabase
-      .from('stock_totals')
-      .select('variant_id, qty')
-      .in('variant_id', variantIds);
+    // STEP 3: Pre-fetch existing stock totals (batched)
+    const variantIds = allVariants.map(v => v.id);
+    console.log(`Fetching stock totals for ${variantIds.length} variants...`);
+    
+    const existingStocks: any[] = [];
+    const VARIANT_BATCH_SIZE = 200;
+    
+    for (let i = 0; i < variantIds.length; i += VARIANT_BATCH_SIZE) {
+      const batchIds = variantIds.slice(i, i + VARIANT_BATCH_SIZE);
+      const { data: batchStocks } = await supabase
+        .from('stock_totals')
+        .select('variant_id, qty')
+        .in('variant_id', batchIds);
+      
+      if (batchStocks) {
+        existingStocks.push(...batchStocks);
+      }
+    }
 
     const stockMap = new Map<string, number>();
     for (const s of existingStocks || []) {
