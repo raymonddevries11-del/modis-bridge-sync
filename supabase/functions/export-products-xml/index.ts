@@ -83,31 +83,48 @@ serve(async (req) => {
 
     console.log(`Exporting products for tenant ${tenantId}`);
 
-    // Fetch all products with related data
-    const { data: products, error: productsError } = await supabase
-      .from('products')
-      .select(`
-        *,
-        brands:brand_id(name),
-        suppliers:supplier_id(name),
-        product_prices(*),
-        variants(
-          *,
-          stock_totals(qty),
-          stock_by_store(qty, store_id)
-        )
-      `)
-      .eq('tenant_id', tenantId)
-      .order('sku');
+    // Fetch all products with pagination (Supabase default limit is 1000)
+    const allProducts: any[] = [];
+    const pageSize = 1000;
+    let offset = 0;
+    let hasMore = true;
 
-    if (productsError) {
-      throw productsError;
+    while (hasMore) {
+      const { data: products, error: productsError } = await supabase
+        .from('products')
+        .select(`
+          *,
+          brands:brand_id(name),
+          suppliers:supplier_id(name),
+          product_prices(*),
+          variants(
+            *,
+            stock_totals(qty),
+            stock_by_store(qty, store_id)
+          )
+        `)
+        .eq('tenant_id', tenantId)
+        .order('sku')
+        .range(offset, offset + pageSize - 1);
+
+      if (productsError) {
+        throw productsError;
+      }
+
+      if (products && products.length > 0) {
+        allProducts.push(...products);
+        console.log(`Fetched ${products.length} products (offset: ${offset}, total: ${allProducts.length})`);
+        offset += pageSize;
+        hasMore = products.length === pageSize;
+      } else {
+        hasMore = false;
+      }
     }
 
-    console.log(`Found ${products?.length || 0} products to export`);
+    console.log(`Found ${allProducts.length} total products to export`);
 
     // Generate XML
-    const xml = generateProductsXML(products || []);
+    const xml = generateProductsXML(allProducts);
     
     // Save to storage for backup
     const fileName = tenantSlug ? `products-${tenantSlug}.xml` : 'products.xml';
