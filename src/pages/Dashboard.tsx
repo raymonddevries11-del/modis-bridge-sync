@@ -16,7 +16,7 @@ const Dashboard = () => {
     queryFn: async () => {
       const [products, orders, jobs, configResult] = await Promise.all([
         supabase.from("products").select("id", { count: "exact", head: true }),
-        supabase.from("orders").select("id", { count: "exact", head: true }),
+        supabase.from("orders").select("order_number", { count: "exact", head: true }),
         supabase.from("jobs").select("state,type,updated_at", { count: "exact" }),
         supabase.from("config").select("value").eq("key", "woocommerce").maybeSingle(),
       ]);
