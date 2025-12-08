@@ -56,3 +56,9 @@ verify_jwt = false
 
 [functions.process-stock-full]
 verify_jwt = false
+
+[functions.trigger-woocommerce-sync]
+verify_jwt = false
+
+[functions.job-scheduler]
+verify_jwt = false
