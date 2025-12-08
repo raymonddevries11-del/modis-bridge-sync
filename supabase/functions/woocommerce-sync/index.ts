@@ -1008,16 +1008,69 @@ async function syncVariantToWooCommerce(
 
   const wooVariations = await variationsResponse.json();
   
-  // Find matching variation by size label
-  const matchingVariation = wooVariations.find((v: any) => 
-    v.attributes?.some((attr: any) => 
-      attr.name?.toLowerCase() === 'size' && 
-      attr.option?.toLowerCase() === variant.size_label?.toLowerCase()
-    )
-  );
+  // Helper function to normalize size strings for comparison
+  const normalizeSize = (size: string): string => {
+    return size?.toLowerCase().trim().replace(/\s+/g, ' ') || '';
+  };
+  
+  // Helper to extract size parts from format like "45 = 10½"
+  const extractSizeParts = (sizeLabel: string): string[] => {
+    const parts: string[] = [normalizeSize(sizeLabel)];
+    
+    // Split by " = " or "=" and add both parts
+    if (sizeLabel?.includes('=')) {
+      const splitParts = sizeLabel.split(/\s*=\s*/);
+      parts.push(...splitParts.map(normalizeSize).filter(p => p));
+    }
+    
+    // Extract any numbers (e.g., "45" from "45 = 10½")
+    const numbers = sizeLabel?.match(/\d+\.?\d*/g);
+    if (numbers) {
+      parts.push(...numbers.map(normalizeSize));
+    }
+    
+    return [...new Set(parts)]; // Remove duplicates
+  };
+  
+  const dbSizeParts = extractSizeParts(variant.size_label);
+  
+  // Find matching variation by size attribute with multiple fallback strategies
+  let matchingVariation = null;
+  
+  for (const wooVariation of wooVariations) {
+    const sizeAttr = wooVariation.attributes?.find((attr: any) => 
+      attr.name?.toLowerCase() === 'size' || 
+      attr.name?.toLowerCase() === 'maat' ||
+      attr.name?.toLowerCase() === 'pa_size' ||
+      attr.name?.toLowerCase() === 'pa_maat'
+    );
+    
+    if (!sizeAttr?.option) continue;
+    
+    const wooSizeNormalized = normalizeSize(sizeAttr.option);
+    const wooSizeParts = extractSizeParts(sizeAttr.option);
+    
+    // Strategy 1: Exact match (normalized)
+    if (dbSizeParts.includes(wooSizeNormalized)) {
+      matchingVariation = wooVariation;
+      break;
+    }
+    
+    // Strategy 2: Check if any WooCommerce size part matches any DB size part
+    if (wooSizeParts.some(wp => dbSizeParts.includes(wp))) {
+      matchingVariation = wooVariation;
+      break;
+    }
+    
+    // Strategy 3: Check if WooCommerce size is contained in DB size or vice versa
+    if (dbSizeParts.some(dp => wooSizeNormalized.includes(dp) || dp.includes(wooSizeNormalized))) {
+      matchingVariation = wooVariation;
+      break;
+    }
+  }
 
   if (!matchingVariation) {
-    console.log(`No matching WooCommerce variation found for size ${variant.size_label}`);
+    console.log(`No matching WooCommerce variation found for size ${variant.size_label} (tried: ${dbSizeParts.join(', ')})`);
     return;
   }
 
