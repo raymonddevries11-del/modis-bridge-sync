@@ -53,8 +53,30 @@ const Jobs = () => {
       const { data } = await query.limit(500);
       return data || [];
     },
-    refetchInterval: 3000,
   });
+
+  // Realtime subscription for job updates
+  useEffect(() => {
+    const channel = supabase
+      .channel('jobs-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'jobs'
+        },
+        (payload) => {
+          console.log('Job update received:', payload);
+          queryClient.invalidateQueries({ queryKey: ["jobs"] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [queryClient]);
 
   // Calculate sync progress - prioritize 'done' status over newer jobs
   const syncProgress = {
