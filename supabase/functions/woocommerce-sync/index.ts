@@ -910,8 +910,12 @@ async function updateProductInWooCommerce(
     console.log(`Fetched ${existingAttributes.length} existing attributes from WooCommerce`);
   }
   
-  // First, check if global "Maat" attribute exists and get its ID
+  // Fetch global attributes and get IDs for Maat, Wijdte, Uitneembaar voetbed
   let globalMaatId = 0;
+  let globalWijdteId = 0;
+  let globalVoetbedId = 0;
+  let globalAttributes: any[] = [];
+  
   try {
     const attrListUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes`);
     attrListUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
@@ -922,15 +926,39 @@ async function updateProductInWooCommerce(
     });
     
     if (attrListResponse.ok) {
-      const globalAttributes = await attrListResponse.json();
+      globalAttributes = await attrListResponse.json();
+      
+      // Find Maat attribute
       const maatAttr = globalAttributes.find((a: any) => 
         a.name?.toLowerCase() === 'maat' || a.slug?.toLowerCase() === 'pa_maat'
       );
       if (maatAttr) {
         globalMaatId = maatAttr.id;
         console.log(`Found global Maat attribute with ID: ${globalMaatId}`);
-        
-        // Ensure all size options exist as terms for this attribute
+      }
+      
+      // Find Wijdte attribute
+      const wijdteAttr = globalAttributes.find((a: any) => 
+        a.name?.toLowerCase() === 'wijdte' || a.slug?.toLowerCase() === 'pa_wijdte'
+      );
+      if (wijdteAttr) {
+        globalWijdteId = wijdteAttr.id;
+        console.log(`Found global Wijdte attribute with ID: ${globalWijdteId}`);
+      }
+      
+      // Find Uitneembaar voetbed attribute
+      const voetbedAttr = globalAttributes.find((a: any) => 
+        a.name?.toLowerCase() === 'uitneembaar voetbed' || 
+        a.slug?.toLowerCase() === 'pa_uitneembaar-voetbed' ||
+        a.slug?.toLowerCase() === 'pa_uitneembaar_voetbed'
+      );
+      if (voetbedAttr) {
+        globalVoetbedId = voetbedAttr.id;
+        console.log(`Found global Uitneembaar voetbed attribute with ID: ${globalVoetbedId}`);
+      }
+      
+      // Ensure all Maat size options exist as terms
+      if (globalMaatId > 0) {
         const termsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${globalMaatId}/terms`);
         termsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
         termsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
@@ -960,8 +988,6 @@ async function updateProductInWooCommerce(
             }
           }
         }
-      } else {
-        console.log('Global Maat attribute not found, will create local attribute');
       }
     }
   } catch (err) {
@@ -997,6 +1023,41 @@ async function updateProductInWooCommerce(
     // Add Maat as first attribute
     updatedAttributes = [maatAttribute, ...existingAttributes];
     console.log(`Adding new Maat attribute at position 0 (global ID: ${globalMaatId})`);
+  }
+  
+  // Update Wijdte attribute with global ID if it exists
+  if (globalWijdteId > 0) {
+    const wijdteIndex = updatedAttributes.findIndex((attr: any) => 
+      attr.name?.toLowerCase() === 'wijdte' ||
+      attr.slug?.toLowerCase() === 'wijdte' ||
+      attr.slug?.toLowerCase() === 'pa_wijdte'
+    );
+    if (wijdteIndex >= 0) {
+      updatedAttributes[wijdteIndex] = {
+        ...updatedAttributes[wijdteIndex],
+        id: globalWijdteId,
+        name: 'Wijdte' // Use proper name, WooCommerce will use the global attribute
+      };
+      console.log(`Updated Wijdte attribute with global ID: ${globalWijdteId}`);
+    }
+  }
+  
+  // Update Uitneembaar voetbed attribute with global ID if it exists
+  if (globalVoetbedId > 0) {
+    const voetbedIndex = updatedAttributes.findIndex((attr: any) => 
+      attr.name?.toLowerCase() === 'uitneembaar voetbed' ||
+      attr.slug?.toLowerCase() === 'uitneembaar-voetbed' ||
+      attr.slug?.toLowerCase() === 'pa_uitneembaar-voetbed' ||
+      attr.slug?.toLowerCase() === 'pa_uitneembaar_voetbed'
+    );
+    if (voetbedIndex >= 0) {
+      updatedAttributes[voetbedIndex] = {
+        ...updatedAttributes[voetbedIndex],
+        id: globalVoetbedId,
+        name: 'Uitneembaar voetbed' // Use proper name, WooCommerce will use the global attribute
+      };
+      console.log(`Updated Uitneembaar voetbed attribute with global ID: ${globalVoetbedId}`);
+    }
   }
   
   // Re-assign positions to ensure proper ordering (Maat first)
