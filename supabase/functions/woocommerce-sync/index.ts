@@ -1152,7 +1152,8 @@ async function syncVariantToWooCommerce(
     stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
   };
 
-  // Update Size attribute to consistent database format (e.g., "42 = 8" instead of "42/8")
+  // ALWAYS set the Maat attribute on variations - this ensures WooCommerce 
+  // recognizes the attribute values and can filter products by size
   // Find the current size attribute name used in WooCommerce
   const currentSizeAttr = matchingVariation.attributes?.find((attr: any) => 
     attr.name?.toLowerCase() === 'size' || 
@@ -1161,14 +1162,24 @@ async function syncVariantToWooCommerce(
     attr.name?.toLowerCase() === 'pa_maat'
   );
   
-  if (currentSizeAttr && currentSizeAttr.option !== variant.size_label) {
-    // Update the attribute to use the consistent database format
+  // Always set the Maat attribute, even if it doesn't exist yet
+  if (currentSizeAttr) {
+    // Update existing attribute to use the consistent database format
     updateData.attributes = [{
       id: currentSizeAttr.id || 0,
       name: currentSizeAttr.name,
       option: variant.size_label
     }];
-    console.log(`Updating size attribute from "${currentSizeAttr.option}" to "${variant.size_label}"`);
+    if (currentSizeAttr.option !== variant.size_label) {
+      console.log(`Updating size attribute from "${currentSizeAttr.option}" to "${variant.size_label}"`);
+    }
+  } else {
+    // No size attribute exists - add "Maat" attribute
+    updateData.attributes = [{
+      name: 'Maat',
+      option: variant.size_label
+    }];
+    console.log(`Adding missing Maat attribute with value "${variant.size_label}"`);
   }
 
   // Set prices on the variation
