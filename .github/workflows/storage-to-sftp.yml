@@ -32,6 +32,7 @@ jobs:
           SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
           SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           node << 'EOF'
@@ -48,8 +49,8 @@ jobs:
                 `${process.env.SUPABASE_URL}/rest/v1/export_files?synced_to_sftp=eq.false&select=*,tenants!inner(slug)`,
                 {
                   headers: {
-                    'apikey': process.env.SUPABASE_SERVICE_KEY,
-                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`
+                    'apikey': process.env.SUPABASE_ANON_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
                   }
                 }
               );
