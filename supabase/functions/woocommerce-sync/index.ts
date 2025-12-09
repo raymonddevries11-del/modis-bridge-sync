@@ -1034,6 +1034,11 @@ async function syncVariantToWooCommerce(
   
   const dbSizeParts = extractSizeParts(variant.size_label);
   
+  // Build expected SKU suffix for SKU-based matching
+  // Format: productSku-size_label (e.g., "133669005000-46 = 11")
+  const expectedSkuSuffix = `-${variant.size_label}`;
+  const expectedFullSku = productSku ? `${productSku}${expectedSkuSuffix}` : null;
+  
   // Debug: Log WooCommerce variations to understand structure
   console.log(`Found ${wooVariations.length} WooCommerce variations for product ${wooProductId}`);
   if (wooVariations.length > 0) {
@@ -1045,10 +1050,35 @@ async function syncVariantToWooCommerce(
     console.log(`Sample WooCommerce variation attributes: ${JSON.stringify(sampleAttrs)}`);
   }
   
-  // Find matching variation by size attribute with multiple fallback strategies
+  // Find matching variation by size attribute or SKU with multiple fallback strategies
   let matchingVariation = null;
   
   for (const wooVariation of wooVariations) {
+    // Strategy 0: Match by variation SKU (most reliable when SKU contains size info)
+    // WooCommerce SKU format: "133669005000-46 = 11" matches database size_label "46 = 11"
+    if (wooVariation.sku && expectedFullSku) {
+      // Exact SKU match
+      if (normalizeSize(wooVariation.sku) === normalizeSize(expectedFullSku)) {
+        matchingVariation = wooVariation;
+        console.log(`Matched variation by exact SKU: ${wooVariation.sku}`);
+        break;
+      }
+      // Check if WooCommerce SKU ends with the size_label
+      if (wooVariation.sku.endsWith(variant.size_label)) {
+        matchingVariation = wooVariation;
+        console.log(`Matched variation by SKU suffix: ${wooVariation.sku} ends with ${variant.size_label}`);
+        break;
+      }
+      // Check if size_label appears in SKU (handles format variations)
+      const wooSkuParts = extractSizeParts(wooVariation.sku);
+      if (dbSizeParts.some(dp => wooSkuParts.includes(dp))) {
+        matchingVariation = wooVariation;
+        console.log(`Matched variation by SKU parts: ${wooVariation.sku}`);
+        break;
+      }
+    }
+    
+    // Strategy 1-3: Match by Size attribute
     const sizeAttr = wooVariation.attributes?.find((attr: any) => 
       attr.name?.toLowerCase() === 'size' || 
       attr.name?.toLowerCase() === 'maat' ||
@@ -1056,32 +1086,32 @@ async function syncVariantToWooCommerce(
       attr.name?.toLowerCase() === 'pa_maat'
     );
     
-    if (!sizeAttr?.option) continue;
-    
-    const wooSizeNormalized = normalizeSize(sizeAttr.option);
-    const wooSizeParts = extractSizeParts(sizeAttr.option);
-    
-    // Strategy 1: Exact match (normalized)
-    if (dbSizeParts.includes(wooSizeNormalized)) {
-      matchingVariation = wooVariation;
-      break;
-    }
-    
-    // Strategy 2: Check if any WooCommerce size part matches any DB size part
-    if (wooSizeParts.some(wp => dbSizeParts.includes(wp))) {
-      matchingVariation = wooVariation;
-      break;
-    }
-    
-    // Strategy 3: Check if WooCommerce size is contained in DB size or vice versa
-    if (dbSizeParts.some(dp => wooSizeNormalized.includes(dp) || dp.includes(wooSizeNormalized))) {
-      matchingVariation = wooVariation;
-      break;
+    if (sizeAttr?.option) {
+      const wooSizeNormalized = normalizeSize(sizeAttr.option);
+      const wooSizeParts = extractSizeParts(sizeAttr.option);
+      
+      // Strategy 1: Exact match (normalized)
+      if (dbSizeParts.includes(wooSizeNormalized)) {
+        matchingVariation = wooVariation;
+        break;
+      }
+      
+      // Strategy 2: Check if any WooCommerce size part matches any DB size part
+      if (wooSizeParts.some(wp => dbSizeParts.includes(wp))) {
+        matchingVariation = wooVariation;
+        break;
+      }
+      
+      // Strategy 3: Check if WooCommerce size is contained in DB size or vice versa
+      if (dbSizeParts.some(dp => wooSizeNormalized.includes(dp) || dp.includes(wooSizeNormalized))) {
+        matchingVariation = wooVariation;
+        break;
+      }
     }
   }
 
   if (!matchingVariation) {
-    console.log(`No matching WooCommerce variation found for size ${variant.size_label} (tried: ${dbSizeParts.join(', ')})`);
+    console.log(`No matching WooCommerce variation found for size ${variant.size_label} (tried: ${dbSizeParts.join(', ')}, expected SKU: ${expectedFullSku})`);
     return;
   }
 
