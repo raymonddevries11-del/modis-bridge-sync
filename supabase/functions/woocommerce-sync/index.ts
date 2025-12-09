@@ -1098,25 +1098,20 @@ async function syncVariantToWooCommerce(
     // Strategy 0: Match by variation SKU (most reliable when SKU contains size info)
     // WooCommerce SKU format: "133669005000-46 = 11" matches database size_label "46 = 11"
     if (wooVariation.sku && expectedFullSku) {
-      // Exact SKU match
+      // Exact SKU match (case-insensitive, whitespace-normalized)
       if (normalizeSize(wooVariation.sku) === normalizeSize(expectedFullSku)) {
         matchingVariation = wooVariation;
         console.log(`Matched variation by exact SKU: ${wooVariation.sku}`);
         break;
       }
-      // Check if WooCommerce SKU ends with the size_label
+      // Check if WooCommerce SKU ends with the exact size_label
       if (wooVariation.sku.endsWith(variant.size_label)) {
         matchingVariation = wooVariation;
         console.log(`Matched variation by SKU suffix: ${wooVariation.sku} ends with ${variant.size_label}`);
         break;
       }
-      // Check if size_label appears in SKU (handles format variations)
-      const wooSkuParts = extractSizeParts(wooVariation.sku);
-      if (dbSizeParts.some(dp => wooSkuParts.includes(dp))) {
-        matchingVariation = wooVariation;
-        console.log(`Matched variation by SKU parts: ${wooVariation.sku}`);
-        break;
-      }
+      // REMOVED: SKU parts matching - was causing incorrect matches
+      // e.g., "44 = 10" was matching "45 = 10½" because both contain "10"
     }
     
     // Strategy 1-3: Match by Size attribute
@@ -1129,23 +1124,11 @@ async function syncVariantToWooCommerce(
     
     if (sizeAttr?.option) {
       const wooSizeNormalized = normalizeSize(sizeAttr.option);
-      const wooSizeParts = extractSizeParts(sizeAttr.option);
       
-      // Strategy 1: Exact match (normalized)
-      if (dbSizeParts.includes(wooSizeNormalized)) {
+      // Strategy 1: Exact match (normalized) with full size_label
+      if (normalizeSize(variant.size_label) === wooSizeNormalized) {
         matchingVariation = wooVariation;
-        break;
-      }
-      
-      // Strategy 2: Check if any WooCommerce size part matches any DB size part
-      if (wooSizeParts.some(wp => dbSizeParts.includes(wp))) {
-        matchingVariation = wooVariation;
-        break;
-      }
-      
-      // Strategy 3: Check if WooCommerce size is contained in DB size or vice versa
-      if (dbSizeParts.some(dp => wooSizeNormalized.includes(dp) || dp.includes(wooSizeNormalized))) {
-        matchingVariation = wooVariation;
+        console.log(`Matched variation by exact Maat attribute: ${sizeAttr.option}`);
         break;
       }
     }
