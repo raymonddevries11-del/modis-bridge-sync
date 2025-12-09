@@ -43,13 +43,13 @@ serve(async (req) => {
       }
     }
 
-    // Get ready jobs - process maximum 3 jobs per run to avoid overwhelming hosting
+    // Get ready jobs - process maximum 5 jobs per run for faster throughput
     const { data: jobs, error: jobsError } = await supabase
       .from('jobs')
       .select('*')
       .eq('state', 'ready')
       .order('created_at', { ascending: true })
-      .limit(3);
+      .limit(5);
 
     if (jobsError) {
       throw jobsError;
