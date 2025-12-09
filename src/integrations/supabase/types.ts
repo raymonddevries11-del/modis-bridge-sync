@@ -386,6 +386,35 @@ export type Database = {
           },
         ]
       }
+      product_sync_status: {
+        Row: {
+          created_at: string
+          last_synced_at: string | null
+          product_id: string
+          sync_count: number
+        }
+        Insert: {
+          created_at?: string
+          last_synced_at?: string | null
+          product_id: string
+          sync_count?: number
+        }
+        Update: {
+          created_at?: string
+          last_synced_at?: string | null
+          product_id?: string
+          sync_count?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_sync_status_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       products: {
         Row: {
           article_group: Json | null
