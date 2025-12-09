@@ -491,7 +491,17 @@ async function createProductInWooCommerce(
     ? variants?.filter((v: any) => variantIdsFilter.includes(v.id))
     : variants;
 
-  const sizeOptions = variantsToCreate?.map((v: any) => v.size_label) || [];
+  // Ensure size options is a proper array of individual strings
+  const sizeOptions: string[] = [];
+  if (variantsToCreate && Array.isArray(variantsToCreate)) {
+    for (const v of variantsToCreate) {
+      if (v.size_label && typeof v.size_label === 'string') {
+        sizeOptions.push(v.size_label.trim());
+      }
+    }
+  }
+  
+  console.log(`Product ${sku} size options (${sizeOptions.length}):`, JSON.stringify(sizeOptions));
 
   // Prepare product data
   const productData: any = {
@@ -505,11 +515,12 @@ async function createProductInWooCommerce(
     images: productImages,
     attributes: [
       {
+        id: 0, // Let WooCommerce assign attribute ID
         name: 'Maat',
         position: 0,
         visible: true,
         variation: true,
-        options: sizeOptions
+        options: sizeOptions // This must be a proper array like ["40 = 6½", "41 = 7½"]
       }
     ],
     tax_class: tax_code || '',
@@ -869,13 +880,26 @@ async function updateProductInWooCommerce(
   }
 
   // Update attributes - use "Maat" for Dutch WooCommerce
+  // Build size options as proper array of individual strings
+  const updateSizeOptions: string[] = [];
+  if (variants && Array.isArray(variants)) {
+    for (const v of variants) {
+      if (v.size_label && typeof v.size_label === 'string') {
+        updateSizeOptions.push(v.size_label.trim());
+      }
+    }
+  }
+  
+  console.log(`Product ${sku} update size options (${updateSizeOptions.length}):`, JSON.stringify(updateSizeOptions));
+  
   const updatedAttributes: any[] = [
     {
+      id: 0, // Let WooCommerce assign/find attribute ID
       name: 'Maat',
       position: 0,
       visible: true,
       variation: true,
-      options: variants?.map((v: any) => v.size_label) || []
+      options: updateSizeOptions // Proper array like ["40 = 6½", "41 = 7½"]
     }
   ];
 
