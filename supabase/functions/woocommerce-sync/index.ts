@@ -1205,9 +1205,9 @@ async function syncVariantToWooCommerce(
     stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
   };
 
-  // ALWAYS set the Maat attribute on variations - this ensures WooCommerce 
-  // recognizes the attribute values and can filter products by size
-  // Find the current size attribute name used in WooCommerce
+  // ALWAYS set the Maat attribute on variations using the SLUG format
+  // WooCommerce requires 'pa_maat' slug for global attributes on variations
+  // This ensures proper linking to attribute terms for filtering
   const currentSizeAttr = matchingVariation.attributes?.find((attr: any) => 
     attr.name?.toLowerCase() === 'size' || 
     attr.name?.toLowerCase() === 'maat' ||
@@ -1215,24 +1215,16 @@ async function syncVariantToWooCommerce(
     attr.name?.toLowerCase() === 'pa_maat'
   );
   
-  // Always set the Maat attribute, even if it doesn't exist yet
-  if (currentSizeAttr) {
-    // Update existing attribute to use the consistent database format
-    updateData.attributes = [{
-      id: currentSizeAttr.id || 0,
-      name: currentSizeAttr.name,
-      option: variant.size_label
-    }];
-    if (currentSizeAttr.option !== variant.size_label) {
-      console.log(`Updating size attribute from "${currentSizeAttr.option}" to "${variant.size_label}"`);
-    }
-  } else {
-    // No size attribute exists - add "Maat" attribute
-    updateData.attributes = [{
-      name: 'Maat',
-      option: variant.size_label
-    }];
-    console.log(`Adding missing Maat attribute with value "${variant.size_label}"`);
+  // For variations, we MUST use the attribute slug (pa_maat) not the display name
+  // This is how WooCommerce links variations to global attribute terms
+  updateData.attributes = [{
+    id: currentSizeAttr?.id || 0,
+    name: 'pa_maat', // Use slug format for proper global attribute linking
+    option: variant.size_label
+  }];
+  
+  if (currentSizeAttr?.option !== variant.size_label) {
+    console.log(`Setting Maat attribute to "${variant.size_label}" (was: "${currentSizeAttr?.option || 'none'}")`);
   }
 
   // Set prices on the variation
