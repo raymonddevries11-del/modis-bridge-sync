@@ -62,3 +62,6 @@ verify_jwt = false
 
 [functions.job-scheduler]
 verify_jwt = false
+
+[functions.debug-woo-product]
+verify_jwt = false

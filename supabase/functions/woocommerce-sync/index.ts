@@ -879,7 +879,10 @@ async function updateProductInWooCommerce(
     }
   }
 
-  // Update attributes - use "Maat" for Dutch WooCommerce
+  // Update attributes - CRITICAL: We need to fetch existing attributes first,
+  // then update/replace the Maat attribute while keeping others intact
+  // This prevents WooCommerce from treating our update as a new attribute
+  
   // Build size options as proper array of individual strings
   const updateSizeOptions: string[] = [];
   if (variants && Array.isArray(variants)) {
@@ -892,52 +895,62 @@ async function updateProductInWooCommerce(
   
   console.log(`Product ${sku} update size options (${updateSizeOptions.length}):`, JSON.stringify(updateSizeOptions));
   
-  const updatedAttributes: any[] = [
-    {
-      id: 0, // Let WooCommerce assign/find attribute ID
-      name: 'Maat',
-      position: 0,
-      visible: true,
-      variation: true,
-      options: updateSizeOptions // Proper array like ["40 = 6½", "41 = 7½"]
-    }
-  ];
-
-  // Add color attribute if available
-  if (color?.label) {
-    updatedAttributes.push({
-      name: 'Color',
-      position: 1,
-      visible: true,
-      variation: false,
-      options: [color.label]
-    });
+  // Fetch existing product attributes from WooCommerce
+  const fetchAttrUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
+  fetchAttrUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  fetchAttrUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+  
+  const fetchAttrResponse = await fetchWithRetry(fetchAttrUrl.toString(), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+  
+  let existingAttributes: any[] = [];
+  if (fetchAttrResponse.ok) {
+    const existingProduct = await fetchAttrResponse.json();
+    existingAttributes = existingProduct.attributes || [];
+    console.log(`Fetched ${existingAttributes.length} existing attributes from WooCommerce`);
   }
-
-  // Map attribute codes to readable values
-  const mappedAttributes = tenantId && attributes 
-    ? await mapAttributeCodes(attributes, tenantId, supabase)
-    : attributes;
-
-  // Add all product attributes from database as custom attributes
-  if (mappedAttributes && typeof mappedAttributes === 'object') {
-    let position = updatedAttributes.length;
-    for (const [key, value] of Object.entries(mappedAttributes)) {
-      const valueStr = String(value).trim();
-      
-      if (valueStr) {
-        updatedAttributes.push({
-          name: key,
-          position: position++,
-          visible: true,
-          variation: false,
-          options: [valueStr]
-        });
-      }
-    }
+  
+  // Find existing Maat attribute index (check for various names)
+  const maatIndex = existingAttributes.findIndex((attr: any) => 
+    attr.name?.toLowerCase() === 'maat' || 
+    attr.name?.toLowerCase() === 'size' ||
+    attr.slug?.toLowerCase() === 'maat' ||
+    attr.slug?.toLowerCase() === 'pa_maat'
+  );
+  
+  // Create the new Maat attribute with proper structure
+  const maatAttribute = {
+    id: maatIndex >= 0 ? existingAttributes[maatIndex].id : 0,
+    name: 'Maat',
+    position: 0,
+    visible: true,
+    variation: true,
+    options: updateSizeOptions // Array like ["40 = 6½", "41 = 7½", ...]
+  };
+  
+  // Build final attributes array: replace Maat if exists, otherwise add it
+  let updatedAttributes: any[];
+  if (maatIndex >= 0) {
+    // Replace existing Maat attribute
+    updatedAttributes = [...existingAttributes];
+    updatedAttributes[maatIndex] = maatAttribute;
+    console.log(`Replacing existing Maat attribute at index ${maatIndex}`);
+  } else {
+    // Add Maat as first attribute
+    updatedAttributes = [maatAttribute, ...existingAttributes];
+    console.log(`Adding new Maat attribute at position 0`);
   }
+  
+  // Re-assign positions to ensure proper ordering (Maat first)
+  updatedAttributes = updatedAttributes.map((attr, idx) => ({
+    ...attr,
+    position: idx
+  }));
 
   updateData.attributes = updatedAttributes;
+  
+  console.log(`Sending ${updatedAttributes.length} attributes, Maat variation=${maatAttribute.variation}, options count=${updateSizeOptions.length}`);
 
   // Update product data if there's anything to update
   if (Object.keys(updateData).length > 0) {
