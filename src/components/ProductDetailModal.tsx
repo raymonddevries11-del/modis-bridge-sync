@@ -10,8 +10,143 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Save, Image as ImageIcon, RefreshCw, AlertCircle } from "lucide-react";
+import { Save, Image as ImageIcon, RefreshCw, AlertCircle, Package } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+
+interface VariantStockCardProps {
+  variant: any;
+  tenantId: string;
+}
+
+const VariantStockCard = ({ variant, tenantId }: VariantStockCardProps) => {
+  const queryClient = useQueryClient();
+  const currentStock = variant.stock_totals?.qty ?? 0;
+  const [stockValue, setStockValue] = useState<string>(currentStock.toString());
+  const [isEditing, setIsEditing] = useState(false);
+
+  const updateStockMutation = useMutation({
+    mutationFn: async (newQty: number) => {
+      // Update stock_totals
+      const { error: stockError } = await supabase
+        .from("stock_totals")
+        .upsert({
+          variant_id: variant.id,
+          qty: newQty,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'variant_id' });
+
+      if (stockError) throw stockError;
+
+      // Create SYNC_TO_WOO job for this variant
+      const { error: jobError } = await supabase
+        .from("jobs")
+        .insert({
+          type: "SYNC_TO_WOO",
+          state: "ready",
+          tenant_id: tenantId,
+          payload: { variantIds: [variant.id] },
+        });
+
+      if (jobError) throw jobError;
+    },
+    onSuccess: () => {
+      toast.success(`Voorraad bijgewerkt naar ${stockValue} - sync naar WooCommerce gepland`);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      setIsEditing(false);
+    },
+    onError: (error: any) => {
+      toast.error(`Voorraad update mislukt: ${error.message}`);
+    },
+  });
+
+  const handleSaveStock = () => {
+    const newQty = parseInt(stockValue, 10);
+    if (isNaN(newQty) || newQty < 0) {
+      toast.error("Voer een geldig aantal in");
+      return;
+    }
+    if (newQty === currentStock) {
+      setIsEditing(false);
+      return;
+    }
+    updateStockMutation.mutate(newQty);
+  };
+
+  const handleCancel = () => {
+    setStockValue(currentStock.toString());
+    setIsEditing(false);
+  };
+
+  return (
+    <Card>
+      <CardHeader className="py-3">
+        <CardTitle className="text-sm font-medium flex items-center justify-between">
+          <span>Maat: {variant.size_label} {variant.maat_web && variant.maat_web !== variant.size_label && `(Web: ${variant.maat_web})`}</span>
+          <div className="flex items-center gap-2">
+            {isEditing ? (
+              <>
+                <Input
+                  type="number"
+                  min="0"
+                  value={stockValue}
+                  onChange={(e) => setStockValue(e.target.value)}
+                  className="w-20 h-8 text-center"
+                  autoFocus
+                />
+                <Button 
+                  size="sm" 
+                  onClick={handleSaveStock}
+                  disabled={updateStockMutation.isPending}
+                >
+                  {updateStockMutation.isPending ? "..." : "Opslaan"}
+                </Button>
+                <Button 
+                  size="sm" 
+                  variant="outline" 
+                  onClick={handleCancel}
+                  disabled={updateStockMutation.isPending}
+                >
+                  Annuleer
+                </Button>
+              </>
+            ) : (
+              <Badge 
+                variant={currentStock > 0 ? "default" : "destructive"}
+                className="cursor-pointer hover:opacity-80"
+                onClick={() => setIsEditing(true)}
+              >
+                <Package className="h-3 w-3 mr-1" />
+                Voorraad: {currentStock}
+              </Badge>
+            )}
+          </div>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="grid grid-cols-4 gap-4 text-sm">
+        <div>
+          <span className="text-muted-foreground">EAN:</span>
+          <p className="font-mono">{variant.ean || "N/A"}</p>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Status:</span>
+          <Badge variant={variant.active ? "default" : "secondary"}>
+            {variant.active ? "Actief" : "Inactief"}
+          </Badge>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Backorder:</span>
+          <Badge variant={variant.allow_backorder ? "default" : "outline"}>
+            {variant.allow_backorder ? "Ja" : "Nee"}
+          </Badge>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Updated:</span>
+          <p>{new Date(variant.updated_at).toLocaleDateString()}</p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
 
 interface ProductDetailModalProps {
   product: any;
@@ -341,43 +476,13 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
           <TabsContent value="variants" className="space-y-4">
             {product.variants && product.variants.length > 0 ? (
               <div className="grid gap-3">
-                {product.variants.map((variant: any) => {
-                  const stockQty = variant.stock_totals?.qty ?? 0;
-                  return (
-                    <Card key={variant.id}>
-                      <CardHeader className="py-3">
-                        <CardTitle className="text-sm font-medium flex items-center justify-between">
-                          <span>Maat: {variant.size_label} {variant.maat_web && variant.maat_web !== variant.size_label && `(Web: ${variant.maat_web})`}</span>
-                          <Badge variant={stockQty > 0 ? "default" : "destructive"}>
-                            Voorraad: {stockQty}
-                          </Badge>
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent className="grid grid-cols-4 gap-4 text-sm">
-                        <div>
-                          <span className="text-muted-foreground">EAN:</span>
-                          <p className="font-mono">{variant.ean || "N/A"}</p>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Status:</span>
-                          <Badge variant={variant.active ? "default" : "secondary"}>
-                            {variant.active ? "Actief" : "Inactief"}
-                          </Badge>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Backorder:</span>
-                          <Badge variant={variant.allow_backorder ? "default" : "outline"}>
-                            {variant.allow_backorder ? "Ja" : "Nee"}
-                          </Badge>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Updated:</span>
-                          <p>{new Date(variant.updated_at).toLocaleDateString()}</p>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
+                {product.variants.map((variant: any) => (
+                  <VariantStockCard 
+                    key={variant.id} 
+                    variant={variant} 
+                    tenantId={product.tenant_id}
+                  />
+                ))}
               </div>
             ) : (
               <p className="text-center text-muted-foreground py-8">Geen variants beschikbaar</p>
