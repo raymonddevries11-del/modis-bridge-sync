@@ -1013,13 +1013,13 @@ async function syncVariantToWooCommerce(
     return size?.toLowerCase().trim().replace(/\s+/g, ' ') || '';
   };
   
-  // Helper to extract size parts from format like "45 = 10½"
+  // Helper to extract size parts from format like "45 = 10½" or "42/8"
   const extractSizeParts = (sizeLabel: string): string[] => {
     const parts: string[] = [normalizeSize(sizeLabel)];
     
-    // Split by " = " or "=" and add both parts
-    if (sizeLabel?.includes('=')) {
-      const splitParts = sizeLabel.split(/\s*=\s*/);
+    // Split by " = ", "=", "/", or " / " and add all parts
+    if (sizeLabel?.includes('=') || sizeLabel?.includes('/')) {
+      const splitParts = sizeLabel.split(/\s*[=\/]\s*/);
       parts.push(...splitParts.map(normalizeSize).filter(p => p));
     }
     
@@ -1083,6 +1083,25 @@ async function syncVariantToWooCommerce(
     stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
   };
 
+  // Update Size attribute to consistent database format (e.g., "42 = 8" instead of "42/8")
+  // Find the current size attribute name used in WooCommerce
+  const currentSizeAttr = matchingVariation.attributes?.find((attr: any) => 
+    attr.name?.toLowerCase() === 'size' || 
+    attr.name?.toLowerCase() === 'maat' ||
+    attr.name?.toLowerCase() === 'pa_size' ||
+    attr.name?.toLowerCase() === 'pa_maat'
+  );
+  
+  if (currentSizeAttr && currentSizeAttr.option !== variant.size_label) {
+    // Update the attribute to use the consistent database format
+    updateData.attributes = [{
+      id: currentSizeAttr.id || 0,
+      name: currentSizeAttr.name,
+      option: variant.size_label
+    }];
+    console.log(`Updating size attribute from "${currentSizeAttr.option}" to "${variant.size_label}"`);
+  }
+
   // Set prices on the variation
   if (product_prices?.regular) {
     updateData.regular_price = product_prices.regular.toString();
@@ -1116,7 +1135,7 @@ async function syncVariantToWooCommerce(
 
   console.log(`Updated stock for variation ${variant.size_label}: ${updateData.stock_quantity}`);
   
-  // Log to changelog - track stock and price changes
+  // Log to changelog - track stock, price, and size attribute changes
   if (supabase && tenantId) {
     const changesArray = [];
     
@@ -1131,6 +1150,19 @@ async function syncVariantToWooCommerce(
     }
     if (updateData.sale_price && matchingVariation.sale_price !== updateData.sale_price) {
       changesArray.push(`aanbiedingsprijs ${matchingVariation.sale_price} → ${updateData.sale_price}`);
+    }
+    
+    // Check if size attribute was updated
+    if (updateData.attributes?.length > 0) {
+      const currentSizeAttr = matchingVariation.attributes?.find((attr: any) => 
+        attr.name?.toLowerCase() === 'size' || 
+        attr.name?.toLowerCase() === 'maat' ||
+        attr.name?.toLowerCase() === 'pa_size' ||
+        attr.name?.toLowerCase() === 'pa_maat'
+      );
+      if (currentSizeAttr) {
+        changesArray.push(`maat attribuut "${currentSizeAttr.option}" → "${variant.size_label}"`);
+      }
     }
     
     if (changesArray.length > 0) {
