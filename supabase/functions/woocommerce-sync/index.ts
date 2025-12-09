@@ -879,9 +879,8 @@ async function updateProductInWooCommerce(
     }
   }
 
-  // Update attributes - CRITICAL: We need to fetch existing attributes first,
-  // then update/replace the Maat attribute while keeping others intact
-  // This prevents WooCommerce from treating our update as a new attribute
+  // Update attributes - Use GLOBAL "Maat" attribute for proper WooCommerce filtering
+  // Global attributes have terms that work with layered navigation and filters
   
   // Build size options as proper array of individual strings
   const updateSizeOptions: string[] = [];
@@ -911,7 +910,65 @@ async function updateProductInWooCommerce(
     console.log(`Fetched ${existingAttributes.length} existing attributes from WooCommerce`);
   }
   
-  // Find existing Maat attribute index (check for various names)
+  // First, check if global "Maat" attribute exists and get its ID
+  let globalMaatId = 0;
+  try {
+    const attrListUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes`);
+    attrListUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+    attrListUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+    
+    const attrListResponse = await fetchWithRetry(attrListUrl.toString(), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+    
+    if (attrListResponse.ok) {
+      const globalAttributes = await attrListResponse.json();
+      const maatAttr = globalAttributes.find((a: any) => 
+        a.name?.toLowerCase() === 'maat' || a.slug?.toLowerCase() === 'pa_maat'
+      );
+      if (maatAttr) {
+        globalMaatId = maatAttr.id;
+        console.log(`Found global Maat attribute with ID: ${globalMaatId}`);
+        
+        // Ensure all size options exist as terms for this attribute
+        const termsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${globalMaatId}/terms`);
+        termsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+        termsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+        termsUrl.searchParams.append('per_page', '100');
+        
+        const termsResponse = await fetchWithRetry(termsUrl.toString(), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+        
+        if (termsResponse.ok) {
+          const existingTerms = await termsResponse.json();
+          const existingTermNames = new Set(existingTerms.map((t: any) => t.name.toLowerCase().trim()));
+          
+          // Create missing terms
+          for (const sizeOption of updateSizeOptions) {
+            if (!existingTermNames.has(sizeOption.toLowerCase().trim())) {
+              console.log(`Creating missing Maat term: ${sizeOption}`);
+              const createTermUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${globalMaatId}/terms`);
+              createTermUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+              createTermUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+              
+              await fetchWithRetry(createTermUrl.toString(), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: sizeOption }),
+              });
+            }
+          }
+        }
+      } else {
+        console.log('Global Maat attribute not found, will create local attribute');
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching global attributes:', err);
+  }
+  
+  // Find existing Maat attribute index on this product
   const maatIndex = existingAttributes.findIndex((attr: any) => 
     attr.name?.toLowerCase() === 'maat' || 
     attr.name?.toLowerCase() === 'size' ||
@@ -919,9 +976,9 @@ async function updateProductInWooCommerce(
     attr.slug?.toLowerCase() === 'pa_maat'
   );
   
-  // Create the new Maat attribute with proper structure
+  // Create the Maat attribute - use global ID if available
   const maatAttribute = {
-    id: maatIndex >= 0 ? existingAttributes[maatIndex].id : 0,
+    id: globalMaatId > 0 ? globalMaatId : (maatIndex >= 0 ? existingAttributes[maatIndex].id : 0),
     name: 'Maat',
     position: 0,
     visible: true,
@@ -935,11 +992,11 @@ async function updateProductInWooCommerce(
     // Replace existing Maat attribute
     updatedAttributes = [...existingAttributes];
     updatedAttributes[maatIndex] = maatAttribute;
-    console.log(`Replacing existing Maat attribute at index ${maatIndex}`);
+    console.log(`Replacing existing Maat attribute at index ${maatIndex} (global ID: ${globalMaatId})`);
   } else {
     // Add Maat as first attribute
     updatedAttributes = [maatAttribute, ...existingAttributes];
-    console.log(`Adding new Maat attribute at position 0`);
+    console.log(`Adding new Maat attribute at position 0 (global ID: ${globalMaatId})`);
   }
   
   // Re-assign positions to ensure proper ordering (Maat first)
@@ -950,7 +1007,7 @@ async function updateProductInWooCommerce(
 
   updateData.attributes = updatedAttributes;
   
-  console.log(`Sending ${updatedAttributes.length} attributes, Maat variation=${maatAttribute.variation}, options count=${updateSizeOptions.length}`);
+  console.log(`Sending ${updatedAttributes.length} attributes, Maat variation=${maatAttribute.variation}, options count=${updateSizeOptions.length}, global ID=${globalMaatId}`);
 
   // Update product data if there's anything to update
   if (Object.keys(updateData).length > 0) {
