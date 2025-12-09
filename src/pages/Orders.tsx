@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Download, RefreshCw } from "lucide-react";
+import { Search, Download, RefreshCw, Package } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 
@@ -90,6 +90,23 @@ const Orders = () => {
     },
   });
 
+  const importOrderLines = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke('import-order-lines', {
+        body: { tenantId: selectedTenant, limit: 100 }
+      });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`Orderregels geïmporteerd: ${data.processed} orders bijgewerkt, ${data.failed} gefaald`);
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+    },
+    onError: (error: Error) => {
+      toast.error(`Import orderregels gefaald: ${error.message}`);
+    },
+  });
+
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
       case "completed":
@@ -135,6 +152,14 @@ const Orders = () => {
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${importOrders.isPending ? 'animate-spin' : ''}`} />
             Importeer Orders
+          </Button>
+          <Button 
+            variant="outline"
+            onClick={() => importOrderLines.mutate()}
+            disabled={importOrderLines.isPending}
+          >
+            <Package className={`mr-2 h-4 w-4 ${importOrderLines.isPending ? 'animate-spin' : ''}`} />
+            Importeer Orderregels
           </Button>
         </div>
 
