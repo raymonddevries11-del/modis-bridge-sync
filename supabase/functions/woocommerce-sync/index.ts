@@ -505,7 +505,7 @@ async function createProductInWooCommerce(
     images: productImages,
     attributes: [
       {
-        name: 'Size',
+        name: 'Maat',
         position: 0,
         visible: true,
         variation: true,
@@ -654,7 +654,7 @@ async function createProductInWooCommerce(
 
   // Create variations
   if (variantsToCreate && variantsToCreate.length > 0) {
-    await createVariationsInWooCommerce(createdProduct.id, variantsToCreate, product_prices, wooConfig);
+    await createVariationsInWooCommerce(createdProduct.id, variantsToCreate, product_prices, wooConfig, sku);
   }
 }
 
@@ -662,19 +662,23 @@ async function createVariationsInWooCommerce(
   wooProductId: number,
   variants: any[],
   product_prices: any,
-  wooConfig: WooCommerceConfig
+  wooConfig: WooCommerceConfig,
+  parentSku: string
 ) {
-  console.log(`Creating ${variants.length} variations for product ${wooProductId}`);
-
+  console.log(`Creating ${variants.length} variations for product ${wooProductId} with parent SKU ${parentSku}`);
+  
   for (const variant of variants) {
+    // Build variation SKU in format: productSku-size_label (e.g., "133669005000-46 = 11")
+    const variationSku = parentSku ? `${parentSku}-${variant.size_label}` : (variant.ean || '');
+    
     const variationData: any = {
       attributes: [
         {
-          name: 'Size',
+          name: 'Maat',
           option: variant.size_label
         }
       ],
-      sku: variant.ean || '',
+      sku: variationSku,
       manage_stock: true,
       stock_quantity: variant.stock_totals?.qty || 0,
       stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
@@ -864,10 +868,10 @@ async function updateProductInWooCommerce(
     }
   }
 
-  // Update attributes
+  // Update attributes - use "Maat" for Dutch WooCommerce
   const updatedAttributes: any[] = [
     {
-      name: 'Size',
+      name: 'Maat',
       position: 0,
       visible: true,
       variation: true,
