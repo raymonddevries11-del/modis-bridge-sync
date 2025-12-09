@@ -1034,6 +1034,17 @@ async function syncVariantToWooCommerce(
   
   const dbSizeParts = extractSizeParts(variant.size_label);
   
+  // Debug: Log WooCommerce variations to understand structure
+  console.log(`Found ${wooVariations.length} WooCommerce variations for product ${wooProductId}`);
+  if (wooVariations.length > 0) {
+    const sampleAttrs = wooVariations.slice(0, 3).map((v: any) => ({
+      id: v.id,
+      sku: v.sku,
+      attributes: v.attributes?.map((a: any) => `${a.name}=${a.option}`).join(', ') || 'none'
+    }));
+    console.log(`Sample WooCommerce variation attributes: ${JSON.stringify(sampleAttrs)}`);
+  }
+  
   // Find matching variation by size attribute with multiple fallback strategies
   let matchingVariation = null;
   
