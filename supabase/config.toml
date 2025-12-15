@@ -77,3 +77,6 @@ verify_jwt = false
 
 [functions.reset-woo-stock]
 verify_jwt = false
+
+[functions.export-wpallimport-csv]
+verify_jwt = false
