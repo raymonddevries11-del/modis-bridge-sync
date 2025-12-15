@@ -74,3 +74,6 @@ verify_jwt = false
 
 [functions.update-woo-variation-skus]
 verify_jwt = false
+
+[functions.reset-woo-stock]
+verify_jwt = false
