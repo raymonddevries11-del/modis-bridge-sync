@@ -8,11 +8,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ProductDetailModal } from "@/components/ProductDetailModal";
-import { useState, useEffect } from "react";
-import { Search, RefreshCw, Calendar, Image } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Search, RefreshCw, Calendar, Image, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 const Products = () => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [brandFilter, setBrandFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
@@ -126,6 +127,55 @@ const Products = () => {
     },
   });
 
+  const updateMaatIds = useMutation({
+    mutationFn: async (xmlContent: string) => {
+      const { data, error } = await supabase.functions.invoke("update-maat-ids", {
+        body: {
+          fileName: "manual-upload.xml",
+          xmlContent,
+          tenantId: selectedTenant,
+        },
+      });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`Maat ID's bijgewerkt: ${data.results.updated} varianten geüpdatet`);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: (error: any) => {
+      toast.error(`Update mislukt: ${error.message}`);
+    },
+  });
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.xml')) {
+      toast.error('Alleen XML bestanden zijn toegestaan');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      if (content) {
+        toast.info('Maat ID update gestart...');
+        updateMaatIds.mutate(content);
+      }
+    };
+    reader.onerror = () => {
+      toast.error('Kon bestand niet lezen');
+    };
+    reader.readAsText(file);
+    
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -198,6 +248,22 @@ const Products = () => {
           >
             <RefreshCw className={`h-4 w-4 mr-2 ${syncToWooCommerce.isPending ? "animate-spin" : ""}`} />
             Sync Nieuwe Producten
+          </Button>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xml"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+          <Button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={updateMaatIds.isPending || !selectedTenant}
+            variant="secondary"
+          >
+            <Upload className={`h-4 w-4 mr-2 ${updateMaatIds.isPending ? "animate-spin" : ""}`} />
+            Update Maat IDs
           </Button>
         </div>
 

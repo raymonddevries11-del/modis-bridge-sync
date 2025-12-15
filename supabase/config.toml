@@ -68,3 +68,6 @@ verify_jwt = false
 
 [functions.incremental-sync]
 verify_jwt = false
+
+[functions.update-maat-ids]
+verify_jwt = false
