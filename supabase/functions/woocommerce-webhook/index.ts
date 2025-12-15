@@ -84,6 +84,57 @@ Deno.serve(async (req) => {
     const orderNumber = String(wooOrder.number || wooOrder.id);
     console.log(`Processing order ${orderNumber} from webhook`);
 
+    // Determine tenant from webhook source or _links
+    let tenantId: string | null = null;
+    
+    // Try to get the source URL from the order's _links or webhook header
+    const sourceUrl = req.headers.get('x-wc-webhook-source') || 
+                      wooOrder._links?.self?.[0]?.href ||
+                      '';
+    
+    console.log(`Webhook source URL: ${sourceUrl}`);
+    
+    if (sourceUrl) {
+      // Extract domain from source URL
+      try {
+        const url = new URL(sourceUrl);
+        const domain = url.hostname;
+        console.log(`Looking for tenant with domain: ${domain}`);
+        
+        // Find tenant by matching WooCommerce URL
+        const { data: tenantConfig } = await supabase
+          .from('tenant_config')
+          .select('tenant_id, woocommerce_url')
+          .single();
+        
+        if (tenantConfig) {
+          // Check if the configured WooCommerce URL matches
+          const configuredDomain = new URL(tenantConfig.woocommerce_url).hostname;
+          if (domain === configuredDomain || domain.includes(configuredDomain.replace('www.', '')) || configuredDomain.includes(domain.replace('www.', ''))) {
+            tenantId = tenantConfig.tenant_id;
+            console.log(`Matched tenant: ${tenantId}`);
+          }
+        }
+      } catch (urlError) {
+        console.error('Error parsing source URL:', urlError);
+      }
+    }
+    
+    // Fallback: get the first active tenant if only one exists
+    if (!tenantId) {
+      const { data: tenants } = await supabase
+        .from('tenants')
+        .select('id')
+        .eq('active', true);
+      
+      if (tenants && tenants.length === 1) {
+        tenantId = tenants[0].id;
+        console.log(`Using single active tenant: ${tenantId}`);
+      } else {
+        console.warn(`Could not determine tenant, found ${tenants?.length || 0} active tenants`);
+      }
+    }
+
     // Check if order already exists
     const { data: existingOrder } = await supabase
       .from('orders')
@@ -99,13 +150,14 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`Importing new order ${orderNumber}`);
+    console.log(`Importing new order ${orderNumber} for tenant ${tenantId}`);
 
     // Prepare order data
     const orderData = {
       order_number: orderNumber,
       status: wooOrder.status,
       currency: wooOrder.currency || 'EUR',
+      tenant_id: tenantId,
       customer: {
         name: `${wooOrder.billing?.first_name || ''} ${wooOrder.billing?.last_name || ''}`.trim(),
         email: wooOrder.billing?.email || '',
@@ -161,6 +213,7 @@ Deno.serve(async (req) => {
 
       orderLines.push({
         order_number: orderNumber,
+        tenant_id: tenantId,
         sku: item.sku || '',
         ean: item.meta_data?.find((m: any) => m.key === 'ean')?.value || '',
         name: item.name || '',
@@ -190,7 +243,7 @@ Deno.serve(async (req) => {
       
       try {
         const exportResponse = await supabase.functions.invoke('export-orders', {
-          body: { orderNumber }
+          body: { orderNumber, tenantId }
         });
         
         if (exportResponse.error) {
