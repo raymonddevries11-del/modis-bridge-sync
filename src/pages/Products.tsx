@@ -21,12 +21,13 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useState, useEffect, useRef } from "react";
-import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle } from "lucide-react";
+import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package } from "lucide-react";
 import { toast } from "sonner";
 
 const Products = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
+  const stockInputRef = useRef<HTMLInputElement>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [brandFilter, setBrandFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
@@ -193,6 +194,27 @@ const Products = () => {
     },
   });
 
+  const importStock = useMutation({
+    mutationFn: async (xmlContent: string) => {
+      const { data, error } = await supabase.functions.invoke("process-stock-full", {
+        body: { 
+          fileName: "manual-stock-import.xml", 
+          xmlContent, 
+          tenantId: selectedTenant 
+        },
+      });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`Voorraad geïmporteerd: ${data.results.variantsUpdated} varianten bijgewerkt, ${data.results.changedVariants} gewijzigd`);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: (error: any) => {
+      toast.error(`Import mislukt: ${error.message}`);
+    },
+  });
+
   const [resetJobId, setResetJobId] = useState<string | null>(null);
   const [resetProgress, setResetProgress] = useState<{ current: number; total: number; updated: number } | null>(null);
 
@@ -288,6 +310,33 @@ const Products = () => {
     
     if (csvInputRef.current) {
       csvInputRef.current.value = '';
+    }
+  };
+
+  const handleStockUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.xml')) {
+      toast.error('Alleen XML bestanden zijn toegestaan');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      if (content) {
+        toast.info('Voorraad import gestart... Dit kan even duren bij grote bestanden.');
+        importStock.mutate(content);
+      }
+    };
+    reader.onerror = () => {
+      toast.error('Kon bestand niet lezen');
+    };
+    reader.readAsText(file);
+    
+    if (stockInputRef.current) {
+      stockInputRef.current.value = '';
     }
   };
 
@@ -406,6 +455,22 @@ const Products = () => {
           >
             <FileSpreadsheet className={`h-4 w-4 mr-2 ${updateWooSkus.isPending ? "animate-spin" : ""}`} />
             Update WooCommerce SKUs
+          </Button>
+
+          <input
+            ref={stockInputRef}
+            type="file"
+            accept=".xml"
+            onChange={handleStockUpload}
+            className="hidden"
+          />
+          <Button
+            onClick={() => stockInputRef.current?.click()}
+            disabled={importStock.isPending || !selectedTenant}
+            variant="default"
+          >
+            <Package className={`h-4 w-4 mr-2 ${importStock.isPending ? "animate-spin" : ""}`} />
+            Import Voorraad XML
           </Button>
 
           {resetProgress ? (

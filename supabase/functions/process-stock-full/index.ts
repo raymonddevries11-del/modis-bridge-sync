@@ -92,21 +92,19 @@ serve(async (req) => {
     }
 
     // Create lookup maps for variants
-    // Key: maat_id (which is already in format SKU-size, e.g. "102619001000-40 = 6½")
+    // Key: maat_id is a 6-digit code like "011430"
     const variantMap = new Map<string, any>();
     const variantByProductId = new Map<string, any[]>();
     
     for (const v of allVariants || []) {
-      // Direct maat_id lookup (maat_id already contains SKU prefix)
-      variantMap.set(v.maat_id, v);
-      
-      // Also index by product_id for fallback matching
+      // Index by maat_id (6-digit code) within product context
+      // Also index by product_id for scoped lookup
       if (!variantByProductId.has(v.product_id)) {
         variantByProductId.set(v.product_id, []);
       }
       variantByProductId.get(v.product_id)!.push(v);
     }
-    console.log(`Loaded ${variantMap.size} variants into memory`);
+    console.log(`Loaded ${allVariants.length} variants into memory`);
 
     // STEP 3: Pre-fetch existing stock totals (batched)
     const variantIds = allVariants.map(v => v.id);
@@ -180,34 +178,16 @@ serve(async (req) => {
 
           if (!maatId) continue;
           
+          // Find variant using in-memory lookup
+          // maat_id in database is a 6-digit code like "011430" matching XML's maat id attribute
+          const productVariants = variantByProductId.get(productId);
+          let variant = productVariants?.find(v => v.maat_id === maatId);
+          
           // Debug: log first few maat lookups
           if (processedCount < 3) {
-            console.log(`DEBUG maat id from XML: "${maatId}", building key: "${sku}-${maatId}"`);
-          }
-
-          // Find variant using in-memory lookup
-          // maat_id in database is in format "SKU-size" e.g. "102619001000-40 = 6½"
-          // XML has: artikelnummer (sku) and maat id (size part)
-          // Build lookup key: SKU-maatId
-          const exactKey = `${sku}-${maatId}`;
-          let variant = variantMap.get(exactKey);
-
-          if (!variant) {
-            // Try fallback: search variants of this product by partial maat_id match
-            const productVariants = variantByProductId.get(productId);
-            if (productVariants) {
-              // Look for variant where maat_id ends with the maatId from XML
-              // or contains the maatId (handles different size label formats)
-              variant = productVariants.find(v => 
-                v.maat_id === `${sku}-${maatId}` ||
-                v.maat_id.endsWith(`-${maatId}`) ||
-                v.maat_id.includes(maatId)
-              );
-              
-              // Debug
-              if (processedCount < 3 && !variant) {
-                console.log(`DEBUG: No variant match for maatId "${maatId}". Variants: ${productVariants.map(v => v.maat_id).join(', ')}`);
-              }
+            console.log(`DEBUG SKU ${sku}: looking for maat_id "${maatId}", found: ${variant ? 'YES' : 'NO'}`);
+            if (!variant && productVariants) {
+              console.log(`DEBUG: Available maat_ids: ${productVariants.map(v => v.maat_id).join(', ')}`);
             }
           }
 
