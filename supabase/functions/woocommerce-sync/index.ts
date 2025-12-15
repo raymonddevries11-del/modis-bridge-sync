@@ -831,6 +831,93 @@ async function createVariationsInWooCommerce(
   }
 }
 
+// Create a single missing variation in WooCommerce
+async function createMissingVariation(
+  wooProductId: number,
+  variant: any,
+  product_prices: any,
+  wooConfig: WooCommerceConfig,
+  parentSku?: string,
+  supabase?: any,
+  tenantId?: string,
+  productTitle?: string
+): Promise<any | null> {
+  // Build variation SKU in format: productSku-maat_id (e.g., "101069102000-071041")
+  const variationSku = parentSku && variant.maat_id ? `${parentSku}-${variant.maat_id}` : (variant.ean || '');
+  
+  const variationData: any = {
+    attributes: [
+      {
+        name: 'Maat',
+        option: variant.size_label
+      }
+    ],
+    sku: variationSku,
+    manage_stock: true,
+    stock_quantity: variant.stock_totals?.qty || 0,
+    stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
+  };
+
+  // Set prices on the variation
+  if (product_prices?.regular) {
+    variationData.regular_price = product_prices.regular.toString();
+  }
+  if (product_prices?.list) {
+    variationData.sale_price = product_prices.list.toString();
+  }
+
+  // Add EAN to meta_data
+  if (variant.ean) {
+    variationData.meta_data = [
+      { key: 'ean', value: variant.ean }
+    ];
+  }
+
+  const createVariationUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
+  createVariationUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  createVariationUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+  try {
+    const createResponse = await fetchWithRetry(createVariationUrl.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(variationData),
+    });
+
+    if (!createResponse.ok) {
+      const errorText = await createResponse.text();
+      console.error(`Failed to create missing variation ${variant.size_label}: ${errorText}`);
+      return null;
+    }
+
+    const createdVariation = await createResponse.json();
+    
+    // Log to changelog
+    if (supabase && tenantId) {
+      await logChangeToChangelog(
+        supabase,
+        tenantId,
+        'WOO_VARIANT_CREATED',
+        `Ontbrekende variatie aangemaakt in WooCommerce: ${productTitle || parentSku} - Maat ${variant.size_label}`,
+        {
+          wooProductId: wooProductId,
+          wooVariationId: createdVariation.id,
+          sku: variationSku,
+          size_label: variant.size_label,
+          stock_quantity: variant.stock_totals?.qty || 0
+        }
+      );
+    }
+    
+    return createdVariation;
+  } catch (error) {
+    console.error(`Error creating missing variation ${variant.size_label}:`, error);
+    return null;
+  }
+}
+
 async function updateProductInWooCommerce(
   wooProductId: number,
   product: any,
@@ -1377,7 +1464,23 @@ async function syncVariantToWooCommerce(
   }
 
   if (!matchingVariation) {
-    console.log(`No matching WooCommerce variation found for size ${variant.size_label} (tried: ${dbSizeParts.join(', ')}, expected SKU: ${expectedFullSku})`);
+    console.log(`No matching WooCommerce variation found for size ${variant.size_label}, creating new variation...`);
+    
+    // Create missing variation in WooCommerce
+    const createdVariation = await createMissingVariation(
+      wooProductId,
+      variant,
+      product_prices,
+      wooConfig,
+      productSku,
+      supabase,
+      tenantId,
+      productTitle
+    );
+    
+    if (createdVariation) {
+      console.log(`Created missing variation ${variant.size_label} with ID ${createdVariation.id}`);
+    }
     return;
   }
 
