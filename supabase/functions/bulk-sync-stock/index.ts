@@ -5,11 +5,18 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-interface StockUpdate {
+interface WooProduct {
   id: number;
+  sku: string;
+  type: string;
   stock_quantity: number;
-  stock_status: string;
-  manage_stock: boolean;
+}
+
+interface WooVariation {
+  id: number;
+  sku: string;
+  stock_quantity: number;
+  parent_id: number;
 }
 
 Deno.serve(async (req) => {
@@ -29,7 +36,7 @@ Deno.serve(async (req) => {
       throw new Error('tenantId is required');
     }
 
-    console.log(`Starting bulk stock sync for tenant ${tenantId}, dryRun=${dryRun}, productIds=${productIds?.length || 'all'}`);
+    console.log(`Starting optimized bulk stock sync for tenant ${tenantId}, dryRun=${dryRun}`);
 
     // Get tenant config
     const { data: tenantConfig, error: configError } = await supabase
@@ -42,7 +49,76 @@ Deno.serve(async (req) => {
       throw new Error(`Failed to get tenant config: ${configError?.message}`);
     }
 
-    // Build product query - if no productIds specified, get all
+    // STEP 1: Fetch ALL WooCommerce products with pagination (build SKU map)
+    console.log('Fetching all WooCommerce products...');
+    const wooProductMap = new Map<string, WooProduct>();
+    const wooVariationMap = new Map<string, WooVariation>();
+    let page = 1;
+    const perPage = 100;
+
+    while (true) {
+      const url = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products`);
+      url.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
+      url.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
+      url.searchParams.append('per_page', String(perPage));
+      url.searchParams.append('page', String(page));
+
+      const response = await fetch(url.toString());
+      if (!response.ok) {
+        throw new Error(`Failed to fetch WooCommerce products page ${page}: ${response.status}`);
+      }
+
+      const products: WooProduct[] = await response.json();
+      console.log(`Fetched page ${page}: ${products.length} products`);
+
+      for (const product of products) {
+        if (product.sku) {
+          wooProductMap.set(product.sku, product);
+        }
+      }
+
+      if (products.length < perPage) break;
+      page++;
+    }
+
+    console.log(`Total WooCommerce products indexed: ${wooProductMap.size}`);
+
+    // STEP 2: Fetch ALL WooCommerce variations (for variable products)
+    const variableProducts = Array.from(wooProductMap.values()).filter(p => p.type === 'variable');
+    console.log(`Fetching variations for ${variableProducts.length} variable products...`);
+
+    // Batch fetch variations - process in chunks to avoid timeouts
+    const VARIATION_BATCH_SIZE = 10;
+    for (let i = 0; i < variableProducts.length; i += VARIATION_BATCH_SIZE) {
+      const batch = variableProducts.slice(i, i + VARIATION_BATCH_SIZE);
+      
+      await Promise.all(batch.map(async (product) => {
+        try {
+          const varUrl = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products/${product.id}/variations`);
+          varUrl.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
+          varUrl.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
+          varUrl.searchParams.append('per_page', '100');
+
+          const varResponse = await fetch(varUrl.toString());
+          if (varResponse.ok) {
+            const variations: WooVariation[] = await varResponse.json();
+            for (const variation of variations) {
+              if (variation.sku) {
+                wooVariationMap.set(variation.sku, { ...variation, parent_id: product.id });
+              }
+            }
+          }
+        } catch (e) {
+          console.error(`Failed to fetch variations for product ${product.id}`);
+        }
+      }));
+      
+      console.log(`Fetched variations batch ${Math.floor(i / VARIATION_BATCH_SIZE) + 1}/${Math.ceil(variableProducts.length / VARIATION_BATCH_SIZE)}`);
+    }
+
+    console.log(`Total WooCommerce variations indexed: ${wooVariationMap.size}`);
+
+    // STEP 3: Fetch Supabase products with stock
     let query = supabase
       .from('products')
       .select(`
@@ -60,8 +136,6 @@ Deno.serve(async (req) => {
 
     if (productIds && productIds.length > 0) {
       query = query.in('id', productIds);
-    } else {
-      query = query.limit(100); // Limit for safety when no productIds specified
     }
 
     const { data: products, error: productsError } = await query;
@@ -70,176 +144,152 @@ Deno.serve(async (req) => {
       throw new Error(`Failed to fetch products: ${productsError.message}`);
     }
 
-    console.log(`Found ${products?.length || 0} products to sync`);
+    console.log(`Found ${products?.length || 0} Supabase products to sync`);
 
-    if (!products || products.length === 0) {
-      return new Response(
-        JSON.stringify({ success: true, message: 'No products to sync', updated: 0 }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    // STEP 4: Build batch updates
+    const simpleProductUpdates: { id: number; stock_quantity: number; stock_status: string; manage_stock: boolean }[] = [];
+    const variationUpdatesByParent = new Map<number, { id: number; stock_quantity: number; stock_status: string; manage_stock: boolean }[]>();
+    const updateLog: { sku: string; oldStock: number; newStock: number }[] = [];
+
+    for (const product of products || []) {
+      const wooProduct = wooProductMap.get(product.sku);
+      if (!wooProduct) continue;
+
+      if (wooProduct.type === 'simple') {
+        // Calculate total stock
+        let totalStock = 0;
+        for (const variant of product.variants || []) {
+          const stockTotals = variant.stock_totals as { qty: number }[] | null;
+          totalStock += stockTotals?.[0]?.qty ?? 0;
+        }
+
+        const oldStock = wooProduct.stock_quantity || 0;
+        if (oldStock !== totalStock) {
+          simpleProductUpdates.push({
+            id: wooProduct.id,
+            stock_quantity: totalStock,
+            stock_status: totalStock > 0 ? 'instock' : 'outofstock',
+            manage_stock: true,
+          });
+          updateLog.push({ sku: product.sku, oldStock, newStock: totalStock });
+        }
+      } else if (wooProduct.type === 'variable') {
+        for (const variant of product.variants || []) {
+          const variantSku = `${product.sku}-${variant.maat_id}`;
+          const wooVariation = wooVariationMap.get(variantSku);
+          
+          if (wooVariation) {
+            const stockTotals = variant.stock_totals as { qty: number }[] | null;
+            const newStock = stockTotals?.[0]?.qty ?? 0;
+            const oldStock = wooVariation.stock_quantity || 0;
+
+            if (oldStock !== newStock) {
+              if (!variationUpdatesByParent.has(wooVariation.parent_id)) {
+                variationUpdatesByParent.set(wooVariation.parent_id, []);
+              }
+              variationUpdatesByParent.get(wooVariation.parent_id)!.push({
+                id: wooVariation.id,
+                stock_quantity: newStock,
+                stock_status: newStock > 0 ? 'instock' : 'outofstock',
+                manage_stock: true,
+              });
+              updateLog.push({ sku: variantSku, oldStock, newStock });
+            }
+          }
+        }
+      }
     }
 
+    console.log(`Prepared ${simpleProductUpdates.length} simple product updates, ${variationUpdatesByParent.size} parent products with variation updates`);
+
     const stats = {
-      productsLookedUp: 0,
-      productsFound: 0,
       simpleProductsUpdated: 0,
       variationsUpdated: 0,
       errors: 0,
     };
     const errorDetails: string[] = [];
-    const updates: { sku: string; oldStock: number; newStock: number }[] = [];
 
-    // Process each product - look up by SKU in WooCommerce
-    for (const product of products) {
-      try {
-        stats.productsLookedUp++;
-        
-        // Look up product by SKU in WooCommerce
-        const searchUrl = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products`);
-        searchUrl.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
-        searchUrl.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
-        searchUrl.searchParams.append('sku', product.sku);
-
-        const searchResponse = await fetch(searchUrl.toString());
-        if (!searchResponse.ok) {
-          errorDetails.push(`Failed to search for SKU ${product.sku}: ${searchResponse.status}`);
-          stats.errors++;
-          continue;
-        }
-
-        const wooProducts = await searchResponse.json();
-        if (!wooProducts || wooProducts.length === 0) {
-          console.log(`Product ${product.sku} not found in WooCommerce`);
-          continue;
-        }
-
-        const wooProduct = wooProducts[0];
-        stats.productsFound++;
-
-        // Handle simple products (accessories without variants)
-        if (wooProduct.type === 'simple') {
-          // Calculate total stock from variants or default to 0
-          let totalStock = 0;
-          if (product.variants && product.variants.length > 0) {
-            for (const variant of product.variants) {
-              const stockTotals = variant.stock_totals as { qty: number }[] | null;
-              totalStock += stockTotals?.[0]?.qty ?? 0;
-            }
-          }
-
-          const oldStock = wooProduct.stock_quantity || 0;
+    if (!dryRun) {
+      // STEP 5: Execute batch update for simple products (100 per batch)
+      if (simpleProductUpdates.length > 0) {
+        const BATCH_SIZE = 100;
+        for (let i = 0; i < simpleProductUpdates.length; i += BATCH_SIZE) {
+          const batch = simpleProductUpdates.slice(i, i + BATCH_SIZE);
           
-          if (!dryRun && oldStock !== totalStock) {
-            const updateUrl = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products/${wooProduct.id}`);
-            updateUrl.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
-            updateUrl.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
+          const batchUrl = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products/batch`);
+          batchUrl.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
+          batchUrl.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
 
-            const updateResponse = await fetch(updateUrl.toString(), {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                stock_quantity: totalStock,
-                stock_status: totalStock > 0 ? 'instock' : 'outofstock',
-                manage_stock: true,
-              }),
-            });
-
-            if (updateResponse.ok) {
-              stats.simpleProductsUpdated++;
-              updates.push({ sku: product.sku, oldStock, newStock: totalStock });
-            } else {
-              errorDetails.push(`Failed to update ${product.sku}: ${await updateResponse.text()}`);
-              stats.errors++;
-            }
-          } else if (dryRun && oldStock !== totalStock) {
-            updates.push({ sku: product.sku, oldStock, newStock: totalStock });
-          }
-        }
-        // Handle variable products
-        else if (wooProduct.type === 'variable' && product.variants && product.variants.length > 0) {
-          // Fetch variations
-          const varUrl = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products/${wooProduct.id}/variations`);
-          varUrl.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
-          varUrl.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
-          varUrl.searchParams.append('per_page', '100');
-
-          const varResponse = await fetch(varUrl.toString());
-          if (!varResponse.ok) {
-            errorDetails.push(`Failed to fetch variations for ${product.sku}`);
-            stats.errors++;
-            continue;
-          }
-
-          const wooVariations = await varResponse.json();
-          
-          // Build batch update for variations
-          const variationUpdates: StockUpdate[] = [];
-
-          for (const variant of product.variants) {
-            const stockTotals = variant.stock_totals as { qty: number }[] | null;
-            const newStock = stockTotals?.[0]?.qty ?? 0;
-            const variantSku = `${product.sku}-${variant.maat_id}`;
-
-            // Find matching WooCommerce variation by SKU
-            const wooVariation = wooVariations.find((v: any) => v.sku === variantSku);
-            
-            if (wooVariation) {
-              const oldStock = wooVariation.stock_quantity || 0;
-              if (oldStock !== newStock) {
-                variationUpdates.push({
-                  id: wooVariation.id,
-                  stock_quantity: newStock,
-                  stock_status: newStock > 0 ? 'instock' : 'outofstock',
-                  manage_stock: true,
-                });
-                updates.push({ sku: variantSku, oldStock, newStock });
-              }
-            }
-          }
-
-          // Execute batch update for variations
-          if (!dryRun && variationUpdates.length > 0) {
-            const batchUrl = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products/${wooProduct.id}/variations/batch`);
-            batchUrl.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
-            batchUrl.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
-
+          try {
             const batchResponse = await fetch(batchUrl.toString(), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ update: variationUpdates }),
+              body: JSON.stringify({ update: batch }),
+            });
+
+            if (batchResponse.ok) {
+              const result = await batchResponse.json();
+              stats.simpleProductsUpdated += result.update?.length || 0;
+              console.log(`Simple products batch ${Math.floor(i / BATCH_SIZE) + 1}: updated ${result.update?.length || 0}`);
+            } else {
+              const errorText = await batchResponse.text();
+              errorDetails.push(`Simple products batch failed: ${errorText.substring(0, 200)}`);
+              stats.errors++;
+            }
+          } catch (e) {
+            errorDetails.push(`Simple products batch error: ${e instanceof Error ? e.message : String(e)}`);
+            stats.errors++;
+          }
+        }
+      }
+
+      // STEP 6: Execute batch updates for variations (per parent product)
+      const parentIds = Array.from(variationUpdatesByParent.keys());
+      console.log(`Processing variation updates for ${parentIds.length} parent products...`);
+      
+      // Process in parallel batches of 5 parent products
+      const PARALLEL_BATCH = 5;
+      for (let i = 0; i < parentIds.length; i += PARALLEL_BATCH) {
+        const batchParentIds = parentIds.slice(i, i + PARALLEL_BATCH);
+        
+        await Promise.all(batchParentIds.map(async (parentId) => {
+          const updates = variationUpdatesByParent.get(parentId)!;
+          
+          const batchUrl = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products/${parentId}/variations/batch`);
+          batchUrl.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
+          batchUrl.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
+
+          try {
+            const batchResponse = await fetch(batchUrl.toString(), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ update: updates }),
             });
 
             if (batchResponse.ok) {
               const result = await batchResponse.json();
               stats.variationsUpdated += result.update?.length || 0;
-              console.log(`Updated ${result.update?.length || 0} variations for ${product.sku}`);
             } else {
-              errorDetails.push(`Batch update failed for ${product.sku}: ${await batchResponse.text()}`);
               stats.errors++;
             }
-          } else if (dryRun) {
-            stats.variationsUpdated += variationUpdates.length;
+          } catch (e) {
+            stats.errors++;
           }
-        }
-
-        // Small delay between products to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-      } catch (productError) {
-        const errorMsg = productError instanceof Error ? productError.message : String(productError);
-        errorDetails.push(`Error processing ${product.sku}: ${errorMsg}`);
-        stats.errors++;
+        }));
+        
+        console.log(`Variation batch ${Math.floor(i / PARALLEL_BATCH) + 1}/${Math.ceil(parentIds.length / PARALLEL_BATCH)} complete`);
       }
-    }
 
-    // Log to changelog if not dry run
-    if (!dryRun) {
+      // Log to changelog
       await supabase.from('changelog').insert({
         tenant_id: tenantId,
         event_type: 'BULK_STOCK_SYNC',
         description: `Bulk stock sync: ${stats.simpleProductsUpdated} simple products, ${stats.variationsUpdated} variations bijgewerkt`,
-        metadata: { stats, updates: updates.slice(0, 50) },
+        metadata: { stats, updates: updateLog.slice(0, 50) },
       });
+    } else {
+      stats.simpleProductsUpdated = simpleProductUpdates.length;
+      stats.variationsUpdated = Array.from(variationUpdatesByParent.values()).reduce((sum, arr) => sum + arr.length, 0);
     }
 
     console.log(`Bulk sync complete: ${JSON.stringify(stats)}`);
@@ -249,7 +299,8 @@ Deno.serve(async (req) => {
         success: true,
         dryRun,
         stats,
-        updates: updates.slice(0, 100),
+        pendingUpdates: updateLog.length,
+        updates: updateLog.slice(0, 100),
         errors: errorDetails.slice(0, 20),
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
