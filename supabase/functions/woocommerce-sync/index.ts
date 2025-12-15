@@ -1390,6 +1390,16 @@ async function syncVariantToWooCommerce(
     stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
   };
 
+  // Update variation SKU to new format: {productSku}-{maat_id}
+  // Only update if maat_id is a 6-digit code and SKU differs
+  if (expectedFullSku && variant.maat_id && variant.maat_id.length === 6) {
+    const currentWooSku = matchingVariation.sku || '';
+    if (currentWooSku !== expectedFullSku) {
+      updateData.sku = expectedFullSku;
+      console.log(`Updating variation SKU: "${currentWooSku}" → "${expectedFullSku}"`);
+    }
+  }
+
   // ALWAYS set the Maat attribute on variations using the SLUG format
   // WooCommerce requires 'pa_maat' slug for global attributes on variations
   // This ensures proper linking to attribute terms for filtering
