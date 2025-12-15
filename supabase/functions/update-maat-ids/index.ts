@@ -8,9 +8,230 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Process CSV data format: array of { productSku, maatId, sizeLabel }
+// Process WooCommerce export CSV format
+// Columns: Mds-artnr (product SKU), Mds-art-maatbalk-maat (e.g., "101069102000-071041"), etc.
+async function processWooCommerceCsv(csvContent: string, tenantId: string, supabase: any): Promise<Response> {
+  console.log(`Processing WooCommerce CSV for maat_id extraction`);
+
+  // Parse CSV - detect delimiter (semicolon for WooCommerce export)
+  const lines = csvContent.trim().split('\n');
+  if (lines.length < 2) {
+    return new Response(
+      JSON.stringify({ error: 'CSV has no data rows' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
+  const delimiter = lines[0].includes(';') ? ';' : ',';
+  const headers = lines[0].split(delimiter).map(h => h.replace(/"/g, '').trim());
+  
+  // Find required columns
+  const maatbalkMaatIndex = headers.findIndex(h => h.toLowerCase().includes('mds-art-maatbalk-maat'));
+  const skuIndex = headers.findIndex(h => h.toLowerCase() === 'sku');
+  const typeIndex = headers.findIndex(h => h.toLowerCase() === 'type');
+
+  console.log(`Found columns - Mds-art-maatbalk-maat: ${maatbalkMaatIndex}, SKU: ${skuIndex}, Type: ${typeIndex}`);
+
+  if (maatbalkMaatIndex === -1) {
+    return new Response(
+      JSON.stringify({ error: 'CSV missing required column: Mds-art-maatbalk-maat' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
+  // Parse data rows - only process variations
+  const updates: { productSku: string; maatId: string; sizeLabel: string; wooSku: string }[] = [];
+  
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(delimiter).map(v => v.replace(/"/g, '').trim());
+    
+    // Only process variation rows
+    const type = typeIndex >= 0 ? values[typeIndex] : '';
+    if (type !== 'variation') continue;
+
+    const maatbalkMaat = values[maatbalkMaatIndex]; // e.g., "101069102000-071041"
+    const wooSku = skuIndex >= 0 ? values[skuIndex] : ''; // e.g., "101069102000-41" or "101069102000-42 = 8"
+
+    if (!maatbalkMaat || !maatbalkMaat.includes('-')) continue;
+
+    // Extract product SKU and 6-digit maat_id from Mds-art-maatbalk-maat
+    const parts = maatbalkMaat.split('-');
+    if (parts.length < 2) continue;
+
+    const productSku = parts[0]; // "101069102000"
+    const maatId = parts[1]; // "071041" (6-digit code)
+
+    if (!maatId || maatId.length !== 6 || !/^\d+$/.test(maatId)) {
+      console.log(`Skipping invalid maat_id: ${maatId} for ${maatbalkMaat}`);
+      continue;
+    }
+
+    // Extract size label from WooCommerce SKU (e.g., "101069102000-42 = 8" -> "42 = 8")
+    let sizeLabel = '';
+    if (wooSku && wooSku.includes('-')) {
+      sizeLabel = wooSku.substring(wooSku.indexOf('-') + 1); // "42 = 8" or "41"
+    }
+
+    updates.push({ productSku, maatId, sizeLabel, wooSku });
+  }
+
+  console.log(`Parsed ${updates.length} variation rows from CSV`);
+
+  // Fetch all products to get product IDs
+  const { data: products } = await supabase
+    .from('products')
+    .select('id, sku')
+    .eq('tenant_id', tenantId);
+
+  const productMap = new Map<string, string>();
+  for (const p of products || []) {
+    productMap.set(p.sku, p.id);
+  }
+  console.log(`Loaded ${productMap.size} products`);
+
+  // Fetch all variants
+  const productIds = Array.from(productMap.values());
+  const allVariants: any[] = [];
+  const FETCH_BATCH_SIZE = 100;
+
+  for (let i = 0; i < productIds.length; i += FETCH_BATCH_SIZE) {
+    const batch = productIds.slice(i, i + FETCH_BATCH_SIZE);
+    const { data: variants } = await supabase
+      .from('variants')
+      .select('id, product_id, maat_id, size_label')
+      .in('product_id', batch);
+    if (variants) allVariants.push(...variants);
+  }
+
+  console.log(`Loaded ${allVariants.length} variants`);
+
+  // Create lookup: product_id -> variants array
+  const variantsByProduct = new Map<string, any[]>();
+  for (const v of allVariants) {
+    if (!variantsByProduct.has(v.product_id)) {
+      variantsByProduct.set(v.product_id, []);
+    }
+    variantsByProduct.get(v.product_id)!.push(v);
+  }
+
+  // Match and update
+  let updated = 0;
+  let notFound = 0;
+  let skipped = 0;
+  const updateBatches: { id: string; maat_id: string }[] = [];
+
+  for (const row of updates) {
+    const productId = productMap.get(row.productSku);
+    if (!productId) {
+      notFound++;
+      continue;
+    }
+
+    const variants = variantsByProduct.get(productId);
+    if (!variants || variants.length === 0) {
+      notFound++;
+      continue;
+    }
+
+    // Find matching variant by size_label
+    let matchedVariant = null;
+
+    // Strategy 1: Exact match on size_label
+    matchedVariant = variants.find(v => v.size_label === row.sizeLabel);
+
+    // Strategy 2: Match by extracting size from old maat_id format
+    if (!matchedVariant) {
+      matchedVariant = variants.find(v => {
+        if (!v.maat_id || !v.maat_id.includes('-')) return false;
+        const sizePart = v.maat_id.substring(v.maat_id.indexOf('-') + 1);
+        return sizePart === row.sizeLabel;
+      });
+    }
+
+    // Strategy 3: Partial match - size_label starts with or contains the base size
+    if (!matchedVariant && row.sizeLabel) {
+      const baseSize = row.sizeLabel.split(' ')[0].split('=')[0].trim();
+      matchedVariant = variants.find(v => 
+        v.size_label === baseSize || 
+        v.size_label.startsWith(baseSize + ' ') ||
+        v.size_label.startsWith(baseSize + '=')
+      );
+    }
+
+    if (matchedVariant) {
+      if (matchedVariant.maat_id !== row.maatId) {
+        updateBatches.push({ id: matchedVariant.id, maat_id: row.maatId });
+      } else {
+        skipped++;
+      }
+    } else {
+      notFound++;
+      if (notFound <= 20) {
+        console.log(`No match for ${row.productSku}, sizeLabel: "${row.sizeLabel}"`);
+      }
+    }
+  }
+
+  console.log(`Matched: ${updateBatches.length} to update, ${skipped} already correct, ${notFound} not found`);
+
+  // Execute batch updates
+  const UPDATE_BATCH_SIZE = 100;
+  for (let i = 0; i < updateBatches.length; i += UPDATE_BATCH_SIZE) {
+    const batch = updateBatches.slice(i, i + UPDATE_BATCH_SIZE);
+    
+    const results = await Promise.allSettled(
+      batch.map(({ id, maat_id }) =>
+        supabase
+          .from('variants')
+          .update({ maat_id, updated_at: new Date().toISOString() })
+          .eq('id', id)
+      )
+    );
+
+    for (const result of results) {
+      if (result.status === 'fulfilled' && !result.value.error) {
+        updated++;
+      }
+    }
+
+    console.log(`Batch ${Math.floor(i / UPDATE_BATCH_SIZE) + 1}: ${updated} updated so far`);
+  }
+
+  console.log(`Completed: ${updated} updated, ${skipped} skipped (already correct), ${notFound} not found`);
+
+  // Add changelog entry
+  if (tenantId) {
+    await supabase.from('changelog').insert({
+      tenant_id: tenantId,
+      event_type: 'MAAT_ID_UPDATE',
+      description: `Maat ID's bijgewerkt uit WooCommerce CSV: ${updated} varianten geüpdatet`,
+      metadata: {
+        source: 'woocommerce-csv',
+        totalRows: updates.length,
+        updated,
+        skipped,
+        notFound
+      }
+    });
+  }
+
+  return new Response(
+    JSON.stringify({
+      success: true,
+      results: {
+        totalRows: updates.length,
+        updated,
+        skipped,
+        notFound
+      }
+    }),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
+
+// Process legacy CSV data format: array of { productSku, maatId, sizeLabel }
 async function processCsvData(csvData: any[], tenantId: string, supabase: any): Promise<Response> {
-  console.log(`Processing ${csvData.length} rows from CSV`);
+  console.log(`Processing ${csvData.length} rows from CSV array`);
 
   let updated = 0;
   let notFound = 0;
@@ -117,17 +338,21 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { fileName, xmlContent, tenantId, csvData } = body;
+    const { fileName, xmlContent, tenantId, csvData, csvContent } = body;
     
-    // Support both XML and CSV formats
+    // Support WooCommerce CSV export format (raw CSV string)
+    if (csvContent && typeof csvContent === 'string') {
+      return await processWooCommerceCsv(csvContent, tenantId, supabase);
+    }
+    
+    // Support legacy CSV format: array of { productSku, maatId, sizeLabel }
     if (csvData && Array.isArray(csvData)) {
-      // CSV format: array of { productSku, maatId, sizeLabel }
       return await processCsvData(csvData, tenantId, supabase);
     }
     
     if (!fileName || !xmlContent) {
       return new Response(
-        JSON.stringify({ error: 'Missing fileName or xmlContent, or csvData array' }),
+        JSON.stringify({ error: 'Missing fileName, xmlContent, csvContent, or csvData array' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
