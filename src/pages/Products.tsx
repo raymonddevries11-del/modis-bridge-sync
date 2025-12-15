@@ -141,13 +141,11 @@ const Products = () => {
   });
 
   const updateMaatIds = useMutation({
-    mutationFn: async (xmlContent: string) => {
+    mutationFn: async ({ content, isXml }: { content: string; isXml: boolean }) => {
       const { data, error } = await supabase.functions.invoke("update-maat-ids", {
-        body: {
-          fileName: "manual-upload.xml",
-          xmlContent,
-          tenantId: selectedTenant,
-        },
+        body: isXml
+          ? { fileName: "manual-upload.xml", xmlContent: content, tenantId: selectedTenant }
+          : { csvContent: content, tenantId: selectedTenant },
       });
       if (error) throw error;
       return data;
@@ -221,8 +219,12 @@ const Products = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.toLowerCase().endsWith('.xml')) {
-      toast.error('Alleen XML bestanden zijn toegestaan');
+    const fileName = file.name.toLowerCase();
+    const isXml = fileName.endsWith('.xml');
+    const isCsv = fileName.endsWith('.csv');
+
+    if (!isXml && !isCsv) {
+      toast.error('Alleen XML of CSV bestanden zijn toegestaan');
       return;
     }
 
@@ -231,7 +233,7 @@ const Products = () => {
       const content = e.target?.result as string;
       if (content) {
         toast.info('Maat ID update gestart...');
-        updateMaatIds.mutate(content);
+        updateMaatIds.mutate({ content, isXml });
       }
     };
     reader.onerror = () => {
@@ -348,7 +350,7 @@ const Products = () => {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".xml"
+            accept=".xml,.csv"
             onChange={handleFileUpload}
             className="hidden"
           />
