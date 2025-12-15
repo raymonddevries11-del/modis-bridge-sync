@@ -83,3 +83,6 @@ verify_jwt = false
 
 [functions.fix-woo-variation-skus]
 verify_jwt = false
+
+[functions.bulk-sync-stock]
+verify_jwt = false
