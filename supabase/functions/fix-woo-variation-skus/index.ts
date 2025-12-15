@@ -58,13 +58,13 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json().catch(() => ({}));
-    const { tenantId, dryRun = false, limit = 50, productSku } = body;
+    const { tenantId, dryRun = false, limit = 20, offset = 0, productSku } = body;
 
     if (!tenantId) {
       throw new Error('tenantId is required');
     }
 
-    console.log(`Starting WooCommerce variation SKU fix for tenant ${tenantId}, dryRun=${dryRun}, limit=${limit}, productSku=${productSku || 'all'}`);
+    console.log(`Starting WooCommerce variation SKU fix for tenant ${tenantId}, dryRun=${dryRun}, limit=${limit}, offset=${offset}, productSku=${productSku || 'all'}`);
 
     // Get tenant config
     const { data: tenantConfig, error: configError } = await supabase
@@ -103,7 +103,7 @@ Deno.serve(async (req) => {
       query = query.eq('sku', productSku);
     }
     
-    const { data: products, error: productsError } = await query.limit(limit);
+    const { data: products, error: productsError } = await query.range(offset, offset + limit - 1);
 
     if (productsError) {
       throw new Error(`Failed to fetch products: ${productsError.message}`);
@@ -262,12 +262,12 @@ Deno.serve(async (req) => {
             }
 
             // Rate limit: wait between updates
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, 200));
           }
         }
 
         // Wait between products to avoid overwhelming WooCommerce
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 300));
 
       } catch (productError) {
         const errorMsg = productError instanceof Error ? productError.message : String(productError);
@@ -286,6 +286,7 @@ Deno.serve(async (req) => {
         stats,
         dryRun,
         limit,
+        offset,
         productsProcessed: products.length,
         sampleUpdates: updatedSkus.slice(0, 20),
         errors: errorDetails.slice(0, 10)
@@ -297,6 +298,8 @@ Deno.serve(async (req) => {
         success: true,
         dryRun,
         stats,
+        offset,
+        nextOffset: offset + limit,
         productsProcessed: products.length,
         sampleUpdates: updatedSkus.slice(0, 50),
         errors: errorDetails.slice(0, 20)
