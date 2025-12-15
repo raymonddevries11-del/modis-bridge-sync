@@ -122,7 +122,11 @@ const VariantStockCard = ({ variant, tenantId }: VariantStockCardProps) => {
           </div>
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid grid-cols-4 gap-4 text-sm">
+      <CardContent className="grid grid-cols-5 gap-4 text-sm">
+        <div>
+          <span className="text-muted-foreground">Maat ID:</span>
+          <p className="font-mono text-xs">{variant.maat_id || "N/A"}</p>
+        </div>
         <div>
           <span className="text-muted-foreground">EAN:</span>
           <p className="font-mono">{variant.ean || "N/A"}</p>
