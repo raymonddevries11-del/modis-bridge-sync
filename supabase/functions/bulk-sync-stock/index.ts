@@ -30,13 +30,13 @@ Deno.serve(async (req) => {
   );
 
   try {
-    const { tenantId, productIds, dryRun = false } = await req.json();
+    const { tenantId, offset = 0, limit = 500, dryRun = false } = await req.json();
 
     if (!tenantId) {
       throw new Error('tenantId is required');
     }
 
-    console.log(`Starting optimized bulk stock sync for tenant ${tenantId}, dryRun=${dryRun}`);
+    console.log(`Bulk stock sync - tenant: ${tenantId}, offset: ${offset}, limit: ${limit}, dryRun: ${dryRun}`);
 
     // Get tenant config
     const { data: tenantConfig, error: configError } = await supabase
@@ -49,48 +49,94 @@ Deno.serve(async (req) => {
       throw new Error(`Failed to get tenant config: ${configError?.message}`);
     }
 
-    // STEP 1: Fetch ALL WooCommerce products with pagination (build SKU map)
-    console.log('Fetching all WooCommerce products...');
-    const wooProductMap = new Map<string, WooProduct>();
-    const wooVariationMap = new Map<string, WooVariation>();
-    let page = 1;
-    const perPage = 100;
+    // STEP 1: Fetch Supabase products with pagination
+    const { data: products, error: productsError, count } = await supabase
+      .from('products')
+      .select(`
+        id,
+        sku,
+        title,
+        variants (
+          id,
+          maat_id,
+          size_label,
+          stock_totals (qty)
+        )
+      `, { count: 'exact' })
+      .eq('tenant_id', tenantId)
+      .range(offset, offset + limit - 1)
+      .order('created_at', { ascending: true });
 
-    while (true) {
-      const url = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products`);
-      url.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
-      url.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
-      url.searchParams.append('per_page', String(perPage));
-      url.searchParams.append('page', String(page));
-
-      const response = await fetch(url.toString());
-      if (!response.ok) {
-        throw new Error(`Failed to fetch WooCommerce products page ${page}: ${response.status}`);
-      }
-
-      const products: WooProduct[] = await response.json();
-      console.log(`Fetched page ${page}: ${products.length} products`);
-
-      for (const product of products) {
-        if (product.sku) {
-          wooProductMap.set(product.sku, product);
-        }
-      }
-
-      if (products.length < perPage) break;
-      page++;
+    if (productsError) {
+      throw new Error(`Failed to fetch products: ${productsError.message}`);
     }
 
-    console.log(`Total WooCommerce products indexed: ${wooProductMap.size}`);
+    const totalProducts = count || 0;
+    const hasMore = offset + limit < totalProducts;
+    const nextOffset = hasMore ? offset + limit : null;
 
-    // STEP 2: Fetch ALL WooCommerce variations (for variable products)
+    console.log(`Fetched ${products?.length || 0} products (offset: ${offset}, total: ${totalProducts}, hasMore: ${hasMore})`);
+
+    if (!products || products.length === 0) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: 'No products to process',
+          offset,
+          nextOffset: null,
+          hasMore: false,
+          totalProducts,
+          stats: { simpleProductsUpdated: 0, variationsUpdated: 0, errors: 0 },
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // STEP 2: Fetch WooCommerce products for these SKUs
+    const skus = products.map(p => p.sku);
+    console.log(`Looking up ${skus.length} SKUs in WooCommerce...`);
+
+    const wooProductMap = new Map<string, WooProduct>();
+    const wooVariationMap = new Map<string, WooVariation>();
+
+    // Fetch WooCommerce products by SKU (batch of 50 per request)
+    const SKU_BATCH_SIZE = 50;
+    for (let i = 0; i < skus.length; i += SKU_BATCH_SIZE) {
+      const skuBatch = skus.slice(i, i + SKU_BATCH_SIZE);
+      
+      // WooCommerce doesn't support multiple SKU lookup, so we search with include
+      for (const sku of skuBatch) {
+        const url = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products`);
+        url.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
+        url.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
+        url.searchParams.append('sku', sku);
+        url.searchParams.append('per_page', '1');
+
+        try {
+          const response = await fetch(url.toString());
+          if (response.ok) {
+            const results: WooProduct[] = await response.json();
+            if (results.length > 0) {
+              wooProductMap.set(sku, results[0]);
+            }
+          }
+        } catch (e) {
+          console.error(`Failed to fetch WooCommerce product for SKU ${sku}`);
+        }
+      }
+      
+      console.log(`Fetched WooCommerce products batch ${Math.floor(i / SKU_BATCH_SIZE) + 1}/${Math.ceil(skus.length / SKU_BATCH_SIZE)}`);
+    }
+
+    console.log(`Found ${wooProductMap.size} matching WooCommerce products`);
+
+    // STEP 3: Fetch variations for variable products
     const variableProducts = Array.from(wooProductMap.values()).filter(p => p.type === 'variable');
     console.log(`Fetching variations for ${variableProducts.length} variable products...`);
 
-    // Batch fetch variations - process in chunks to avoid timeouts
-    const VARIATION_BATCH_SIZE = 10;
-    for (let i = 0; i < variableProducts.length; i += VARIATION_BATCH_SIZE) {
-      const batch = variableProducts.slice(i, i + VARIATION_BATCH_SIZE);
+    const VARIATION_PARALLEL = 5;
+    for (let i = 0; i < variableProducts.length; i += VARIATION_PARALLEL) {
+      const batch = variableProducts.slice(i, i + VARIATION_PARALLEL);
       
       await Promise.all(batch.map(async (product) => {
         try {
@@ -112,51 +158,20 @@ Deno.serve(async (req) => {
           console.error(`Failed to fetch variations for product ${product.id}`);
         }
       }));
-      
-      console.log(`Fetched variations batch ${Math.floor(i / VARIATION_BATCH_SIZE) + 1}/${Math.ceil(variableProducts.length / VARIATION_BATCH_SIZE)}`);
     }
 
-    console.log(`Total WooCommerce variations indexed: ${wooVariationMap.size}`);
-
-    // STEP 3: Fetch Supabase products with stock
-    let query = supabase
-      .from('products')
-      .select(`
-        id,
-        sku,
-        title,
-        variants (
-          id,
-          maat_id,
-          size_label,
-          stock_totals (qty)
-        )
-      `)
-      .eq('tenant_id', tenantId);
-
-    if (productIds && productIds.length > 0) {
-      query = query.in('id', productIds);
-    }
-
-    const { data: products, error: productsError } = await query;
-
-    if (productsError) {
-      throw new Error(`Failed to fetch products: ${productsError.message}`);
-    }
-
-    console.log(`Found ${products?.length || 0} Supabase products to sync`);
+    console.log(`Indexed ${wooVariationMap.size} variations`);
 
     // STEP 4: Build batch updates
     const simpleProductUpdates: { id: number; stock_quantity: number; stock_status: string; manage_stock: boolean }[] = [];
     const variationUpdatesByParent = new Map<number, { id: number; stock_quantity: number; stock_status: string; manage_stock: boolean }[]>();
     const updateLog: { sku: string; oldStock: number; newStock: number }[] = [];
 
-    for (const product of products || []) {
+    for (const product of products) {
       const wooProduct = wooProductMap.get(product.sku);
       if (!wooProduct) continue;
 
       if (wooProduct.type === 'simple') {
-        // Calculate total stock
         let totalStock = 0;
         for (const variant of product.variants || []) {
           const stockTotals = variant.stock_totals as { qty: number }[] | null;
@@ -200,7 +215,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log(`Prepared ${simpleProductUpdates.length} simple product updates, ${variationUpdatesByParent.size} parent products with variation updates`);
+    console.log(`Prepared ${simpleProductUpdates.length} simple updates, ${variationUpdatesByParent.size} parent products with variation updates`);
 
     const stats = {
       simpleProductsUpdated: 0,
@@ -210,7 +225,7 @@ Deno.serve(async (req) => {
     const errorDetails: string[] = [];
 
     if (!dryRun) {
-      // STEP 5: Execute batch update for simple products (100 per batch)
+      // STEP 5: Execute batch update for simple products
       if (simpleProductUpdates.length > 0) {
         const BATCH_SIZE = 100;
         for (let i = 0; i < simpleProductUpdates.length; i += BATCH_SIZE) {
@@ -230,25 +245,23 @@ Deno.serve(async (req) => {
             if (batchResponse.ok) {
               const result = await batchResponse.json();
               stats.simpleProductsUpdated += result.update?.length || 0;
-              console.log(`Simple products batch ${Math.floor(i / BATCH_SIZE) + 1}: updated ${result.update?.length || 0}`);
+              console.log(`Simple batch: updated ${result.update?.length || 0}`);
             } else {
               const errorText = await batchResponse.text();
-              errorDetails.push(`Simple products batch failed: ${errorText.substring(0, 200)}`);
+              errorDetails.push(`Simple batch failed: ${errorText.substring(0, 200)}`);
               stats.errors++;
             }
           } catch (e) {
-            errorDetails.push(`Simple products batch error: ${e instanceof Error ? e.message : String(e)}`);
+            errorDetails.push(`Simple batch error: ${e instanceof Error ? e.message : String(e)}`);
             stats.errors++;
           }
         }
       }
 
-      // STEP 6: Execute batch updates for variations (per parent product)
+      // STEP 6: Execute batch updates for variations
       const parentIds = Array.from(variationUpdatesByParent.keys());
-      console.log(`Processing variation updates for ${parentIds.length} parent products...`);
-      
-      // Process in parallel batches of 5 parent products
       const PARALLEL_BATCH = 5;
+      
       for (let i = 0; i < parentIds.length; i += PARALLEL_BATCH) {
         const batchParentIds = parentIds.slice(i, i + PARALLEL_BATCH);
         
@@ -276,32 +289,35 @@ Deno.serve(async (req) => {
             stats.errors++;
           }
         }));
-        
-        console.log(`Variation batch ${Math.floor(i / PARALLEL_BATCH) + 1}/${Math.ceil(parentIds.length / PARALLEL_BATCH)} complete`);
       }
 
       // Log to changelog
       await supabase.from('changelog').insert({
         tenant_id: tenantId,
         event_type: 'BULK_STOCK_SYNC',
-        description: `Bulk stock sync: ${stats.simpleProductsUpdated} simple products, ${stats.variationsUpdated} variations bijgewerkt`,
-        metadata: { stats, updates: updateLog.slice(0, 50) },
+        description: `Bulk stock sync batch (offset ${offset}): ${stats.simpleProductsUpdated} simple, ${stats.variationsUpdated} variations`,
+        metadata: { offset, limit, stats, updates: updateLog.slice(0, 20) },
       });
     } else {
       stats.simpleProductsUpdated = simpleProductUpdates.length;
       stats.variationsUpdated = Array.from(variationUpdatesByParent.values()).reduce((sum, arr) => sum + arr.length, 0);
     }
 
-    console.log(`Bulk sync complete: ${JSON.stringify(stats)}`);
+    console.log(`Batch complete: ${JSON.stringify(stats)}`);
 
     return new Response(
       JSON.stringify({
         success: true,
         dryRun,
+        offset,
+        nextOffset,
+        hasMore,
+        totalProducts,
+        processedThisBatch: products.length,
         stats,
         pendingUpdates: updateLog.length,
-        updates: updateLog.slice(0, 100),
-        errors: errorDetails.slice(0, 20),
+        updates: updateLog.slice(0, 50),
+        errors: errorDetails.slice(0, 10),
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
