@@ -12,22 +12,27 @@ interface VariationUpdate {
   newSku: string;
 }
 
-// Parse CSV content
+// Parse CSV content (supports both comma and semicolon delimiters)
 function parseCsv(csvContent: string): VariationUpdate[] {
   const lines = csvContent.split('\n');
   if (lines.length < 2) return [];
   
+  // Detect delimiter (semicolon or comma)
+  const firstLine = lines[0];
+  const delimiter = firstLine.includes(';') ? ';' : ',';
+  console.log(`Detected CSV delimiter: "${delimiter}"`);
+  
   // Parse header to find column indices
-  const header = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+  const header = firstLine.split(delimiter).map(h => h.trim().replace(/"/g, ''));
   const idIndex = header.findIndex(h => h === 'ID');
-  const parentIdIndex = header.findIndex(h => h === 'Parent');
+  const parentIndex = header.findIndex(h => h === 'Hoofd' || h === 'Parent');
   const typeIndex = header.findIndex(h => h === 'Type');
   const newSkuIndex = header.findIndex(h => h === 'Mds-art-maatbalk-maat');
   
-  console.log(`CSV Header indices - ID: ${idIndex}, Parent: ${parentIdIndex}, Type: ${typeIndex}, NewSku: ${newSkuIndex}`);
+  console.log(`CSV Header indices - ID: ${idIndex}, Parent: ${parentIndex}, Type: ${typeIndex}, NewSku: ${newSkuIndex}`);
   
   if (idIndex === -1 || newSkuIndex === -1 || typeIndex === -1) {
-    throw new Error(`Required columns not found. Found headers: ${header.join(', ')}`);
+    throw new Error(`Required columns not found. Need: ID, Type, Mds-art-maatbalk-maat. Found: ${header.slice(0, 10).join(', ')}...`);
   }
   
   const updates: VariationUpdate[] = [];
@@ -44,7 +49,7 @@ function parseCsv(csvContent: string): VariationUpdate[] {
     for (const char of line) {
       if (char === '"') {
         inQuotes = !inQuotes;
-      } else if (char === ',' && !inQuotes) {
+      } else if (char === delimiter && !inQuotes) {
         values.push(current.trim());
         current = '';
       } else {
@@ -55,7 +60,7 @@ function parseCsv(csvContent: string): VariationUpdate[] {
     
     const type = values[typeIndex]?.replace(/"/g, '');
     const id = parseInt(values[idIndex]?.replace(/"/g, '') || '0');
-    const parentId = parseInt(values[parentIdIndex]?.replace(/"/g, '') || '0');
+    const parentId = parseInt(values[parentIndex]?.replace(/"/g, '') || '0');
     const newSku = values[newSkuIndex]?.replace(/"/g, '').trim();
     
     // Only process variations with valid data
