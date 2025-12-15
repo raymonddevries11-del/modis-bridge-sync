@@ -418,21 +418,33 @@ serve(async (req) => {
 
     console.log(`Built ${maatMappings.length} maat mappings from XML`);
 
-    // STEP 2: Fetch all products to get product IDs
+    // STEP 2: Fetch all products to get product IDs (with pagination to avoid 1000 row limit)
     console.log('Fetching products...');
-    const { data: products, error: productsError } = await supabase
-      .from('products')
-      .select('id, sku')
-      .eq('tenant_id', tenantId);
-
-    if (productsError) {
-      throw new Error(`Failed to fetch products: ${productsError.message}`);
-    }
-
     const productMap = new Map<string, string>();
-    for (const p of products || []) {
-      productMap.set(p.sku, p.id);
+    let productOffset = 0;
+    const PRODUCT_BATCH_SIZE = 1000;
+    
+    while (true) {
+      const { data: products, error: productsError } = await supabase
+        .from('products')
+        .select('id, sku')
+        .eq('tenant_id', tenantId)
+        .range(productOffset, productOffset + PRODUCT_BATCH_SIZE - 1);
+
+      if (productsError) {
+        throw new Error(`Failed to fetch products: ${productsError.message}`);
+      }
+
+      if (!products || products.length === 0) break;
+
+      for (const p of products) {
+        productMap.set(p.sku, p.id);
+      }
+
+      if (products.length < PRODUCT_BATCH_SIZE) break;
+      productOffset += PRODUCT_BATCH_SIZE;
     }
+    
     console.log(`Loaded ${productMap.size} products`);
 
     // STEP 3: Fetch all variants with their current maat_id and size_label
