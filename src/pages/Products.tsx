@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ProductDetailModal } from "@/components/ProductDetailModal";
+import { Progress } from "@/components/ui/progress";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -376,35 +377,49 @@ const Products = () => {
             Update WooCommerce SKUs
           </Button>
 
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                disabled={resetWooStock.isPending || !selectedTenant}
-                variant="destructive"
-              >
-                <AlertTriangle className={`h-4 w-4 mr-2 ${resetWooStock.isPending ? "animate-spin" : ""}`} />
-                Reset WooCommerce Voorraad
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Weet je het zeker?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Dit zet de voorraad van ALLE productvariaties in WooCommerce op 0. 
-                  Dit kan niet ongedaan worden gemaakt. Dit proces kan enkele minuten duren.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Annuleren</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={() => resetWooStock.mutate(undefined)}
-                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          {resetProgress ? (
+            <div className="flex items-center gap-3 bg-muted rounded-md px-4 py-2 min-w-[280px]">
+              <RefreshCw className="h-4 w-4 animate-spin text-destructive" />
+              <div className="flex-1">
+                <div className="flex justify-between text-sm mb-1">
+                  <span>Reset bezig...</span>
+                  <span className="font-medium">{resetProgress.current}/{resetProgress.total}</span>
+                </div>
+                <Progress value={(resetProgress.current / resetProgress.total) * 100} className="h-2" />
+                <p className="text-xs text-muted-foreground mt-1">{resetProgress.updated} variaties op 0 gezet</p>
+              </div>
+            </div>
+          ) : (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  disabled={resetWooStock.isPending || !selectedTenant}
+                  variant="destructive"
                 >
-                  Ja, reset voorraad
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+                  <AlertTriangle className={`h-4 w-4 mr-2 ${resetWooStock.isPending ? "animate-spin" : ""}`} />
+                  Reset WooCommerce Voorraad
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Weet je het zeker?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Dit zet de voorraad van ALLE productvariaties in WooCommerce op 0. 
+                    Dit kan niet ongedaan worden gemaakt. Dit proces kan enkele minuten duren.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Annuleren</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => resetWooStock.mutate(undefined)}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    Ja, reset voorraad
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
         </div>
 
         {isLoading ? (
