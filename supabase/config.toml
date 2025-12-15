@@ -86,3 +86,6 @@ verify_jwt = false
 
 [functions.bulk-sync-stock]
 verify_jwt = false
+
+[functions.cache-woo-products]
+verify_jwt = false
