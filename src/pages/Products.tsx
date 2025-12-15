@@ -176,20 +176,43 @@ const Products = () => {
     },
   });
 
+  const [resetJobId, setResetJobId] = useState<string | null>(null);
+  const [resetProgress, setResetProgress] = useState<{ current: number; total: number; updated: number } | null>(null);
+
   const resetWooStock = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (jobId?: string) => {
       const { data, error } = await supabase.functions.invoke("reset-woo-stock", {
-        body: { tenantId: selectedTenant },
+        body: { tenantId: selectedTenant, jobId },
       });
       if (error) throw error;
       return data;
     },
     onSuccess: (data) => {
-      toast.success(`WooCommerce voorraad reset voltooid: ${data.totalVariationsUpdated} variaties op 0 gezet`);
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      if (data.complete) {
+        toast.success(`WooCommerce voorraad reset voltooid: ${data.progress.totalVariationsUpdated} variaties op 0 gezet`);
+        setResetJobId(null);
+        setResetProgress(null);
+        queryClient.invalidateQueries({ queryKey: ["products"] });
+      } else {
+        // Continue with next batch
+        setResetJobId(data.jobId);
+        setResetProgress({
+          current: data.progress.currentPage - 1,
+          total: data.progress.totalPages,
+          updated: data.progress.totalVariationsUpdated,
+        });
+        toast.info(`Voortgang: pagina ${data.progress.currentPage - 1}/${data.progress.totalPages} (${data.progress.totalVariationsUpdated} variaties)`);
+        
+        // Auto-continue after short delay
+        setTimeout(() => {
+          resetWooStock.mutate(data.jobId);
+        }, 1000);
+      }
     },
     onError: (error: any) => {
       toast.error(`Reset mislukt: ${error.message}`);
+      setResetJobId(null);
+      setResetProgress(null);
     },
   });
 
@@ -374,7 +397,7 @@ const Products = () => {
               <AlertDialogFooter>
                 <AlertDialogCancel>Annuleren</AlertDialogCancel>
                 <AlertDialogAction
-                  onClick={() => resetWooStock.mutate()}
+                  onClick={() => resetWooStock.mutate(undefined)}
                   className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                 >
                   Ja, reset voorraad

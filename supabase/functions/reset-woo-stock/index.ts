@@ -11,7 +11,16 @@ interface WooCommerceConfig {
   consumerSecret: string;
 }
 
-const BATCH_SIZE = 50; // Process 50 products per call
+interface ResetProgress {
+  currentPage: number;
+  totalPages: number;
+  totalVariationsUpdated: number;
+  totalErrors: number;
+  pagesProcessed: number;
+}
+
+const BATCH_SIZE = 50; // Products per API call
+const MAX_PAGES_PER_EXECUTION = 5; // Process max 5 pages per function call to avoid timeout
 
 async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -35,22 +44,94 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
   throw new Error('Max retries exceeded');
 }
 
-async function processAllBatches(
-  supabase: any,
-  tenantId: string,
-  wooConfig: WooCommerceConfig,
-  startPage: number
-): Promise<{ totalVariationsUpdated: number; totalErrors: number; pagesProcessed: number }> {
-  let currentPage = startPage;
-  let totalVariationsUpdated = 0;
-  let totalErrors = 0;
-  let pagesProcessed = 0;
-  let hasMorePages = true;
+async function processProductBatch(
+  product: any,
+  wooConfig: WooCommerceConfig
+): Promise<{ updated: number; error: boolean }> {
+  try {
+    const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${product.id}/variations`);
+    variationsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+    variationsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+    variationsUrl.searchParams.append('per_page', '100');
 
-  while (hasMorePages) {
+    const variationsResponse = await fetchWithRetry(variationsUrl.toString(), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!variationsResponse.ok) {
+      console.error(`Failed to fetch variations for product ${product.id}`);
+      return { updated: 0, error: true };
+    }
+
+    const variations = await variationsResponse.json();
+
+    if (!variations || variations.length === 0) {
+      return { updated: 0, error: false };
+    }
+
+    const variationsWithStock = variations.filter((v: any) => 
+      (v.stock_quantity && v.stock_quantity > 0) || v.stock_status === 'instock'
+    );
+
+    if (variationsWithStock.length === 0) {
+      return { updated: 0, error: false };
+    }
+
+    const batchPayload = {
+      update: variationsWithStock.map((v: any) => ({
+        id: v.id,
+        stock_quantity: 0,
+        stock_status: 'outofstock',
+        manage_stock: true,
+      })),
+    };
+
+    const batchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${product.id}/variations/batch`);
+    batchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+    batchUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+    const batchResponse = await fetchWithRetry(batchUrl.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(batchPayload),
+    });
+
+    if (batchResponse.ok) {
+      const result = await batchResponse.json();
+      const updatedCount = result.update?.length || 0;
+      console.log(`Product ${product.sku || product.id}: ${updatedCount} variations set to 0`);
+      return { updated: updatedCount, error: false };
+    } else {
+      console.error(`Failed to update product ${product.id}`);
+      return { updated: 0, error: true };
+    }
+  } catch (error: any) {
+    console.error(`Error processing product ${product.id}:`, error.message);
+    return { updated: 0, error: true };
+  }
+}
+
+async function processPages(
+  wooConfig: WooCommerceConfig,
+  startPage: number,
+  maxPagesToProcess: number
+): Promise<{ 
+  variationsUpdated: number; 
+  errors: number; 
+  pagesProcessed: number;
+  currentPage: number;
+  totalPages: number;
+  complete: boolean;
+}> {
+  let currentPage = startPage;
+  let variationsUpdated = 0;
+  let errors = 0;
+  let pagesProcessed = 0;
+  let totalPages = 1;
+
+  for (let i = 0; i < maxPagesToProcess; i++) {
     console.log(`Processing page ${currentPage}...`);
 
-    // Fetch products for current batch
     const productsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
     productsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
     productsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
@@ -69,117 +150,45 @@ async function processAllBatches(
     }
 
     const products = await response.json();
-    const totalPages = parseInt(response.headers.get('X-WP-TotalPages') || '1');
+    totalPages = parseInt(response.headers.get('X-WP-TotalPages') || '1');
     const totalProducts = parseInt(response.headers.get('X-WP-Total') || '0');
 
     console.log(`Page ${currentPage}/${totalPages}: ${products.length} products (total: ${totalProducts})`);
 
     if (!products || products.length === 0) {
-      hasMorePages = false;
       break;
     }
 
-    let batchVariationsUpdated = 0;
-    let batchErrors = 0;
-
-    // Process each product's variations
     for (const product of products) {
-      try {
-        const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${product.id}/variations`);
-        variationsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-        variationsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-        variationsUrl.searchParams.append('per_page', '100');
-
-        const variationsResponse = await fetchWithRetry(variationsUrl.toString(), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-
-        if (!variationsResponse.ok) {
-          console.error(`Failed to fetch variations for product ${product.id}`);
-          batchErrors++;
-          continue;
-        }
-
-        const variations = await variationsResponse.json();
-
-        if (!variations || variations.length === 0) {
-          continue;
-        }
-
-        const variationsWithStock = variations.filter((v: any) => 
-          (v.stock_quantity && v.stock_quantity > 0) || v.stock_status === 'instock'
-        );
-
-        if (variationsWithStock.length === 0) {
-          continue;
-        }
-
-        const batchPayload = {
-          update: variationsWithStock.map((v: any) => ({
-            id: v.id,
-            stock_quantity: 0,
-            stock_status: 'outofstock',
-            manage_stock: true,
-          })),
-        };
-
-        const batchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${product.id}/variations/batch`);
-        batchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-        batchUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-
-        const batchResponse = await fetchWithRetry(batchUrl.toString(), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(batchPayload),
-        });
-
-        if (batchResponse.ok) {
-          const result = await batchResponse.json();
-          const updatedCount = result.update?.length || 0;
-          batchVariationsUpdated += updatedCount;
-          console.log(`Product ${product.sku || product.id}: ${updatedCount} variations set to 0`);
-        } else {
-          console.error(`Failed to update product ${product.id}`);
-          batchErrors++;
-        }
-
-        await new Promise(r => setTimeout(r, 300));
-
-      } catch (error: any) {
-        console.error(`Error processing product ${product.id}:`, error.message);
-        batchErrors++;
-      }
+      const result = await processProductBatch(product, wooConfig);
+      variationsUpdated += result.updated;
+      if (result.error) errors++;
+      
+      // Small delay between products to avoid rate limiting
+      await new Promise(r => setTimeout(r, 200));
     }
 
-    totalVariationsUpdated += batchVariationsUpdated;
-    totalErrors += batchErrors;
     pagesProcessed++;
+    console.log(`Page ${currentPage} complete: ${variationsUpdated} total variations updated so far`);
 
-    // Log batch progress
-    console.log(`Batch ${currentPage}/${totalPages} complete: ${batchVariationsUpdated} variations updated, ${batchErrors} errors`);
-
-    await supabase.from('changelog').insert({
-      tenant_id: tenantId,
-      event_type: 'WOO_STOCK_RESET_BATCH',
-      description: `Stock reset batch ${currentPage}/${totalPages}: ${batchVariationsUpdated} variaties op 0 gezet`,
-      metadata: {
-        page: currentPage,
-        totalPages,
-        variationsUpdated: batchVariationsUpdated,
-        errors: batchErrors,
-      },
-    });
-
-    hasMorePages = currentPage < totalPages;
-    currentPage++;
-
-    // Small delay between batches
-    if (hasMorePages) {
-      await new Promise(r => setTimeout(r, 1000));
+    if (currentPage >= totalPages) {
+      return { variationsUpdated, errors, pagesProcessed, currentPage, totalPages, complete: true };
     }
+
+    currentPage++;
+    
+    // Delay between pages
+    await new Promise(r => setTimeout(r, 500));
   }
 
-  return { totalVariationsUpdated, totalErrors, pagesProcessed };
+  return { 
+    variationsUpdated, 
+    errors, 
+    pagesProcessed, 
+    currentPage, 
+    totalPages,
+    complete: currentPage > totalPages 
+  };
 }
 
 Deno.serve(async (req) => {
@@ -193,13 +202,59 @@ Deno.serve(async (req) => {
   );
 
   try {
-    const { tenantId, startPage = 1 } = await req.json();
+    const body = await req.json();
+    const { tenantId, jobId } = body;
 
     if (!tenantId) {
       throw new Error('tenantId is required');
     }
 
-    console.log(`Starting WooCommerce stock reset for tenant ${tenantId}, starting at page ${startPage}`);
+    // Check for existing job or create new one
+    let progress: ResetProgress;
+    let currentJobId = jobId;
+
+    if (jobId) {
+      // Resume existing job
+      const { data: job, error: jobError } = await supabase
+        .from('jobs')
+        .select('*')
+        .eq('id', jobId)
+        .single();
+
+      if (jobError || !job) {
+        throw new Error(`Job not found: ${jobId}`);
+      }
+
+      progress = job.payload as ResetProgress;
+      console.log(`Resuming stock reset job ${jobId} from page ${progress.currentPage}`);
+    } else {
+      // Create new job
+      progress = {
+        currentPage: 1,
+        totalPages: 0,
+        totalVariationsUpdated: 0,
+        totalErrors: 0,
+        pagesProcessed: 0,
+      };
+
+      const { data: newJob, error: createError } = await supabase
+        .from('jobs')
+        .insert({
+          type: 'WOO_STOCK_RESET',
+          state: 'processing',
+          tenant_id: tenantId,
+          payload: progress,
+        })
+        .select()
+        .single();
+
+      if (createError || !newJob) {
+        throw new Error(`Failed to create job: ${createError?.message}`);
+      }
+
+      currentJobId = newJob.id;
+      console.log(`Created new stock reset job ${currentJobId}`);
+    }
 
     // Get tenant config
     const { data: tenantConfig, error: configError } = await supabase
@@ -218,35 +273,90 @@ Deno.serve(async (req) => {
       consumerSecret: tenantConfig.woocommerce_consumer_secret,
     };
 
-    // Process all batches in a loop
-    const result = await processAllBatches(supabase, tenantId, wooConfig, startPage);
+    // Process a batch of pages
+    const result = await processPages(wooConfig, progress.currentPage, MAX_PAGES_PER_EXECUTION);
 
-    // Log completion
-    await supabase.from('changelog').insert({
-      tenant_id: tenantId,
-      event_type: 'WOO_STOCK_RESET_COMPLETE',
-      description: `WooCommerce stock reset voltooid: ${result.totalVariationsUpdated} variaties op 0 gezet`,
-      metadata: {
-        totalVariationsUpdated: result.totalVariationsUpdated,
-        totalErrors: result.totalErrors,
-        pagesProcessed: result.pagesProcessed,
-        completedAt: new Date().toISOString(),
-      },
-    });
+    // Update progress
+    progress.currentPage = result.currentPage + 1;
+    progress.totalPages = result.totalPages;
+    progress.totalVariationsUpdated += result.variationsUpdated;
+    progress.totalErrors += result.errors;
+    progress.pagesProcessed += result.pagesProcessed;
 
-    console.log(`Stock reset complete: ${result.totalVariationsUpdated} variations updated, ${result.totalErrors} errors`);
+    if (result.complete) {
+      // Job complete
+      await supabase
+        .from('jobs')
+        .update({
+          state: 'done',
+          payload: progress,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', currentJobId);
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        complete: true,
-        totalVariationsUpdated: result.totalVariationsUpdated,
-        totalErrors: result.totalErrors,
-        pagesProcessed: result.pagesProcessed,
-        message: `Stock reset complete: ${result.totalVariationsUpdated} variations set to 0`,
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+      await supabase.from('changelog').insert({
+        tenant_id: tenantId,
+        event_type: 'WOO_STOCK_RESET_COMPLETE',
+        description: `WooCommerce stock reset voltooid: ${progress.totalVariationsUpdated} variaties op 0 gezet`,
+        metadata: {
+          jobId: currentJobId,
+          totalVariationsUpdated: progress.totalVariationsUpdated,
+          totalErrors: progress.totalErrors,
+          pagesProcessed: progress.pagesProcessed,
+          completedAt: new Date().toISOString(),
+        },
+      });
+
+      console.log(`Stock reset complete: ${progress.totalVariationsUpdated} variations updated, ${progress.totalErrors} errors`);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          complete: true,
+          jobId: currentJobId,
+          progress,
+          message: `Stock reset complete: ${progress.totalVariationsUpdated} variations set to 0`,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    } else {
+      // Job still in progress - update job and return continuation info
+      await supabase
+        .from('jobs')
+        .update({
+          state: 'ready', // Set to ready so scheduler can pick it up again
+          payload: progress,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', currentJobId);
+
+      await supabase.from('changelog').insert({
+        tenant_id: tenantId,
+        event_type: 'WOO_STOCK_RESET_PROGRESS',
+        description: `Stock reset voortgang: pagina ${progress.currentPage - 1}/${result.totalPages}, ${progress.totalVariationsUpdated} variaties op 0 gezet`,
+        metadata: {
+          jobId: currentJobId,
+          currentPage: progress.currentPage,
+          totalPages: result.totalPages,
+          variationsUpdatedThisBatch: result.variationsUpdated,
+          totalVariationsUpdated: progress.totalVariationsUpdated,
+        },
+      });
+
+      console.log(`Stock reset progress: page ${progress.currentPage - 1}/${result.totalPages}, ${progress.totalVariationsUpdated} total updated`);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          complete: false,
+          jobId: currentJobId,
+          progress,
+          nextPage: progress.currentPage,
+          message: `Processed pages ${progress.currentPage - result.pagesProcessed} to ${progress.currentPage - 1} of ${result.totalPages}. Continue with jobId to resume.`,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
