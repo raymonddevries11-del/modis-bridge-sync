@@ -166,54 +166,72 @@ serve(async (req) => {
     
     // Process each parent product's variations
     const parentIds = Array.from(updatesByParent.keys());
-    const BATCH_SIZE = 10; // Process 10 parent products at a time
-    const DELAY_MS = 2000; // 2 second delay between batches
+    const PARENT_BATCH_SIZE = 10; // Process 10 parent products at a time
+    const WOO_BATCH_LIMIT = 100; // WooCommerce max items per batch request
+    const DELAY_MS = 1500; // 1.5 second delay between batches
     
-    for (let i = 0; i < parentIds.length; i += BATCH_SIZE) {
-      const batchParentIds = parentIds.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < parentIds.length; i += PARENT_BATCH_SIZE) {
+      const batchParentIds = parentIds.slice(i, i + PARENT_BATCH_SIZE);
       
-      console.log(`Processing parent batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(parentIds.length/BATCH_SIZE)}`);
+      console.log(`Processing parent batch ${Math.floor(i/PARENT_BATCH_SIZE) + 1}/${Math.ceil(parentIds.length/PARENT_BATCH_SIZE)}`);
       
       // Process each parent in this batch
       for (const parentId of batchParentIds) {
         const variationUpdates = updatesByParent.get(parentId) || [];
         
-        try {
-          // Use WooCommerce batch endpoint for variations
-          const batchPayload = {
-            update: variationUpdates.map(v => ({
-              id: v.id,
-              sku: v.newSku,
-            })),
-          };
+        // Split into chunks of max 100 items (WooCommerce limit)
+        const chunks: VariationUpdate[][] = [];
+        for (let j = 0; j < variationUpdates.length; j += WOO_BATCH_LIMIT) {
+          chunks.push(variationUpdates.slice(j, j + WOO_BATCH_LIMIT));
+        }
+        
+        console.log(`Parent ${parentId}: ${variationUpdates.length} variations in ${chunks.length} chunk(s)`);
+        
+        for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+          const chunk = chunks[chunkIndex];
           
-          const result = await wooRequest(
-            woocommerce_url,
-            woocommerce_consumer_key,
-            woocommerce_consumer_secret,
-            `/products/${parentId}/variations/batch`,
-            'POST',
-            batchPayload
-          );
-          
-          // Count successes and failures
-          if (result.update) {
-            for (const updated of result.update) {
-              if (updated.id) {
-                totalUpdated++;
-                console.log(`Updated variation ${updated.id} SKU to ${updated.sku}`);
+          try {
+            // Use WooCommerce batch endpoint for variations
+            const batchPayload = {
+              update: chunk.map(v => ({
+                id: v.id,
+                sku: v.newSku,
+              })),
+            };
+            
+            const result = await wooRequest(
+              woocommerce_url,
+              woocommerce_consumer_key,
+              woocommerce_consumer_secret,
+              `/products/${parentId}/variations/batch`,
+              'POST',
+              batchPayload
+            );
+            
+            // Count successes and failures
+            if (result.update) {
+              for (const updated of result.update) {
+                if (updated.id) {
+                  totalUpdated++;
+                }
               }
+              console.log(`Parent ${parentId} chunk ${chunkIndex + 1}: ${result.update.length} updated`);
             }
+            
+            // Small delay between chunks for same parent
+            if (chunkIndex < chunks.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+            }
+          } catch (error: any) {
+            console.error(`Error updating parent ${parentId} chunk ${chunkIndex + 1}:`, error.message);
+            totalErrors += chunk.length;
+            errorDetails.push(`Parent ${parentId} chunk ${chunkIndex + 1}: ${error.message}`);
           }
-        } catch (error: any) {
-          console.error(`Error updating variations for parent ${parentId}:`, error.message);
-          totalErrors += variationUpdates.length;
-          errorDetails.push(`Parent ${parentId}: ${error.message}`);
         }
       }
       
-      // Delay between batches to respect rate limits
-      if (i + BATCH_SIZE < parentIds.length) {
+      // Delay between parent batches to respect rate limits
+      if (i + PARENT_BATCH_SIZE < parentIds.length) {
         console.log(`Waiting ${DELAY_MS}ms before next batch...`);
         await new Promise(resolve => setTimeout(resolve, DELAY_MS));
       }
