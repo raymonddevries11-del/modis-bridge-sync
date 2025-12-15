@@ -35,6 +35,153 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
   throw new Error('Max retries exceeded');
 }
 
+async function processAllBatches(
+  supabase: any,
+  tenantId: string,
+  wooConfig: WooCommerceConfig,
+  startPage: number
+): Promise<{ totalVariationsUpdated: number; totalErrors: number; pagesProcessed: number }> {
+  let currentPage = startPage;
+  let totalVariationsUpdated = 0;
+  let totalErrors = 0;
+  let pagesProcessed = 0;
+  let hasMorePages = true;
+
+  while (hasMorePages) {
+    console.log(`Processing page ${currentPage}...`);
+
+    // Fetch products for current batch
+    const productsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
+    productsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+    productsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+    productsUrl.searchParams.append('per_page', BATCH_SIZE.toString());
+    productsUrl.searchParams.append('page', currentPage.toString());
+    productsUrl.searchParams.append('type', 'variable');
+    productsUrl.searchParams.append('status', 'any');
+
+    const response = await fetchWithRetry(productsUrl.toString(), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to fetch products page ${currentPage}: ${response.status} - ${errorText}`);
+    }
+
+    const products = await response.json();
+    const totalPages = parseInt(response.headers.get('X-WP-TotalPages') || '1');
+    const totalProducts = parseInt(response.headers.get('X-WP-Total') || '0');
+
+    console.log(`Page ${currentPage}/${totalPages}: ${products.length} products (total: ${totalProducts})`);
+
+    if (!products || products.length === 0) {
+      hasMorePages = false;
+      break;
+    }
+
+    let batchVariationsUpdated = 0;
+    let batchErrors = 0;
+
+    // Process each product's variations
+    for (const product of products) {
+      try {
+        const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${product.id}/variations`);
+        variationsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+        variationsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+        variationsUrl.searchParams.append('per_page', '100');
+
+        const variationsResponse = await fetchWithRetry(variationsUrl.toString(), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+        if (!variationsResponse.ok) {
+          console.error(`Failed to fetch variations for product ${product.id}`);
+          batchErrors++;
+          continue;
+        }
+
+        const variations = await variationsResponse.json();
+
+        if (!variations || variations.length === 0) {
+          continue;
+        }
+
+        const variationsWithStock = variations.filter((v: any) => 
+          (v.stock_quantity && v.stock_quantity > 0) || v.stock_status === 'instock'
+        );
+
+        if (variationsWithStock.length === 0) {
+          continue;
+        }
+
+        const batchPayload = {
+          update: variationsWithStock.map((v: any) => ({
+            id: v.id,
+            stock_quantity: 0,
+            stock_status: 'outofstock',
+            manage_stock: true,
+          })),
+        };
+
+        const batchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${product.id}/variations/batch`);
+        batchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+        batchUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+        const batchResponse = await fetchWithRetry(batchUrl.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(batchPayload),
+        });
+
+        if (batchResponse.ok) {
+          const result = await batchResponse.json();
+          const updatedCount = result.update?.length || 0;
+          batchVariationsUpdated += updatedCount;
+          console.log(`Product ${product.sku || product.id}: ${updatedCount} variations set to 0`);
+        } else {
+          console.error(`Failed to update product ${product.id}`);
+          batchErrors++;
+        }
+
+        await new Promise(r => setTimeout(r, 300));
+
+      } catch (error: any) {
+        console.error(`Error processing product ${product.id}:`, error.message);
+        batchErrors++;
+      }
+    }
+
+    totalVariationsUpdated += batchVariationsUpdated;
+    totalErrors += batchErrors;
+    pagesProcessed++;
+
+    // Log batch progress
+    console.log(`Batch ${currentPage}/${totalPages} complete: ${batchVariationsUpdated} variations updated, ${batchErrors} errors`);
+
+    await supabase.from('changelog').insert({
+      tenant_id: tenantId,
+      event_type: 'WOO_STOCK_RESET_BATCH',
+      description: `Stock reset batch ${currentPage}/${totalPages}: ${batchVariationsUpdated} variaties op 0 gezet`,
+      metadata: {
+        page: currentPage,
+        totalPages,
+        variationsUpdated: batchVariationsUpdated,
+        errors: batchErrors,
+      },
+    });
+
+    hasMorePages = currentPage < totalPages;
+    currentPage++;
+
+    // Small delay between batches
+    if (hasMorePages) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+
+  return { totalVariationsUpdated, totalErrors, pagesProcessed };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -71,158 +218,32 @@ Deno.serve(async (req) => {
       consumerSecret: tenantConfig.woocommerce_consumer_secret,
     };
 
-    // Fetch products for current batch
-    const productsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
-    productsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-    productsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-    productsUrl.searchParams.append('per_page', BATCH_SIZE.toString());
-    productsUrl.searchParams.append('page', startPage.toString());
-    productsUrl.searchParams.append('type', 'variable');
-    productsUrl.searchParams.append('status', 'any');
+    // Process all batches in a loop
+    const result = await processAllBatches(supabase, tenantId, wooConfig, startPage);
 
-    const response = await fetchWithRetry(productsUrl.toString(), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Failed to fetch products: ${response.status} - ${errorText}`);
-    }
-
-    const products = await response.json();
-    const totalPages = parseInt(response.headers.get('X-WP-TotalPages') || '1');
-    const totalProducts = parseInt(response.headers.get('X-WP-Total') || '0');
-
-    console.log(`Page ${startPage}/${totalPages}: ${products.length} products (total: ${totalProducts})`);
-
-    if (!products || products.length === 0) {
-      // No more products - log completion
-      await supabase.from('changelog').insert({
-        tenant_id: tenantId,
-        event_type: 'WOO_STOCK_RESET_COMPLETE',
-        description: `WooCommerce stock reset voltooid`,
-        metadata: { totalProducts, completedAt: new Date().toISOString() },
-      });
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          complete: true,
-          message: 'Stock reset complete',
-          totalProducts,
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    let variationsUpdated = 0;
-    let errors = 0;
-
-    // Process each product's variations synchronously
-    for (const product of products) {
-      try {
-        // Fetch all variations for this product
-        const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${product.id}/variations`);
-        variationsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-        variationsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-        variationsUrl.searchParams.append('per_page', '100');
-
-        const variationsResponse = await fetchWithRetry(variationsUrl.toString(), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-
-        if (!variationsResponse.ok) {
-          console.error(`Failed to fetch variations for product ${product.id}`);
-          errors++;
-          continue;
-        }
-
-        const variations = await variationsResponse.json();
-
-        if (!variations || variations.length === 0) {
-          continue;
-        }
-
-        // Filter variations that have stock > 0
-        const variationsWithStock = variations.filter((v: any) => 
-          (v.stock_quantity && v.stock_quantity > 0) || v.stock_status === 'instock'
-        );
-
-        if (variationsWithStock.length === 0) {
-          continue;
-        }
-
-        // Batch update all variations to stock = 0
-        const batchPayload = {
-          update: variationsWithStock.map((v: any) => ({
-            id: v.id,
-            stock_quantity: 0,
-            stock_status: 'outofstock',
-            manage_stock: true,
-          })),
-        };
-
-        const batchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${product.id}/variations/batch`);
-        batchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-        batchUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-
-        const batchResponse = await fetchWithRetry(batchUrl.toString(), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(batchPayload),
-        });
-
-        if (batchResponse.ok) {
-          const result = await batchResponse.json();
-          const updatedCount = result.update?.length || 0;
-          variationsUpdated += updatedCount;
-          console.log(`Product ${product.sku || product.id}: ${updatedCount} variations set to 0`);
-        } else {
-          console.error(`Failed to update product ${product.id}`);
-          errors++;
-        }
-
-        // Small delay between products
-        await new Promise(r => setTimeout(r, 300));
-
-      } catch (error: any) {
-        console.error(`Error processing product ${product.id}:`, error.message);
-        errors++;
-      }
-    }
-
-    const hasMorePages = startPage < totalPages;
-    const nextPage = startPage + 1;
-
-    // Log batch progress
-    console.log(`Batch ${startPage}/${totalPages} complete: ${variationsUpdated} variations updated, ${errors} errors`);
-
+    // Log completion
     await supabase.from('changelog').insert({
       tenant_id: tenantId,
-      event_type: 'WOO_STOCK_RESET_BATCH',
-      description: `Stock reset batch ${startPage}/${totalPages}: ${variationsUpdated} variaties op 0 gezet`,
+      event_type: 'WOO_STOCK_RESET_COMPLETE',
+      description: `WooCommerce stock reset voltooid: ${result.totalVariationsUpdated} variaties op 0 gezet`,
       metadata: {
-        page: startPage,
-        totalPages,
-        variationsUpdated,
-        errors,
-        hasMorePages,
-        nextPage: hasMorePages ? nextPage : null,
+        totalVariationsUpdated: result.totalVariationsUpdated,
+        totalErrors: result.totalErrors,
+        pagesProcessed: result.pagesProcessed,
+        completedAt: new Date().toISOString(),
       },
     });
+
+    console.log(`Stock reset complete: ${result.totalVariationsUpdated} variations updated, ${result.totalErrors} errors`);
 
     return new Response(
       JSON.stringify({
         success: true,
-        complete: !hasMorePages,
-        page: startPage,
-        totalPages,
-        variationsUpdated,
-        errors,
-        nextPage: hasMorePages ? nextPage : null,
-        message: hasMorePages 
-          ? `Batch ${startPage}/${totalPages} complete. Call again with startPage=${nextPage} to continue.`
-          : 'Stock reset complete',
+        complete: true,
+        totalVariationsUpdated: result.totalVariationsUpdated,
+        totalErrors: result.totalErrors,
+        pagesProcessed: result.pagesProcessed,
+        message: `Stock reset complete: ${result.totalVariationsUpdated} variations set to 0`,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
