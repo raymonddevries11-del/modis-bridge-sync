@@ -777,8 +777,9 @@ async function createVariationsInWooCommerce(
   console.log(`Creating ${variants.length} variations for product ${wooProductId} with parent SKU ${parentSku}`);
   
   for (const variant of variants) {
-    // Build variation SKU in format: productSku-size_label (e.g., "133669005000-46 = 11")
-    const variationSku = parentSku ? `${parentSku}-${variant.size_label}` : (variant.ean || '');
+    // Build variation SKU in format: productSku-maat_id (e.g., "101069102000-071041")
+    // maat_id contains the 6-digit Modis maat code
+    const variationSku = parentSku && variant.maat_id ? `${parentSku}-${variant.maat_id}` : (variant.ean || '');
     
     const variationData: any = {
       attributes: [
@@ -1307,9 +1308,11 @@ async function syncVariantToWooCommerce(
   const dbSizeParts = extractSizeParts(variant.size_label);
   
   // Build expected SKU suffix for SKU-based matching
-  // Format: productSku-size_label (e.g., "133669005000-46 = 11")
-  const expectedSkuSuffix = `-${variant.size_label}`;
-  const expectedFullSku = productSku ? `${productSku}${expectedSkuSuffix}` : null;
+  // NEW Format: productSku-maat_id (e.g., "101069102000-071041")
+  // maat_id contains the 6-digit Modis maat code
+  const expectedFullSku = productSku && variant.maat_id ? `${productSku}-${variant.maat_id}` : null;
+  // Also keep old format for backwards compatibility during migration
+  const legacyFullSku = productSku ? `${productSku}-${variant.size_label}` : null;
   
   // Debug: Log WooCommerce variations to understand structure
   console.log(`Found ${wooVariations.length} WooCommerce variations for product ${wooProductId}`);
@@ -1326,13 +1329,23 @@ async function syncVariantToWooCommerce(
   let matchingVariation = null;
   
   for (const wooVariation of wooVariations) {
-    // Strategy 0: Match by variation SKU (most reliable when SKU contains size info)
-    // WooCommerce SKU format: "133669005000-46 = 11" matches database size_label "46 = 11"
+    // Strategy 0: Match by variation SKU (most reliable when SKU contains maat_id)
+    // NEW WooCommerce SKU format: "101069102000-071041" (productSku-maat_id)
     if (wooVariation.sku && expectedFullSku) {
-      // Exact SKU match (case-insensitive, whitespace-normalized)
+      // Exact SKU match with new format (case-insensitive, whitespace-normalized)
       if (normalizeSize(wooVariation.sku) === normalizeSize(expectedFullSku)) {
         matchingVariation = wooVariation;
-        console.log(`Matched variation by exact SKU: ${wooVariation.sku}`);
+        console.log(`Matched variation by exact SKU (new format): ${wooVariation.sku}`);
+        break;
+      }
+    }
+    
+    // Strategy 0b: Legacy format match (productSku-size_label)
+    // For backwards compatibility during migration
+    if (wooVariation.sku && legacyFullSku) {
+      if (normalizeSize(wooVariation.sku) === normalizeSize(legacyFullSku)) {
+        matchingVariation = wooVariation;
+        console.log(`Matched variation by legacy SKU format: ${wooVariation.sku}`);
         break;
       }
       // Check if WooCommerce SKU ends with the exact size_label
@@ -1341,8 +1354,6 @@ async function syncVariantToWooCommerce(
         console.log(`Matched variation by SKU suffix: ${wooVariation.sku} ends with ${variant.size_label}`);
         break;
       }
-      // REMOVED: SKU parts matching - was causing incorrect matches
-      // e.g., "44 = 10" was matching "45 = 10½" because both contain "10"
     }
     
     // Strategy 1-3: Match by Size attribute

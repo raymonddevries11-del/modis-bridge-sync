@@ -16,9 +16,10 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 interface VariantStockCardProps {
   variant: any;
   tenantId: string;
+  productSku: string;
 }
 
-const VariantStockCard = ({ variant, tenantId }: VariantStockCardProps) => {
+const VariantStockCard = ({ variant, tenantId, productSku }: VariantStockCardProps) => {
   const queryClient = useQueryClient();
   const currentStock = variant.stock_totals?.qty ?? 0;
   const [stockValue, setStockValue] = useState<string>(currentStock.toString());
@@ -122,7 +123,11 @@ const VariantStockCard = ({ variant, tenantId }: VariantStockCardProps) => {
           </div>
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid grid-cols-5 gap-4 text-sm">
+      <CardContent className="grid grid-cols-3 gap-4 text-sm">
+        <div>
+          <span className="text-muted-foreground">Woo SKU:</span>
+          <p className="font-mono text-xs">{productSku && variant.maat_id ? `${productSku}-${variant.maat_id}` : "N/A"}</p>
+        </div>
         <div>
           <span className="text-muted-foreground">Maat ID:</span>
           <p className="font-mono text-xs">{variant.maat_id || "N/A"}</p>
@@ -485,6 +490,7 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
                     key={variant.id} 
                     variant={variant} 
                     tenantId={product.tenant_id}
+                    productSku={product.sku}
                   />
                 ))}
               </div>
