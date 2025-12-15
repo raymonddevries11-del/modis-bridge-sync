@@ -30,6 +30,7 @@ const Products = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [brandFilter, setBrandFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
+  const [stockFilter, setStockFilter] = useState<string>("all");
   const [selectedTenant, setSelectedTenant] = useState<string>("");
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -77,7 +78,7 @@ const Products = () => {
   });
 
   const { data: products, isLoading } = useQuery({
-    queryKey: ["products", searchTerm, brandFilter, supplierFilter, selectedTenant],
+    queryKey: ["products", searchTerm, brandFilter, supplierFilter, stockFilter, selectedTenant],
     queryFn: async () => {
       if (!selectedTenant) return [];
       
@@ -105,7 +106,24 @@ const Products = () => {
         query = query.eq("supplier_id", supplierFilter);
       }
 
-      const { data } = await query.limit(500); // Verhoogd naar 500 producten
+      const { data } = await query.limit(500);
+      
+      // Client-side filter for stock
+      if (stockFilter === "in_stock" && data) {
+        return data.filter((product: any) => 
+          product.variants?.some((variant: any) => 
+            variant.stock_totals?.qty > 0
+          )
+        );
+      }
+      if (stockFilter === "out_of_stock" && data) {
+        return data.filter((product: any) => 
+          !product.variants?.some((variant: any) => 
+            variant.stock_totals?.qty > 0
+          )
+        );
+      }
+      
       return data || [];
     },
   });
@@ -326,6 +344,17 @@ const Products = () => {
                   {supplier.name}
                 </SelectItem>
               ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={stockFilter} onValueChange={setStockFilter}>
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="Filter by stock" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Alle producten</SelectItem>
+              <SelectItem value="in_stock">Op voorraad</SelectItem>
+              <SelectItem value="out_of_stock">Niet op voorraad</SelectItem>
             </SelectContent>
           </Select>
 
