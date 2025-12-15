@@ -470,6 +470,17 @@ serve(async (req) => {
     let matched = 0;
     let notMatched = 0;
 
+    // Helper to normalize size strings for comparison (handle ½ character variants)
+    const normalizeSize = (s: string | null | undefined): string => {
+      if (!s) return '';
+      return s
+        .replace(/½/g, '1/2')  // Unicode ½ to 1/2
+        .replace(/\u00BD/g, '1/2')  // Another Unicode variant
+        .replace(/\s+/g, ' ')  // Normalize whitespace
+        .trim()
+        .toLowerCase();
+    };
+
     for (const mapping of maatMappings) {
       const productId = productMap.get(mapping.sku);
       if (!productId) continue;
@@ -478,36 +489,34 @@ serve(async (req) => {
       if (!variants || variants.length === 0) continue;
 
       // Find the variant that matches this maat entry
-      // Match strategies:
-      // 1. Exact match on size_label == maat_web
-      // 2. Match on maat_web (database) == maat_web (XML)
-      // 3. Partial match: size_label contains maat_alfa
-      
       let matchedVariant = null;
+      const normalizedMaatWeb = normalizeSize(mapping.maatWeb);
+      const normalizedMaatAlfa = normalizeSize(mapping.maatAlfa);
 
-      // Strategy 1: Exact size_label match
-      matchedVariant = variants.find(v => 
-        v.size_label === mapping.maatWeb || 
-        v.size_label === mapping.maatAlfa
-      );
+      // Strategy 1: Exact size_label match (normalized)
+      matchedVariant = variants.find(v => {
+        const normalizedSizeLabel = normalizeSize(v.size_label);
+        return normalizedSizeLabel === normalizedMaatWeb || 
+               normalizedSizeLabel === normalizedMaatAlfa;
+      });
 
-      // Strategy 2: Match on maat_web
+      // Strategy 2: Match on maat_web (database) (normalized)
       if (!matchedVariant) {
-        matchedVariant = variants.find(v => 
-          v.maat_web === mapping.maatWeb ||
-          v.maat_web === mapping.maatAlfa
-        );
+        matchedVariant = variants.find(v => {
+          const normalizedDbMaatWeb = normalizeSize(v.maat_web);
+          return normalizedDbMaatWeb === normalizedMaatWeb ||
+                 normalizedDbMaatWeb === normalizedMaatAlfa;
+        });
       }
 
       // Strategy 3: The old maat_id format contains the size_label
       // e.g., maat_id = "102619001000-40 = 6½", size_label = "40 = 6½"
       if (!matchedVariant) {
         matchedVariant = variants.find(v => {
-          // Extract size_label from old maat_id format
           const parts = v.maat_id?.split('-');
           if (parts && parts.length >= 2) {
-            const sizePart = parts.slice(1).join('-'); // Get everything after first -
-            return sizePart === mapping.maatWeb || sizePart === mapping.maatAlfa;
+            const sizePart = normalizeSize(parts.slice(1).join('-'));
+            return sizePart === normalizedMaatWeb || sizePart === normalizedMaatAlfa;
           }
           return false;
         });
