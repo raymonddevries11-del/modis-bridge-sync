@@ -8,8 +8,19 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ProductDetailModal } from "@/components/ProductDetailModal";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { useState, useEffect, useRef } from "react";
-import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet } from "lucide-react";
+import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 const Products = () => {
@@ -162,6 +173,23 @@ const Products = () => {
     },
     onError: (error: any) => {
       toast.error(`Update mislukt: ${error.message}`);
+    },
+  });
+
+  const resetWooStock = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke("reset-woo-stock", {
+        body: { tenantId: selectedTenant },
+      });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`WooCommerce voorraad reset voltooid: ${data.totalVariationsUpdated} variaties op 0 gezet`);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: (error: any) => {
+      toast.error(`Reset mislukt: ${error.message}`);
     },
   });
 
@@ -324,6 +352,36 @@ const Products = () => {
             <FileSpreadsheet className={`h-4 w-4 mr-2 ${updateWooSkus.isPending ? "animate-spin" : ""}`} />
             Update WooCommerce SKUs
           </Button>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                disabled={resetWooStock.isPending || !selectedTenant}
+                variant="destructive"
+              >
+                <AlertTriangle className={`h-4 w-4 mr-2 ${resetWooStock.isPending ? "animate-spin" : ""}`} />
+                Reset WooCommerce Voorraad
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Weet je het zeker?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Dit zet de voorraad van ALLE productvariaties in WooCommerce op 0. 
+                  Dit kan niet ongedaan worden gemaakt. Dit proces kan enkele minuten duren.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Annuleren</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => resetWooStock.mutate()}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Ja, reset voorraad
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
 
         {isLoading ? (
