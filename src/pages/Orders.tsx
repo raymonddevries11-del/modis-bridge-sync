@@ -6,13 +6,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Download, RefreshCw, Package } from "lucide-react";
+import { Search, Download, RefreshCw, Package, ArrowUpDown } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 
 const Orders = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedTenant, setSelectedTenant] = useState<string>("");
+  const [sortAscending, setSortAscending] = useState(false);
   const queryClient = useQueryClient();
 
   // Auto-select first active tenant
@@ -35,7 +36,7 @@ const Orders = () => {
   }, [tenants, selectedTenant]);
 
   const { data: orders, isLoading } = useQuery({
-    queryKey: ["orders", searchTerm, selectedTenant],
+    queryKey: ["orders", searchTerm, selectedTenant, sortAscending],
     queryFn: async () => {
       if (!selectedTenant) return [];
       
@@ -46,7 +47,7 @@ const Orders = () => {
           order_lines(*)
         `)
         .eq("tenant_id", selectedTenant)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: sortAscending });
 
       if (searchTerm) {
         query = query.or(`order_number.ilike.%${searchTerm}%,status.ilike.%${searchTerm}%`);
@@ -160,6 +161,13 @@ const Orders = () => {
           >
             <Package className={`mr-2 h-4 w-4 ${importOrderLines.isPending ? 'animate-spin' : ''}`} />
             Importeer Orderregels
+          </Button>
+          <Button 
+            variant="outline"
+            onClick={() => setSortAscending(!sortAscending)}
+          >
+            <ArrowUpDown className="mr-2 h-4 w-4" />
+            {sortAscending ? 'Oudste eerst' : 'Nieuwste eerst'}
           </Button>
         </div>
 
