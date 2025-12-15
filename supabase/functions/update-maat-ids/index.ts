@@ -8,6 +8,104 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Process CSV data format: array of { productSku, maatId, sizeLabel }
+async function processCsvData(csvData: any[], tenantId: string, supabase: any): Promise<Response> {
+  console.log(`Processing ${csvData.length} rows from CSV`);
+
+  let updated = 0;
+  let notFound = 0;
+  let errors = 0;
+
+  // Fetch all products to get product IDs
+  const { data: products } = await supabase
+    .from('products')
+    .select('id, sku')
+    .eq('tenant_id', tenantId);
+
+  const productMap = new Map<string, string>();
+  for (const p of products || []) {
+    productMap.set(p.sku, p.id);
+  }
+  console.log(`Loaded ${productMap.size} products`);
+
+  // Process in batches
+  const BATCH_SIZE = 100;
+  
+  for (let i = 0; i < csvData.length; i += BATCH_SIZE) {
+    const batch = csvData.slice(i, i + BATCH_SIZE);
+    
+    for (const row of batch) {
+      const { productSku, maatId, sizeLabel } = row;
+      
+      if (!productSku || !maatId) {
+        continue;
+      }
+
+      try {
+        const productId = productMap.get(productSku);
+        if (!productId) {
+          notFound++;
+          continue;
+        }
+
+        // Update the variant's maat_id to the 6-digit code
+        const { data: updatedVariant, error: updateError } = await supabase
+          .from('variants')
+          .update({ maat_id: maatId, updated_at: new Date().toISOString() })
+          .eq('product_id', productId)
+          .eq('size_label', sizeLabel)
+          .select('id');
+
+        if (updateError) {
+          console.error(`Error updating variant for ${productSku}-${sizeLabel}:`, updateError);
+          errors++;
+          continue;
+        }
+
+        if (updatedVariant && updatedVariant.length > 0) {
+          updated++;
+        } else {
+          notFound++;
+        }
+      } catch (err) {
+        console.error(`Error processing row ${productSku}-${sizeLabel}:`, err);
+        errors++;
+      }
+    }
+
+    console.log(`Processed batch ${Math.floor(i / BATCH_SIZE) + 1}, updated: ${updated}, not found: ${notFound}`);
+  }
+
+  console.log(`Completed: ${updated} updated, ${notFound} not found, ${errors} errors`);
+
+  // Add changelog entry
+  if (tenantId) {
+    await supabase.from('changelog').insert({
+      tenant_id: tenantId,
+      event_type: 'MAAT_ID_UPDATE',
+      description: `Maat ID's bijgewerkt uit CSV: ${updated} varianten geüpdatet`,
+      metadata: {
+        source: 'csv',
+        total: csvData.length,
+        updated,
+        notFound,
+        errors
+      }
+    });
+  }
+
+  return new Response(
+    JSON.stringify({
+      success: true,
+      updated,
+      notFound,
+      errors,
+      total: csvData.length,
+    }),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -18,11 +116,18 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    const { fileName, xmlContent, tenantId } = await req.json();
+    const body = await req.json();
+    const { fileName, xmlContent, tenantId, csvData } = body;
+    
+    // Support both XML and CSV formats
+    if (csvData && Array.isArray(csvData)) {
+      // CSV format: array of { productSku, maatId, sizeLabel }
+      return await processCsvData(csvData, tenantId, supabase);
+    }
     
     if (!fileName || !xmlContent) {
       return new Response(
-        JSON.stringify({ error: 'Missing fileName or xmlContent' }),
+        JSON.stringify({ error: 'Missing fileName or xmlContent, or csvData array' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
