@@ -503,33 +503,107 @@ async function createProductInWooCommerce(
   
   console.log(`Product ${sku} size options (${sizeOptions.length}):`, JSON.stringify(sizeOptions));
 
-  // Prepare product data
-  const productData: any = {
-    name: title,
-    type: 'variable', // Variable product since we have variants
-    sku: sku,
-    status: 'publish',
-    catalog_visibility: 'visible',
-    description: webshop_text || '',
-    short_description: meta_description || '',
-    images: productImages,
-    attributes: [
-      {
-        id: 0, // Let WooCommerce assign attribute ID
-        name: 'Maat',
-        position: 0,
-        visible: true,
-        variation: true,
-        options: sizeOptions // This must be a proper array like ["40 = 6½", "41 = 7½"]
+  // Fetch ALL global attributes from WooCommerce for new product creation
+  let globalAttributes: any[] = [];
+  const globalAttributeMap = new Map<string, { id: number; slug: string }>();
+  
+  try {
+    const attrListUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes`);
+    attrListUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+    attrListUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+    attrListUrl.searchParams.append('per_page', '100');
+    
+    const attrListResponse = await fetchWithRetry(attrListUrl.toString(), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+    
+    if (attrListResponse.ok) {
+      globalAttributes = await attrListResponse.json();
+      
+      for (const attr of globalAttributes) {
+        const normalizedName = attr.name?.toLowerCase().trim();
+        if (normalizedName) {
+          globalAttributeMap.set(normalizedName, { id: attr.id, slug: attr.slug });
+        }
+        if (attr.slug) {
+          globalAttributeMap.set(attr.slug.toLowerCase().replace('pa_', ''), { id: attr.id, slug: attr.slug });
+        }
       }
-    ],
-    tax_class: tax_code || '',
+      console.log(`Fetched ${globalAttributes.length} global attributes for new product`);
+    }
+  } catch (err) {
+    console.error('Error fetching global attributes:', err);
+  }
+  
+  const findGlobalAttribute = (name: string): { id: number; slug: string } | null => {
+    const normalizedName = name.toLowerCase().trim();
+    return globalAttributeMap.get(normalizedName) || null;
   };
+  
+  const ensureAttributeTerm = async (attrId: number, termValue: string): Promise<void> => {
+    try {
+      const termsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${attrId}/terms`);
+      termsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+      termsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+      termsUrl.searchParams.append('per_page', '100');
+      termsUrl.searchParams.append('search', termValue);
+      
+      const termsResponse = await fetchWithRetry(termsUrl.toString(), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      if (termsResponse.ok) {
+        const terms = await termsResponse.json();
+        const exists = terms.some((t: any) => t.name?.toLowerCase().trim() === termValue.toLowerCase().trim());
+        
+        if (!exists) {
+          const createTermUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${attrId}/terms`);
+          createTermUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+          createTermUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+          
+          await fetchWithRetry(createTermUrl.toString(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: termValue }),
+          });
+          console.log(`Created attribute term: ${termValue} for attribute ${attrId}`);
+        }
+      }
+    } catch (err) {
+      console.error(`Error ensuring attribute term ${termValue}:`, err);
+    }
+  };
+  
+  // Get Maat global attribute ID
+  const globalMaat = findGlobalAttribute('maat');
+  const globalMaatId = globalMaat?.id || 0;
+  
+  // Ensure size terms exist
+  if (globalMaatId > 0) {
+    for (const sizeOption of sizeOptions) {
+      await ensureAttributeTerm(globalMaatId, sizeOption);
+    }
+  }
+  
+  // Build product attributes array using global IDs
+  const productAttributes: any[] = [{
+    id: globalMaatId,
+    name: 'Maat',
+    position: 0,
+    visible: true,
+    variation: true,
+    options: sizeOptions
+  }];
 
   // Add color attribute if available
   if (color?.label) {
-    productData.attributes.push({
-      name: 'Color',
+    const globalColor = findGlobalAttribute('kleur') || findGlobalAttribute('color');
+    if (globalColor?.id) {
+      await ensureAttributeTerm(globalColor.id, color.label);
+    }
+    productAttributes.push({
+      id: globalColor?.id || 0,
+      name: 'Kleur',
       position: 1,
       visible: true,
       variation: false,
@@ -542,23 +616,47 @@ async function createProductInWooCommerce(
     ? await mapAttributeCodes(attributes, tenantId, supabase)
     : attributes;
 
-  // Add all product attributes from database as custom attributes
+  // Add all product attributes using global attribute IDs
   if (mappedAttributes && typeof mappedAttributes === 'object') {
-    let position = productData.attributes.length;
+    let position = productAttributes.length;
     for (const [key, value] of Object.entries(mappedAttributes)) {
       const valueStr = String(value).trim();
+      if (!valueStr || key.toLowerCase() === 'maat') continue;
       
-      if (valueStr) {
-        productData.attributes.push({
-          name: key,
-          position: position++,
-          visible: true,
-          variation: false,
-          options: [valueStr]
-        });
+      const globalAttr = findGlobalAttribute(key);
+      
+      if (globalAttr?.id) {
+        await ensureAttributeTerm(globalAttr.id, valueStr);
+        console.log(`Using global attribute "${key}" (ID: ${globalAttr.id}) for new product`);
       }
+      
+      productAttributes.push({
+        id: globalAttr?.id || 0,
+        name: key,
+        position: position++,
+        visible: true,
+        variation: false,
+        options: [valueStr]
+      });
     }
   }
+  
+  const globalAttrCount = productAttributes.filter((a: any) => a.id > 0).length;
+  console.log(`New product ${sku}: ${productAttributes.length} attributes (${globalAttrCount} global)`);
+
+  // Prepare product data
+  const productData: any = {
+    name: title,
+    type: 'variable',
+    sku: sku,
+    status: 'publish',
+    catalog_visibility: 'visible',
+    description: webshop_text || '',
+    short_description: meta_description || '',
+    images: productImages,
+    attributes: productAttributes,
+    tax_class: tax_code || '',
+  };
 
   // Add categories if available - ensure they exist first
   console.log(`Product ${sku} has categories:`, categories);
@@ -910,16 +1008,15 @@ async function updateProductInWooCommerce(
     console.log(`Fetched ${existingAttributes.length} existing attributes from WooCommerce`);
   }
   
-  // Fetch global attributes and get IDs for Maat, Wijdte, Uitneembaar voetbed
-  let globalMaatId = 0;
-  let globalWijdteId = 0;
-  let globalVoetbedId = 0;
+  // Fetch ALL global attributes from WooCommerce
   let globalAttributes: any[] = [];
+  const globalAttributeMap = new Map<string, { id: number; slug: string }>();
   
   try {
     const attrListUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes`);
     attrListUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
     attrListUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+    attrListUrl.searchParams.append('per_page', '100');
     
     const attrListResponse = await fetchWithRetry(attrListUrl.toString(), {
       headers: { 'Content-Type': 'application/json' },
@@ -928,70 +1025,77 @@ async function updateProductInWooCommerce(
     if (attrListResponse.ok) {
       globalAttributes = await attrListResponse.json();
       
-      // Find Maat attribute
-      const maatAttr = globalAttributes.find((a: any) => 
-        a.name?.toLowerCase() === 'maat' || a.slug?.toLowerCase() === 'pa_maat'
-      );
-      if (maatAttr) {
-        globalMaatId = maatAttr.id;
-        console.log(`Found global Maat attribute with ID: ${globalMaatId}`);
-      }
-      
-      // Find Wijdte attribute
-      const wijdteAttr = globalAttributes.find((a: any) => 
-        a.name?.toLowerCase() === 'wijdte' || a.slug?.toLowerCase() === 'pa_wijdte'
-      );
-      if (wijdteAttr) {
-        globalWijdteId = wijdteAttr.id;
-        console.log(`Found global Wijdte attribute with ID: ${globalWijdteId}`);
-      }
-      
-      // Find Uitneembaar voetbed attribute
-      const voetbedAttr = globalAttributes.find((a: any) => 
-        a.name?.toLowerCase() === 'uitneembaar voetbed' || 
-        a.slug?.toLowerCase() === 'pa_uitneembaar-voetbed' ||
-        a.slug?.toLowerCase() === 'pa_uitneembaar_voetbed'
-      );
-      if (voetbedAttr) {
-        globalVoetbedId = voetbedAttr.id;
-        console.log(`Found global Uitneembaar voetbed attribute with ID: ${globalVoetbedId}`);
-      }
-      
-      // Ensure all Maat size options exist as terms
-      if (globalMaatId > 0) {
-        const termsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${globalMaatId}/terms`);
-        termsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-        termsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-        termsUrl.searchParams.append('per_page', '100');
-        
-        const termsResponse = await fetchWithRetry(termsUrl.toString(), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-        
-        if (termsResponse.ok) {
-          const existingTerms = await termsResponse.json();
-          const existingTermNames = new Set(existingTerms.map((t: any) => t.name.toLowerCase().trim()));
-          
-          // Create missing terms
-          for (const sizeOption of updateSizeOptions) {
-            if (!existingTermNames.has(sizeOption.toLowerCase().trim())) {
-              console.log(`Creating missing Maat term: ${sizeOption}`);
-              const createTermUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${globalMaatId}/terms`);
-              createTermUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-              createTermUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-              
-              await fetchWithRetry(createTermUrl.toString(), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: sizeOption }),
-              });
-            }
-          }
+      // Build a map of all global attributes (name -> id, slug)
+      for (const attr of globalAttributes) {
+        const normalizedName = attr.name?.toLowerCase().trim();
+        if (normalizedName) {
+          globalAttributeMap.set(normalizedName, { id: attr.id, slug: attr.slug });
+        }
+        // Also map by slug for fallback matching
+        if (attr.slug) {
+          globalAttributeMap.set(attr.slug.toLowerCase().replace('pa_', ''), { id: attr.id, slug: attr.slug });
         }
       }
+      
+      console.log(`Fetched ${globalAttributes.length} global attributes from WooCommerce`);
     }
   } catch (err) {
     console.error('Error fetching global attributes:', err);
+  }
+  
+  // Helper function to find or create a global attribute
+  const findGlobalAttribute = (name: string): { id: number; slug: string } | null => {
+    const normalizedName = name.toLowerCase().trim();
+    return globalAttributeMap.get(normalizedName) || null;
+  };
+  
+  // Helper function to ensure attribute term exists
+  const ensureAttributeTerm = async (attrId: number, termValue: string): Promise<void> => {
+    try {
+      // Check if term exists
+      const termsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${attrId}/terms`);
+      termsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+      termsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+      termsUrl.searchParams.append('per_page', '100');
+      termsUrl.searchParams.append('search', termValue);
+      
+      const termsResponse = await fetchWithRetry(termsUrl.toString(), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      if (termsResponse.ok) {
+        const terms = await termsResponse.json();
+        const exists = terms.some((t: any) => t.name?.toLowerCase().trim() === termValue.toLowerCase().trim());
+        
+        if (!exists) {
+          // Create the term
+          const createTermUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${attrId}/terms`);
+          createTermUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+          createTermUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+          
+          await fetchWithRetry(createTermUrl.toString(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: termValue }),
+          });
+          console.log(`Created attribute term: ${termValue} for attribute ${attrId}`);
+        }
+      }
+    } catch (err) {
+      console.error(`Error ensuring attribute term ${termValue}:`, err);
+    }
+  };
+  
+  // Get Maat global attribute ID and ensure size terms exist
+  const globalMaat = findGlobalAttribute('maat');
+  const globalMaatId = globalMaat?.id || 0;
+  
+  if (globalMaatId > 0) {
+    console.log(`Found global Maat attribute with ID: ${globalMaatId}`);
+    // Ensure all size options exist as terms
+    for (const sizeOption of updateSizeOptions) {
+      await ensureAttributeTerm(globalMaatId, sizeOption);
+    }
   }
   
   // Find existing Maat attribute index on this product
@@ -1009,54 +1113,62 @@ async function updateProductInWooCommerce(
     position: 0,
     visible: true,
     variation: true,
-    options: updateSizeOptions // Array like ["40 = 6½", "41 = 7½", ...]
+    options: updateSizeOptions
   };
   
-  // Build final attributes array: replace Maat if exists, otherwise add it
-  let updatedAttributes: any[];
+  // Build the updated attributes array
+  let updatedAttributes: any[] = [];
+  
+  // Add Maat first
   if (maatIndex >= 0) {
-    // Replace existing Maat attribute
     updatedAttributes = [...existingAttributes];
     updatedAttributes[maatIndex] = maatAttribute;
-    console.log(`Replacing existing Maat attribute at index ${maatIndex} (global ID: ${globalMaatId})`);
   } else {
-    // Add Maat as first attribute
     updatedAttributes = [maatAttribute, ...existingAttributes];
-    console.log(`Adding new Maat attribute at position 0 (global ID: ${globalMaatId})`);
   }
   
-  // Update Wijdte attribute with global ID if it exists
-  if (globalWijdteId > 0) {
-    const wijdteIndex = updatedAttributes.findIndex((attr: any) => 
-      attr.name?.toLowerCase() === 'wijdte' ||
-      attr.slug?.toLowerCase() === 'wijdte' ||
-      attr.slug?.toLowerCase() === 'pa_wijdte'
-    );
-    if (wijdteIndex >= 0) {
-      updatedAttributes[wijdteIndex] = {
-        ...updatedAttributes[wijdteIndex],
-        id: globalWijdteId,
-        name: 'Wijdte' // Use proper name, WooCommerce will use the global attribute
-      };
-      console.log(`Updated Wijdte attribute with global ID: ${globalWijdteId}`);
-    }
-  }
+  // Now process ALL other attributes from the database and ensure they use global IDs
+  const mappedAttributes = tenantId && attributes 
+    ? await mapAttributeCodes(attributes, tenantId, supabase)
+    : attributes;
   
-  // Update Uitneembaar voetbed attribute with global ID if it exists
-  if (globalVoetbedId > 0) {
-    const voetbedIndex = updatedAttributes.findIndex((attr: any) => 
-      attr.name?.toLowerCase() === 'uitneembaar voetbed' ||
-      attr.slug?.toLowerCase() === 'uitneembaar-voetbed' ||
-      attr.slug?.toLowerCase() === 'pa_uitneembaar-voetbed' ||
-      attr.slug?.toLowerCase() === 'pa_uitneembaar_voetbed'
-    );
-    if (voetbedIndex >= 0) {
-      updatedAttributes[voetbedIndex] = {
-        ...updatedAttributes[voetbedIndex],
-        id: globalVoetbedId,
-        name: 'Uitneembaar voetbed' // Use proper name, WooCommerce will use the global attribute
+  if (mappedAttributes && typeof mappedAttributes === 'object') {
+    for (const [attrName, attrValue] of Object.entries(mappedAttributes)) {
+      const valueStr = String(attrValue).trim();
+      if (!valueStr) continue;
+      
+      // Skip if it's Maat (already handled)
+      if (attrName.toLowerCase() === 'maat') continue;
+      
+      // Try to find a global attribute for this name
+      const globalAttr = findGlobalAttribute(attrName);
+      
+      // Check if this attribute already exists in the product
+      const existingIndex = updatedAttributes.findIndex((a: any) => 
+        a.name?.toLowerCase() === attrName.toLowerCase() ||
+        a.slug?.toLowerCase() === attrName.toLowerCase().replace(/\s+/g, '-')
+      );
+      
+      const newAttr = {
+        id: globalAttr?.id || 0,
+        name: attrName,
+        position: existingIndex >= 0 ? updatedAttributes[existingIndex].position : updatedAttributes.length,
+        visible: true,
+        variation: false,
+        options: [valueStr]
       };
-      console.log(`Updated Uitneembaar voetbed attribute with global ID: ${globalVoetbedId}`);
+      
+      // Ensure the term exists if we have a global attribute
+      if (globalAttr?.id) {
+        await ensureAttributeTerm(globalAttr.id, valueStr);
+        console.log(`Using global attribute "${attrName}" (ID: ${globalAttr.id}) with value: ${valueStr}`);
+      }
+      
+      if (existingIndex >= 0) {
+        updatedAttributes[existingIndex] = newAttr;
+      } else {
+        updatedAttributes.push(newAttr);
+      }
     }
   }
   
@@ -1068,7 +1180,8 @@ async function updateProductInWooCommerce(
 
   updateData.attributes = updatedAttributes;
   
-  console.log(`Sending ${updatedAttributes.length} attributes, Maat variation=${maatAttribute.variation}, options count=${updateSizeOptions.length}, global ID=${globalMaatId}`);
+  const globalAttrCount = updatedAttributes.filter((a: any) => a.id > 0).length;
+  console.log(`Sending ${updatedAttributes.length} attributes (${globalAttrCount} global), Maat variation=${maatAttribute.variation}, options count=${updateSizeOptions.length}`);
 
   // Update product data if there's anything to update
   if (Object.keys(updateData).length > 0) {
