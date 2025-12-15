@@ -71,3 +71,6 @@ verify_jwt = false
 
 [functions.update-maat-ids]
 verify_jwt = false
+
+[functions.update-woo-variation-skus]
+verify_jwt = false

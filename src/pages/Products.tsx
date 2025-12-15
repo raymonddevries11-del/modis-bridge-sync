@@ -9,11 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ProductDetailModal } from "@/components/ProductDetailModal";
 import { useState, useEffect, useRef } from "react";
-import { Search, RefreshCw, Calendar, Image, Upload } from "lucide-react";
+import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 
 const Products = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [brandFilter, setBrandFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
@@ -148,6 +149,22 @@ const Products = () => {
     },
   });
 
+  const updateWooSkus = useMutation({
+    mutationFn: async (csvContent: string) => {
+      const { data, error } = await supabase.functions.invoke("update-woo-variation-skus", {
+        body: { csvContent, tenantId: selectedTenant },
+      });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`WooCommerce SKU's bijgewerkt: ${data.updated} variaties, ${data.errors} fouten`);
+    },
+    onError: (error: any) => {
+      toast.error(`Update mislukt: ${error.message}`);
+    },
+  });
+
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -170,9 +187,35 @@ const Products = () => {
     };
     reader.readAsText(file);
     
-    // Reset file input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  const handleCsvUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      toast.error('Alleen CSV bestanden zijn toegestaan');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      if (content) {
+        toast.info('WooCommerce SKU update gestart... Dit kan enkele minuten duren.');
+        updateWooSkus.mutate(content);
+      }
+    };
+    reader.onerror = () => {
+      toast.error('Kon bestand niet lezen');
+    };
+    reader.readAsText(file);
+    
+    if (csvInputRef.current) {
+      csvInputRef.current.value = '';
     }
   };
 
@@ -264,6 +307,22 @@ const Products = () => {
           >
             <Upload className={`h-4 w-4 mr-2 ${updateMaatIds.isPending ? "animate-spin" : ""}`} />
             Update Maat IDs
+          </Button>
+
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleCsvUpload}
+            className="hidden"
+          />
+          <Button
+            onClick={() => csvInputRef.current?.click()}
+            disabled={updateWooSkus.isPending || !selectedTenant}
+            variant="secondary"
+          >
+            <FileSpreadsheet className={`h-4 w-4 mr-2 ${updateWooSkus.isPending ? "animate-spin" : ""}`} />
+            Update WooCommerce SKUs
           </Button>
         </div>
 
