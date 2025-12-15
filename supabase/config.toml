@@ -80,3 +80,6 @@ verify_jwt = false
 
 [functions.export-wpallimport-csv]
 verify_jwt = false
+
+[functions.fix-woo-variation-skus]
+verify_jwt = false
