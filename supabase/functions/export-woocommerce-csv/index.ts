@@ -165,9 +165,20 @@ serve(async (req) => {
   }
 });
 
+// Format price with period as decimal separator (WooCommerce standard)
+function formatPrice(price: any): string {
+  if (price === null || price === undefined || price === '') return '';
+  const num = Number(price);
+  if (isNaN(num)) return '';
+  // Always use period as decimal separator, 2 decimal places
+  return num.toFixed(2);
+}
+
 function generateWooCommerceCSV(products: any[]): string {
-  // WooCommerce CSV Import columns
+  // WooCommerce CSV Import columns - standard format
+  // Using pipe (|) for multiple values as WooCommerce expects
   const headers = [
+    'ID',
     'Type',
     'SKU',
     'Name',
@@ -180,6 +191,7 @@ function generateWooCommerceCSV(products: any[]): string {
     'Tax class',
     'In stock?',
     'Stock',
+    'Low stock amount',
     'Backorders allowed?',
     'Sold individually?',
     'Weight (kg)',
@@ -223,6 +235,26 @@ function generateWooCommerceCSV(products: any[]): string {
     'Attribute 5 value(s)',
     'Attribute 5 visible',
     'Attribute 5 global',
+    'Attribute 6 name',
+    'Attribute 6 value(s)',
+    'Attribute 6 visible',
+    'Attribute 6 global',
+    'Attribute 7 name',
+    'Attribute 7 value(s)',
+    'Attribute 7 visible',
+    'Attribute 7 global',
+    'Attribute 8 name',
+    'Attribute 8 value(s)',
+    'Attribute 8 visible',
+    'Attribute 8 global',
+    'Attribute 9 name',
+    'Attribute 9 value(s)',
+    'Attribute 9 visible',
+    'Attribute 9 global',
+    'Attribute 10 name',
+    'Attribute 10 value(s)',
+    'Attribute 10 visible',
+    'Attribute 10 global',
     'Meta: _ywbc_barcode_display_value'
   ];
 
@@ -231,185 +263,193 @@ function generateWooCommerceCSV(products: any[]): string {
 
   for (const product of products) {
     const hasVariants = product.variants && product.variants.length > 0;
-    const productType = hasVariants ? 'variable' : 'simple';
+    const activeVariants = hasVariants ? product.variants.filter((v: any) => v.active) : [];
+    const productType = activeVariants.length > 0 ? 'variable' : 'simple';
     
-    // Build categories string (pipe separated with hierarchy)
+    // Build categories string (pipe separated for WooCommerce)
     let categories = '';
     if (product.categories && Array.isArray(product.categories)) {
       categories = product.categories
         .map((cat: any) => typeof cat === 'object' ? cat.name : String(cat))
-        .join(', ');
+        .filter((c: string) => c && c.trim())
+        .join(' | ');
     }
     
-    // Build images string (comma separated URLs)
+    // Build images string (pipe separated for WooCommerce)
     let images = '';
     if (product.images && Array.isArray(product.images)) {
-      images = product.images.join(', ');
+      images = product.images
+        .filter((img: any) => img && typeof img === 'string')
+        .join(' | ');
     }
     
-    // Get prices
-    const regularPrice = product.product_prices?.regular || '';
-    const salePrice = product.product_prices?.list && product.product_prices.list !== product.product_prices.regular 
-      ? product.product_prices.list 
+    // Get prices - ensure proper decimal format
+    const regularPrice = formatPrice(product.product_prices?.regular);
+    const salePrice = product.product_prices?.list && 
+                      product.product_prices.list !== product.product_prices.regular 
+      ? formatPrice(product.product_prices.list) 
       : '';
     
-    // Build attributes for variable products
-    let attr1Name = '', attr1Values = '', attr1Visible = '', attr1Global = '';
-    let attr2Name = '', attr2Values = '', attr2Visible = '', attr2Global = '';
-    let attr3Name = '', attr3Values = '', attr3Visible = '', attr3Global = '';
-    let attr4Name = '', attr4Values = '', attr4Visible = '', attr4Global = '';
-    let attr5Name = '', attr5Values = '', attr5Visible = '', attr5Global = '';
+    // Build product attributes array (max 10 attributes for WooCommerce)
+    const productAttributes: { name: string; values: string; visible: string; global: string }[] = [];
     
-    if (hasVariants) {
-      // Maat attribute with all size values
-      attr1Name = 'Maat';
-      attr1Values = product.variants
-        .filter((v: any) => v.active)
+    // Add Maat attribute FIRST for variable products (this is the variation attribute)
+    if (activeVariants.length > 0) {
+      const sizeValues = activeVariants
         .map((v: any) => v.size_label || v.maat_web || v.maat_id)
-        .join(', ');
-      attr1Visible = '1';
-      attr1Global = '1';
+        .filter((s: string) => s)
+        .join(' | ');
+      
+      productAttributes.push({
+        name: 'Maat',
+        values: sizeValues,
+        visible: '1',
+        global: '1'
+      });
     }
     
-    // Add product attributes (Wijdte, etc.)
+    // Add product attributes from the attributes JSON field
     if (product.attributes && typeof product.attributes === 'object') {
-      const attrs = Object.entries(product.attributes);
+      const skipKeys = ['maat', 'artikelnummer']; // Skip these, handled separately
       
-      // Skip Maat if already added, add other attributes
-      let attrIndex = hasVariants ? 2 : 1; // Start at 2 if Maat is already attr1
-      
-      for (const [key, value] of attrs) {
-        if (key.toLowerCase() === 'maat') continue; // Skip maat, already handled
-        if (attrIndex > 5) break;
+      for (const [key, value] of Object.entries(product.attributes)) {
+        if (skipKeys.includes(key.toLowerCase())) continue;
+        if (productAttributes.length >= 10) break;
+        if (!value || String(value).trim() === '') continue;
         
-        const attrName = key;
-        const attrValue = String(value);
-        
-        switch (attrIndex) {
-          case 1:
-            attr1Name = attrName;
-            attr1Values = attrValue;
-            attr1Visible = '1';
-            attr1Global = '1';
-            break;
-          case 2:
-            attr2Name = attrName;
-            attr2Values = attrValue;
-            attr2Visible = '1';
-            attr2Global = '1';
-            break;
-          case 3:
-            attr3Name = attrName;
-            attr3Values = attrValue;
-            attr3Visible = '1';
-            attr3Global = '1';
-            break;
-          case 4:
-            attr4Name = attrName;
-            attr4Values = attrValue;
-            attr4Visible = '1';
-            attr4Global = '1';
-            break;
-          case 5:
-            attr5Name = attrName;
-            attr5Values = attrValue;
-            attr5Visible = '1';
-            attr5Global = '1';
-            break;
-        }
-        attrIndex++;
+        productAttributes.push({
+          name: key,
+          values: String(value),
+          visible: '1',
+          global: '1'
+        });
       }
     }
     
+    // Pad attributes to 10
+    while (productAttributes.length < 10) {
+      productAttributes.push({ name: '', values: '', visible: '', global: '' });
+    }
+    
     // Calculate total stock for parent product
-    const totalStock = hasVariants 
-      ? product.variants.reduce((sum: number, v: any) => sum + (v.stock_totals?.qty || 0), 0)
+    const totalStock = activeVariants.length > 0
+      ? activeVariants.reduce((sum: number, v: any) => sum + (v.stock_totals?.qty || 0), 0)
       : 0;
+    
+    // Get brand as tag
+    const tags = product.brands?.name || '';
     
     // Parent product row
     const parentRow: string[] = [
-      productType,                              // Type
-      product.sku,                              // SKU
-      product.title,                            // Name
-      '1',                                      // Published
-      '0',                                      // Is featured?
-      'visible',                                // Visibility in catalog
-      product.internal_description || '',       // Short description
-      product.webshop_text || '',              // Description
-      'taxable',                                // Tax status
-      product.tax_code || '',                   // Tax class
-      totalStock > 0 ? '1' : '0',              // In stock?
-      hasVariants ? '' : String(totalStock),   // Stock (empty for variable)
-      '0',                                      // Backorders allowed?
-      '0',                                      // Sold individually?
-      '',                                       // Weight
-      '',                                       // Length
-      '',                                       // Width
-      '',                                       // Height
-      '1',                                      // Allow customer reviews?
-      '',                                       // Purchase note
-      String(salePrice),                        // Sale price
-      String(regularPrice),                     // Regular price
-      categories,                               // Categories
-      product.brands?.name || '',              // Tags (using brand as tag)
-      '',                                       // Shipping class
-      images,                                   // Images
-      '',                                       // Download limit
-      '',                                       // Download expiry days
-      '',                                       // Parent
-      '',                                       // Grouped products
-      '',                                       // Upsells
-      '',                                       // Cross-sells
-      '',                                       // External URL
-      '',                                       // Button text
-      '0',                                      // Position
-      attr1Name,                                // Attribute 1 name
-      attr1Values,                              // Attribute 1 value(s)
-      attr1Visible,                             // Attribute 1 visible
-      attr1Global,                              // Attribute 1 global
-      attr2Name,                                // Attribute 2 name
-      attr2Values,                              // Attribute 2 value(s)
-      attr2Visible,                             // Attribute 2 visible
-      attr2Global,                              // Attribute 2 global
-      attr3Name,                                // Attribute 3 name
-      attr3Values,                              // Attribute 3 value(s)
-      attr3Visible,                             // Attribute 3 visible
-      attr3Global,                              // Attribute 3 global
-      attr4Name,                                // Attribute 4 name
-      attr4Values,                              // Attribute 4 value(s)
-      attr4Visible,                             // Attribute 4 visible
-      attr4Global,                              // Attribute 4 global
-      attr5Name,                                // Attribute 5 name
-      attr5Values,                              // Attribute 5 value(s)
-      attr5Visible,                             // Attribute 5 visible
-      attr5Global,                              // Attribute 5 global
-      ''                                        // Meta: barcode
+      '',                                         // ID (empty for new products)
+      productType,                                // Type
+      product.sku,                                // SKU
+      product.title,                              // Name
+      '1',                                        // Published
+      '0',                                        // Is featured?
+      'visible',                                  // Visibility in catalog
+      product.internal_description || '',         // Short description
+      product.webshop_text || '',                 // Description
+      'taxable',                                  // Tax status
+      '',                                         // Tax class
+      totalStock > 0 ? '1' : '0',                // In stock?
+      productType === 'simple' ? String(totalStock) : '', // Stock (empty for variable)
+      '',                                         // Low stock amount
+      '0',                                        // Backorders allowed?
+      '0',                                        // Sold individually?
+      '',                                         // Weight
+      '',                                         // Length
+      '',                                         // Width
+      '',                                         // Height
+      '1',                                        // Allow customer reviews?
+      '',                                         // Purchase note
+      salePrice,                                  // Sale price
+      regularPrice,                               // Regular price
+      categories,                                 // Categories
+      tags,                                       // Tags
+      '',                                         // Shipping class
+      images,                                     // Images
+      '',                                         // Download limit
+      '',                                         // Download expiry days
+      '',                                         // Parent (empty for parent product)
+      '',                                         // Grouped products
+      '',                                         // Upsells
+      '',                                         // Cross-sells
+      '',                                         // External URL
+      '',                                         // Button text
+      '0',                                        // Position
+      // Attributes 1-10
+      productAttributes[0].name,
+      productAttributes[0].values,
+      productAttributes[0].visible,
+      productAttributes[0].global,
+      productAttributes[1].name,
+      productAttributes[1].values,
+      productAttributes[1].visible,
+      productAttributes[1].global,
+      productAttributes[2].name,
+      productAttributes[2].values,
+      productAttributes[2].visible,
+      productAttributes[2].global,
+      productAttributes[3].name,
+      productAttributes[3].values,
+      productAttributes[3].visible,
+      productAttributes[3].global,
+      productAttributes[4].name,
+      productAttributes[4].values,
+      productAttributes[4].visible,
+      productAttributes[4].global,
+      productAttributes[5].name,
+      productAttributes[5].values,
+      productAttributes[5].visible,
+      productAttributes[5].global,
+      productAttributes[6].name,
+      productAttributes[6].values,
+      productAttributes[6].visible,
+      productAttributes[6].global,
+      productAttributes[7].name,
+      productAttributes[7].values,
+      productAttributes[7].visible,
+      productAttributes[7].global,
+      productAttributes[8].name,
+      productAttributes[8].values,
+      productAttributes[8].visible,
+      productAttributes[8].global,
+      productAttributes[9].name,
+      productAttributes[9].values,
+      productAttributes[9].visible,
+      productAttributes[9].global,
+      ''                                          // Meta: barcode
     ];
     
     rows.push(parentRow);
     
-    // Add variation rows
-    if (hasVariants) {
-      for (const variant of product.variants) {
-        if (!variant.active) continue;
+    // Add variation rows for variable products
+    if (activeVariants.length > 0) {
+      let position = 0;
+      
+      for (const variant of activeVariants) {
+        position++;
         
         const variantStock = variant.stock_totals?.qty || 0;
         const sizeLabel = variant.size_label || variant.maat_web || variant.maat_id;
         const variationSKU = `${product.sku}-${variant.maat_id}`;
         
         const variationRow: string[] = [
+          '',                                     // ID
           'variation',                            // Type
           variationSKU,                           // SKU
-          '',                                     // Name (inherited from parent)
+          `${product.title} - ${sizeLabel}`,     // Name
           '1',                                    // Published
           '0',                                    // Is featured?
           'visible',                              // Visibility in catalog
           '',                                     // Short description
           '',                                     // Description
           'taxable',                              // Tax status
-          product.tax_code || '',                 // Tax class
+          '',                                     // Tax class
           variantStock > 0 ? '1' : '0',          // In stock?
           String(variantStock),                   // Stock
+          '',                                     // Low stock amount
           variant.allow_backorder ? '1' : '0',   // Backorders allowed?
           '0',                                    // Sold individually?
           '',                                     // Weight
@@ -418,41 +458,36 @@ function generateWooCommerceCSV(products: any[]): string {
           '',                                     // Height
           '1',                                    // Allow customer reviews?
           '',                                     // Purchase note
-          String(salePrice),                      // Sale price (inherited)
-          String(regularPrice),                   // Regular price (inherited)
+          salePrice,                              // Sale price (from parent)
+          regularPrice,                           // Regular price (from parent)
           '',                                     // Categories
           '',                                     // Tags
           '',                                     // Shipping class
           '',                                     // Images
           '',                                     // Download limit
           '',                                     // Download expiry days
-          product.sku,                            // Parent (parent SKU)
+          product.sku,                            // Parent (parent SKU!)
           '',                                     // Grouped products
           '',                                     // Upsells
           '',                                     // Cross-sells
           '',                                     // External URL
           '',                                     // Button text
-          '0',                                    // Position
-          'Maat',                                 // Attribute 1 name
-          sizeLabel,                              // Attribute 1 value(s) - single value for variation
-          '1',                                    // Attribute 1 visible
-          '1',                                    // Attribute 1 global
-          '',                                     // Attribute 2 name
-          '',                                     // Attribute 2 value(s)
-          '',                                     // Attribute 2 visible
-          '',                                     // Attribute 2 global
-          '',                                     // Attribute 3 name
-          '',                                     // Attribute 3 value(s)
-          '',                                     // Attribute 3 visible
-          '',                                     // Attribute 3 global
-          '',                                     // Attribute 4 name
-          '',                                     // Attribute 4 value(s)
-          '',                                     // Attribute 4 visible
-          '',                                     // Attribute 4 global
-          '',                                     // Attribute 5 name
-          '',                                     // Attribute 5 value(s)
-          '',                                     // Attribute 5 visible
-          '',                                     // Attribute 5 global
+          String(position),                       // Position
+          // Attribute 1 = Maat (the variation attribute)
+          'Maat',
+          sizeLabel,                              // Single value for this variation
+          '1',
+          '1',
+          // Attributes 2-10 (empty for variations)
+          '', '', '', '',
+          '', '', '', '',
+          '', '', '', '',
+          '', '', '', '',
+          '', '', '', '',
+          '', '', '', '',
+          '', '', '', '',
+          '', '', '', '',
+          '', '', '', '',
           variant.ean || ''                       // Meta: barcode (EAN)
         ];
         
@@ -461,20 +496,17 @@ function generateWooCommerceCSV(products: any[]): string {
     }
   }
 
-  // Convert to CSV string
+  // Convert to CSV string with proper escaping
+  // All fields are quoted to prevent issues with commas in values
   return rows.map(row => row.map(cell => escapeCSV(cell)).join(',')).join('\n');
 }
 
 function escapeCSV(value: any): string {
-  if (value === null || value === undefined) return '';
+  if (value === null || value === undefined) return '""';
   
   const str = String(value);
   
-  // Check if we need to quote the field
-  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
-    // Escape double quotes by doubling them
-    return '"' + str.replace(/"/g, '""') + '"';
-  }
-  
-  return str;
+  // Always quote fields to prevent issues with commas, line breaks, and special chars
+  // Double any existing quotes within the string
+  return '"' + str.replace(/"/g, '""') + '"';
 }
