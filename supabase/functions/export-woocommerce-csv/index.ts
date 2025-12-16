@@ -435,7 +435,16 @@ function generateWooCommerceCSV(products: any[]): string {
         
         const variantStock = variant.stock_totals?.qty || 0;
         const sizeLabel = variant.size_label || variant.maat_web || variant.maat_id;
-        const variationSKU = `${product.sku}-${variant.maat_id}`;
+
+        // Build a stable variation SKU.
+        // Some datasets may already have a prefixed value stored in maat_id (e.g. "{productSku}-...")
+        // so we avoid double-prefixing.
+        const variationSKU = (() => {
+          const raw = String(variant.maat_id || '').trim();
+          if (raw && raw.startsWith(`${product.sku}-`)) return raw;
+          const suffix = raw || String(sizeLabel || '').trim();
+          return suffix ? `${product.sku}-${suffix}` : product.sku;
+        })();
         
         const variationRow: string[] = [
           '',                                     // ID
