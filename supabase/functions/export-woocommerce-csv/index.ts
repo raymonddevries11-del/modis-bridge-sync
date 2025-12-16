@@ -266,21 +266,22 @@ function generateWooCommerceCSV(products: any[]): string {
     const activeVariants = hasVariants ? product.variants.filter((v: any) => v.active) : [];
     const productType = activeVariants.length > 0 ? 'variable' : 'simple';
     
-    // Build categories string (pipe separated for WooCommerce)
+    // Build categories string (comma separated - WooCommerce native importer)
     let categories = '';
     if (product.categories && Array.isArray(product.categories)) {
       categories = product.categories
         .map((cat: any) => typeof cat === 'object' ? cat.name : String(cat))
         .filter((c: string) => c && c.trim())
-        .join(' | ');
+        .join(', ');
     }
     
-    // Build images string (pipe separated for WooCommerce)
+    // Build images string - COMMA separated (NO SPACES) for WooCommerce native importer
+    // The pipe separator with spaces causes URL encoding issues
     let images = '';
     if (product.images && Array.isArray(product.images)) {
       images = product.images
-        .filter((img: any) => img && typeof img === 'string')
-        .join(' | ');
+        .filter((img: any) => img && typeof img === 'string' && img.trim())
+        .join(',');
     }
     
     // Get prices - ensure proper decimal format
@@ -298,7 +299,7 @@ function generateWooCommerceCSV(products: any[]): string {
       const sizeValues = activeVariants
         .map((v: any) => v.size_label || v.maat_web || v.maat_id)
         .filter((s: string) => s)
-        .join(' | ');
+        .join(', ');
       
       productAttributes.push({
         name: 'Maat',
