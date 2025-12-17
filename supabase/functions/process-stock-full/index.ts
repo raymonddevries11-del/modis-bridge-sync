@@ -8,6 +8,11 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+function normalizeSku(input: string): string {
+  // Keep only digits to avoid hidden whitespace / separators from XML exports
+  return (input || '').replace(/\D/g, '');
+}
+
 function parseQty(qty: string): number {
   return Number(qty.replace(/^0+/, '') || '0');
 }
@@ -75,10 +80,10 @@ serve(async (req) => {
       throw new Error(`Failed to fetch products: ${productsError.message}`);
     }
 
-    // Create SKU -> product map for fast lookup
+    // Create SKU -> product map for fast lookup (normalized to digits)
     const productMap = new Map<string, string>();
     for (const p of allProducts || []) {
-      productMap.set(p.sku, p.id);
+      productMap.set(normalizeSku(p.sku), p.id);
     }
     console.log(`Loaded ${productMap.size} products into memory`);
 
@@ -158,7 +163,8 @@ serve(async (req) => {
 
     for (const vrd of (vrdElements as any)) {
       try {
-        const sku = vrd.querySelector('artikelnummer')?.textContent?.trim();
+        const rawSku = vrd.querySelector('artikelnummer')?.textContent?.trim();
+        const sku = rawSku ? normalizeSku(rawSku) : '';
         const mutatiecode = vrd.querySelector('mutatiecode')?.textContent?.trim();
 
         if (!sku) {
