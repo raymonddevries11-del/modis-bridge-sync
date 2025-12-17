@@ -69,16 +69,33 @@ serve(async (req) => {
 
     console.log(`Found ${vrdElements.length} stock items`);
 
-    // STEP 1: Pre-fetch all products for this tenant (bulk query)
+    // STEP 1: Pre-fetch all products for this tenant (paginated to avoid 1000 limit)
     console.log('Fetching all products for tenant...');
-    const { data: allProducts, error: productsError } = await supabase
-      .from('products')
-      .select('id, sku')
-      .eq('tenant_id', tenantId);
-
-    if (productsError) {
-      throw new Error(`Failed to fetch products: ${productsError.message}`);
+    const allProducts: any[] = [];
+    const PAGE_SIZE = 1000;
+    let offset = 0;
+    let hasMore = true;
+    
+    while (hasMore) {
+      const { data: batch, error: productsError } = await supabase
+        .from('products')
+        .select('id, sku')
+        .eq('tenant_id', tenantId)
+        .range(offset, offset + PAGE_SIZE - 1);
+      
+      if (productsError) {
+        throw new Error(`Failed to fetch products: ${productsError.message}`);
+      }
+      
+      if (batch && batch.length > 0) {
+        allProducts.push(...batch);
+        offset += batch.length;
+        hasMore = batch.length === PAGE_SIZE;
+      } else {
+        hasMore = false;
+      }
     }
+    console.log(`Fetched ${allProducts.length} products total`);
 
     // Create SKU -> product map for fast lookup (normalized to digits)
     const productMap = new Map<string, string>();
