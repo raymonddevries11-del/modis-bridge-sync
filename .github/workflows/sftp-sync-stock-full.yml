@@ -32,14 +32,23 @@ jobs:
           const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
           async function ensureDir(sftp, dir) {
+            // We must be able to create/use these folders; if not, fail fast with a clear message.
+            const existsBefore = await sftp.exists(dir);
+            if (existsBefore) return;
+
             try {
-              const exists = await sftp.exists(dir);
-              if (!exists) {
-                console.log(`Creating directory: ${dir}`);
-                await sftp.mkdir(dir, true);
-              }
+              console.log(`Creating directory: ${dir}`);
+              await sftp.mkdir(dir, true);
             } catch (e) {
-              console.log(`Directory check/create warning for ${dir}: ${e.message}`);
+              // We'll verify existence below and throw a clearer error.
+              console.log(`mkdir warning for ${dir}: ${e.message}`);
+            }
+
+            const existsAfter = await sftp.exists(dir);
+            if (!existsAfter) {
+              throw new Error(
+                `Cannot create/access directory "${dir}" on SFTP. Check permissions/ownership on the server.`
+              );
             }
           }
 
@@ -191,14 +200,20 @@ jobs:
                       const result = await response.json();
                       console.log(`✓ Full stock correction started for ${tenant.name}: ${result.message}`);
 
-                      // Move to archive (overwrite if previous run already archived same filename)
-                      await moveFile(sftp, processingPath, archivePath);
-                      console.log(`Archived: ${fileName}`);
+                      // Move to archive (best-effort). If the server disallows it, keep it in /processing.
+                      try {
+                        await moveFile(sftp, processingPath, archivePath);
+                        console.log(`Archived: ${fileName}`);
+                      } catch (archiveError) {
+                        console.log(
+                          `Archive move failed (${archiveError.message}). Leaving file in processing: ${processingPath}`
+                        );
+                      }
 
                     } catch (fileError) {
                       console.error(`Error processing file ${fileName}:`, fileError.message);
 
-                      // Try to move to error folder; if that also fails, leave it in processing
+                      // Try to move to error folder (best-effort). If not possible, leave it in /processing.
                       try {
                         const inProcessing = await sftp.exists(processingPath);
                         if (inProcessing) {
@@ -208,7 +223,9 @@ jobs:
                           console.log(`File is not in processing anymore, cannot move to error: ${fileName}`);
                         }
                       } catch (moveError) {
-                        console.error(`Could not move to error folder:`, moveError.message);
+                        console.log(
+                          `Could not move to error folder (${moveError.message}). Leaving file as-is.`
+                        );
                       }
                     }
                   }
