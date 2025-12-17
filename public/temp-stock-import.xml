@@ -1,8 +1,8 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <voorraad>
 	<envelop>
-		<filename>Modis-totale-vrd----251214011921.XML</filename>
-		<timestamp>2025-12-14 01:19</timestamp>
+		<filename>Modis-totale-vrd----251217094729.XML</filename>
+		<timestamp>2025-12-17 09:47</timestamp>
 		<klant>KOSTER</klant>
 	</envelop>
 <envelop-voorraad>
@@ -1804,7 +1804,7 @@
 				<maat-alfa>45</maat-alfa>
 				<maat-web>45 = 10½</maat-web>
 				<ean-barcode>8719092931483</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 		</maten>
 	</vrd>
@@ -3929,7 +3929,7 @@
 				<maat-alfa>42</maat-alfa>
 				<maat-web>42 = 8</maat-web>
 				<ean-barcode>5603976206152</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="011430">
 				<maat-alfa>43</maat-alfa>
@@ -5251,7 +5251,7 @@
 				<maat-alfa>45</maat-alfa>
 				<maat-web>45 = 10½</maat-web>
 				<ean-barcode>4068138126999</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 		</maten>
 	</vrd>
@@ -13006,7 +13006,7 @@
 				<maat-alfa>38</maat-alfa>
 				<maat-web>38 = 5</maat-web>
 				<ean-barcode>8719205532071</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021390">
 				<maat-alfa>39</maat-alfa>
@@ -18829,7 +18829,7 @@
 				<maat-alfa>40</maat-alfa>
 				<maat-web>40 = 6½</maat-web>
 				<ean-barcode>4068138086880</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="002075">
 				<maat-alfa>41</maat-alfa>
@@ -19382,7 +19382,7 @@
 				<maat-alfa>38</maat-alfa>
 				<maat-web>38 = 5</maat-web>
 				<ean-barcode>8719205751946</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021390">
 				<maat-alfa>39</maat-alfa>
@@ -21201,7 +21201,7 @@
 				<maat-alfa>39</maat-alfa>
 				<maat-web>39 = 6</maat-web>
 				<ean-barcode>3597436634017</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="002065">
 				<maat-alfa>40</maat-alfa>
@@ -23836,7 +23836,7 @@
 				<maat-alfa>40</maat-alfa>
 				<maat-web>40 = 6½</maat-web>
 				<ean-barcode>4069134235807</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="002075">
 				<maat-alfa>41</maat-alfa>
@@ -24638,7 +24638,7 @@
 				<maat-alfa>38.5</maat-alfa>
 				<maat-web>38.5 = 5½</maat-web>
 				<ean-barcode>4065447970749</ean-barcode>
-				<totaal-aantal>002</totaal-aantal>
+				<totaal-aantal>001</totaal-aantal>
 			</maat>
 			<maat id="002060">
 				<maat-alfa>39</maat-alfa>
@@ -25580,7 +25580,7 @@
 				<maat-alfa>39</maat-alfa>
 				<maat-web>39 = 6</maat-web>
 				<ean-barcode>8719051706879</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021400">
 				<maat-alfa>40</maat-alfa>
@@ -26426,7 +26426,7 @@
 				<maat-alfa>40</maat-alfa>
 				<maat-web>40 = 6½</maat-web>
 				<ean-barcode>8719051706725</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021410">
 				<maat-alfa>41</maat-alfa>
@@ -27320,7 +27320,7 @@
 				<maat-alfa>37</maat-alfa>
 				<maat-web>37 = 4</maat-web>
 				<ean-barcode>8720647058142</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021380">
 				<maat-alfa>38</maat-alfa>
@@ -31472,7 +31472,7 @@
 				<maat-alfa>40.5</maat-alfa>
 				<maat-web>40.5 = 7</maat-web>
 				<ean-barcode>4063648989287</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="002075">
 				<maat-alfa>41</maat-alfa>
@@ -31712,19 +31712,19 @@
 			<maat id="021400">
 				<maat-alfa>40</maat-alfa>
 				<maat-web>40 = 6½</maat-web>
-				<ean-barcode>0000000000000</ean-barcode>
+				<ean-barcode>8447137762395</ean-barcode>
 				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021410">
 				<maat-alfa>41</maat-alfa>
 				<maat-web>41 = 7½</maat-web>
-				<ean-barcode>0000000000000</ean-barcode>
+				<ean-barcode>8447137762401</ean-barcode>
 				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021420">
 				<maat-alfa>42</maat-alfa>
 				<maat-web>42 = 8</maat-web>
-				<ean-barcode>0000000000000</ean-barcode>
+				<ean-barcode>8447137762418</ean-barcode>
 				<totaal-aantal>000</totaal-aantal>
 			</maat>
 		</maten>
@@ -33124,7 +33124,7 @@
 				<maat-alfa>42</maat-alfa>
 				<maat-web>42 = 8</maat-web>
 				<ean-barcode>3666138794678</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 		</maten>
 	</vrd>
@@ -34476,7 +34476,7 @@
 				<maat-alfa>42</maat-alfa>
 				<maat-web>42 = 8</maat-web>
 				<ean-barcode>8719205690238</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021430">
 				<maat-alfa>43</maat-alfa>
@@ -35298,7 +35298,7 @@
 				<maat-alfa>37</maat-alfa>
 				<maat-web>37 = 4</maat-web>
 				<ean-barcode>4255722308972</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021380">
 				<maat-alfa>38</maat-alfa>
@@ -37082,7 +37082,7 @@
 				<maat-alfa>39</maat-alfa>
 				<maat-web>39 = 6</maat-web>
 				<ean-barcode>3666138799383</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021400">
 				<maat-alfa>40</maat-alfa>
@@ -37358,7 +37358,7 @@
 				<maat-alfa>40.5</maat-alfa>
 				<maat-web>40.5 = 7</maat-web>
 				<ean-barcode>9009118637291</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 		</maten>
 	</vrd>
@@ -37904,7 +37904,7 @@
 				<maat-alfa>41</maat-alfa>
 				<maat-web>41 = 7½</maat-web>
 				<ean-barcode>8051572834793</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 		</maten>
 	</vrd>
@@ -37984,7 +37984,7 @@
 			<maat id="021350">
 				<maat-alfa>35</maat-alfa>
 				<maat-web>35 = 2½</maat-web>
-				<ean-barcode>0000000000000</ean-barcode>
+				<ean-barcode>8447137471921</ean-barcode>
 				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021360">
@@ -37996,7 +37996,7 @@
 			<maat id="021370">
 				<maat-alfa>37</maat-alfa>
 				<maat-web>37 = 4</maat-web>
-				<ean-barcode>0000000000000</ean-barcode>
+				<ean-barcode>8447137471945</ean-barcode>
 				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021380">
@@ -38020,13 +38020,13 @@
 			<maat id="021410">
 				<maat-alfa>41</maat-alfa>
 				<maat-web>41 = 7½</maat-web>
-				<ean-barcode>0000000000000</ean-barcode>
+				<ean-barcode>8447137471983</ean-barcode>
 				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021420">
 				<maat-alfa>42</maat-alfa>
 				<maat-web>42 = 8</maat-web>
-				<ean-barcode>0000000000000</ean-barcode>
+				<ean-barcode>8447137471990</ean-barcode>
 				<totaal-aantal>000</totaal-aantal>
 			</maat>
 		</maten>
@@ -38996,7 +38996,7 @@
 				<maat-alfa>38</maat-alfa>
 				<maat-web>38 = 5</maat-web>
 				<ean-barcode>4251698803244</ean-barcode>
-				<totaal-aantal>002</totaal-aantal>
+				<totaal-aantal>001</totaal-aantal>
 			</maat>
 			<maat id="021390">
 				<maat-alfa>39</maat-alfa>
@@ -41259,7 +41259,7 @@
 				<maat-alfa>38</maat-alfa>
 				<maat-web>38 = 5</maat-web>
 				<ean-barcode>0000000000000</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="011390">
 				<maat-alfa>39</maat-alfa>
@@ -42993,7 +42993,7 @@
 				<maat-alfa>42</maat-alfa>
 				<maat-web>42 = 8</maat-web>
 				<ean-barcode>0000000000000</ean-barcode>
-				<totaal-aantal>002</totaal-aantal>
+				<totaal-aantal>001</totaal-aantal>
 			</maat>
 		</maten>
 	</vrd>
@@ -43028,7 +43028,7 @@
 				<maat-alfa>40</maat-alfa>
 				<maat-web>40 = 6½</maat-web>
 				<ean-barcode>0000000000000</ean-barcode>
-				<totaal-aantal>002</totaal-aantal>
+				<totaal-aantal>001</totaal-aantal>
 			</maat>
 			<maat id="021410">
 				<maat-alfa>41</maat-alfa>
@@ -43281,7 +43281,7 @@
 				<maat-alfa>41</maat-alfa>
 				<maat-web>41 = 7½</maat-web>
 				<ean-barcode>0000000000000</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021420">
 				<maat-alfa>42</maat-alfa>
@@ -43399,7 +43399,7 @@
 				<maat-alfa>40</maat-alfa>
 				<maat-web>40 = 6½</maat-web>
 				<ean-barcode>9009118526595</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="002070">
 				<maat-alfa>40.5</maat-alfa>
@@ -43611,7 +43611,7 @@
 				<maat-alfa>40</maat-alfa>
 				<maat-web>40 = 6½</maat-web>
 				<ean-barcode>8720647047443</ean-barcode>
-				<totaal-aantal>001</totaal-aantal>
+				<totaal-aantal>000</totaal-aantal>
 			</maat>
 			<maat id="021410">
 				<maat-alfa>41</maat-alfa>
@@ -44500,7 +44500,7 @@
 				<maat-alfa>44</maat-alfa>
 				<maat-web>44 = 10</maat-web>
 				<ean-barcode>4058613866472</ean-barcode>
-				<totaal-aantal>002</totaal-aantal>
+				<totaal-aantal>001</totaal-aantal>
 			</maat>
 			<maat id="011450">
 				<maat-alfa>45</maat-alfa>
@@ -46464,7 +46464,7 @@
 				<maat-alfa>37/38</maat-alfa>
 				<maat-web>37/38</maat-web>
 				<ean-barcode>8718546000942</ean-barcode>
-				<totaal-aantal>002</totaal-aantal>
+				<totaal-aantal>001</totaal-aantal>
 			</maat>
 			<maat id="161003">
 				<maat-alfa>39/40</maat-alfa>

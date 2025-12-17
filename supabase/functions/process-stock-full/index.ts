@@ -22,20 +22,35 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    const { fileName, xmlContent, tenantId } = await req.json();
+    const { fileName, xmlContent, xmlUrl, tenantId } = await req.json();
     
-    if (!fileName || !xmlContent) {
+    let actualXmlContent = xmlContent;
+    let actualFileName = fileName;
+    
+    // If xmlUrl is provided, fetch the XML content from that URL
+    if (xmlUrl && !xmlContent) {
+      console.log(`Fetching XML from URL: ${xmlUrl}`);
+      const response = await fetch(xmlUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch XML from URL: ${response.status} ${response.statusText}`);
+      }
+      actualXmlContent = await response.text();
+      actualFileName = fileName || xmlUrl.split('/').pop() || 'unknown.xml';
+      console.log(`Fetched ${actualXmlContent.length} bytes from URL`);
+    }
+    
+    if (!actualFileName || !actualXmlContent) {
       return new Response(
-        JSON.stringify({ error: 'Missing fileName or xmlContent' }),
+        JSON.stringify({ error: 'Missing fileName/xmlContent or xmlUrl' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    console.log(`Processing full stock correction: ${fileName}`);
+    console.log(`Processing full stock correction: ${actualFileName}`);
     
     // Parse XML
     const parser = new DOMParser();
-    const doc = parser.parseFromString(xmlContent, 'text/html');
+    const doc = parser.parseFromString(actualXmlContent, 'text/html');
     
     if (!doc) {
       throw new Error('Failed to parse XML');
@@ -139,6 +154,7 @@ serve(async (req) => {
     const stockUpdates: { variant_id: string; qty: number; updated_at: string }[] = [];
     const variantUpdates: { id: string; updates: any }[] = [];
     const changedVariantIds = new Set<string>();
+    const processedVariantIds = new Set<string>(); // Track which variants were in the XML
 
     for (const vrd of (vrdElements as any)) {
       try {
@@ -193,6 +209,9 @@ serve(async (req) => {
 
           if (!variant) continue;
 
+          // Mark this variant as processed (it's in the XML)
+          processedVariantIds.add(variant.id);
+
           // Determine stock quantity
           let stockQty = parseQty(totaalAantal || '0');
           if (mutatiecode === 'D') {
@@ -235,7 +254,38 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Parsed: ${processedCount} products, ${stockUpdates.length} stock updates, ${changedVariantIds.size} changes`);
+    // STEP 4b: Set stock to 0 for variants NOT in the XML but with stock > 0
+    console.log('Checking for variants not in XML that need to be zeroed...');
+    let zeroedCount = 0;
+    
+    for (const variant of allVariants) {
+      // Skip variants that were processed from XML
+      if (processedVariantIds.has(variant.id)) continue;
+      
+      // Check if this variant has stock > 0
+      const currentStock = stockMap.get(variant.id);
+      if (currentStock !== undefined && currentStock > 0) {
+        // This variant has stock but was NOT in the XML - set to 0
+        stockUpdates.push({
+          variant_id: variant.id,
+          qty: 0,
+          updated_at: new Date().toISOString(),
+        });
+        changedVariantIds.add(variant.id);
+        zeroedCount++;
+        
+        if (zeroedCount <= 10) {
+          console.log(`Zeroing variant ${variant.id} (maat_id: ${variant.maat_id}) - was ${currentStock}, not in XML`);
+        }
+      }
+    }
+    
+    if (zeroedCount > 10) {
+      console.log(`... and ${zeroedCount - 10} more variants zeroed`);
+    }
+    console.log(`Total variants zeroed (not in XML): ${zeroedCount}`);
+
+    console.log(`Parsed: ${processedCount} products, ${stockUpdates.length} stock updates, ${changedVariantIds.size} changes, ${zeroedCount} zeroed`);
 
     // STEP 5: Execute batch stock updates
     console.log('Executing batch stock updates...');
@@ -297,14 +347,15 @@ serve(async (req) => {
       await supabase.from('changelog').insert({
         tenant_id: tenantId,
         event_type: 'STOCK_FULL_CORRECTION',
-        description: `Volledige voorraad correctie uitgevoerd: ${stockUpdates.length} varianten bijgewerkt van ${fileName}. ${changedVariantIds.size} varianten gewijzigd.`,
+        description: `Volledige voorraad correctie uitgevoerd: ${stockUpdates.length} varianten bijgewerkt van ${actualFileName}. ${changedVariantIds.size} varianten gewijzigd, ${zeroedCount} op 0 gezet (niet in XML).`,
         metadata: {
           productsProcessed: processedCount,
           variantsUpdated: stockUpdates.length,
           changedVariants: changedVariantIds.size,
+          zeroedNotInXml: zeroedCount,
           skipped: skippedCount,
           errors: errors.slice(0, 10),
-          fileName: fileName
+          fileName: actualFileName
         }
       });
     }
@@ -312,11 +363,12 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Full stock correction completed for ${fileName}`,
+        message: `Full stock correction completed for ${actualFileName}`,
         results: {
           productsProcessed: processedCount,
           variantsUpdated: stockUpdates.length,
           changedVariants: changedVariantIds.size,
+          zeroedNotInXml: zeroedCount,
           skipped: skippedCount,
           errors: errors.length,
           syncJobCreated: changedVariantIds.size > 0
