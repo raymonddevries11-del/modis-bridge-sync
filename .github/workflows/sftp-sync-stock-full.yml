@@ -33,28 +33,38 @@ jobs:
 
           async function ensureDir(sftp, dir) {
             try {
-              await sftp.mkdir(dir, true);
+              const exists = await sftp.exists(dir);
+              if (!exists) {
+                console.log(`Creating directory: ${dir}`);
+                await sftp.mkdir(dir, true);
+              }
             } catch (e) {
-              // Directory might already exist
+              console.log(`Directory check/create warning for ${dir}: ${e.message}`);
             }
           }
 
-          async function moveWithOverwrite(sftp, from, to) {
+          async function moveFile(sftp, from, to) {
+            // Try rename first (faster), fall back to copy+delete if rename fails
             const exists = await sftp.exists(to);
             if (exists) {
-              // Prefer overwriting the previous file to keep paths predictable
               try {
                 await sftp.delete(to);
+                console.log(`Deleted existing file: ${to}`);
               } catch (e) {
-                // If delete is not allowed, fall back to a unique filename
-                const ts = new Date().toISOString().replace(/[:.]/g, '-');
-                const uniqueTo = `${to}.${ts}`;
-                console.log(`Destination exists and cannot delete. Moving to unique path: ${uniqueTo}`);
-                await sftp.rename(from, uniqueTo);
-                return;
+                console.log(`Could not delete existing file ${to}: ${e.message}`);
               }
             }
-            await sftp.rename(from, to);
+            
+            try {
+              await sftp.rename(from, to);
+            } catch (renameError) {
+              console.log(`Rename failed (${renameError.message}), trying copy+delete...`);
+              // Fallback: copy content then delete original
+              const content = await sftp.get(from);
+              await sftp.put(content, to);
+              await sftp.delete(from);
+              console.log(`Successfully moved via copy+delete`);
+            }
           }
 
           async function syncFullStock() {
@@ -148,7 +158,7 @@ jobs:
                       await ensureDir(sftp, `${inboundPath}/error`);
 
                       // Move to processing
-                      await moveWithOverwrite(sftp, filePath, processingPath);
+                      await moveFile(sftp, filePath, processingPath);
                       console.log(`Moved to processing: ${fileName}`);
 
                       // Get file content
@@ -182,7 +192,7 @@ jobs:
                       console.log(`✓ Full stock correction started for ${tenant.name}: ${result.message}`);
 
                       // Move to archive (overwrite if previous run already archived same filename)
-                      await moveWithOverwrite(sftp, processingPath, archivePath);
+                      await moveFile(sftp, processingPath, archivePath);
                       console.log(`Archived: ${fileName}`);
 
                     } catch (fileError) {
@@ -192,7 +202,7 @@ jobs:
                       try {
                         const inProcessing = await sftp.exists(processingPath);
                         if (inProcessing) {
-                          await moveWithOverwrite(sftp, processingPath, errorPath);
+                          await moveFile(sftp, processingPath, errorPath);
                           console.log(`Moved to error folder: ${fileName}`);
                         } else {
                           console.log(`File is not in processing anymore, cannot move to error: ${fileName}`);
