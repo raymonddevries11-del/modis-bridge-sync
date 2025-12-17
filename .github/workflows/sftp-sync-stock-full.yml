@@ -31,9 +31,35 @@ jobs:
           const Client = require('ssh2-sftp-client');
           const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
+          async function ensureDir(sftp, dir) {
+            try {
+              await sftp.mkdir(dir, true);
+            } catch (e) {
+              // Directory might already exist
+            }
+          }
+
+          async function moveWithOverwrite(sftp, from, to) {
+            const exists = await sftp.exists(to);
+            if (exists) {
+              // Prefer overwriting the previous file to keep paths predictable
+              try {
+                await sftp.delete(to);
+              } catch (e) {
+                // If delete is not allowed, fall back to a unique filename
+                const ts = new Date().toISOString().replace(/[:.]/g, '-');
+                const uniqueTo = `${to}.${ts}`;
+                console.log(`Destination exists and cannot delete. Moving to unique path: ${uniqueTo}`);
+                await sftp.rename(from, uniqueTo);
+                return;
+              }
+            }
+            await sftp.rename(from, to);
+          }
+
           async function syncFullStock() {
             const sftp = new Client();
-            
+
             try {
               console.log('Connecting to SFTP...');
               await sftp.connect({
@@ -64,7 +90,7 @@ jobs:
 
               for (const tenant of tenants) {
                 console.log(`\n--- Processing tenant: ${tenant.name} ---`);
-                
+
                 // Fetch tenant config
                 const configResponse = await fetch(
                   `${process.env.SUPABASE_URL}/rest/v1/tenant_config?tenant_id=eq.${tenant.id}&select=*`,
@@ -91,14 +117,14 @@ jobs:
                 const inboundPath = config.sftp_inbound_path;
 
                 console.log(`Checking SFTP path: ${inboundPath}`);
-                
+
                 try {
                   const files = await sftp.list(inboundPath);
-                  
+
                   // Zoek naar volledige voorraad bestanden (bevat "volledig", "volledige" of "totale" in naam)
                   const fullStockFiles = files.filter(file => {
                     const lowerName = file.name.toLowerCase();
-                    return (lowerName.includes('volledig') || lowerName.includes('totale-vrd')) && 
+                    return (lowerName.includes('volledig') || lowerName.includes('totale-vrd')) &&
                            lowerName.endsWith('.xml');
                   });
 
@@ -117,15 +143,12 @@ jobs:
                     console.log(`Processing file: ${fileName}`);
 
                     try {
-                      // Ensure processing directory exists
-                      try {
-                        await sftp.mkdir(`${inboundPath}/processing`, true);
-                      } catch (e) {
-                        // Directory might already exist
-                      }
+                      await ensureDir(sftp, `${inboundPath}/processing`);
+                      await ensureDir(sftp, `${inboundPath}/archive`);
+                      await ensureDir(sftp, `${inboundPath}/error`);
 
                       // Move to processing
-                      await sftp.rename(filePath, processingPath);
+                      await moveWithOverwrite(sftp, filePath, processingPath);
                       console.log(`Moved to processing: ${fileName}`);
 
                       // Get file content
@@ -158,25 +181,22 @@ jobs:
                       const result = await response.json();
                       console.log(`✓ Full stock correction started for ${tenant.name}: ${result.message}`);
 
-                      // Ensure archive directory exists
-                      try {
-                        await sftp.mkdir(`${inboundPath}/archive`, true);
-                      } catch (e) {
-                        // Directory might already exist
-                      }
-
-                      // Move to archive
-                      await sftp.rename(processingPath, archivePath);
+                      // Move to archive (overwrite if previous run already archived same filename)
+                      await moveWithOverwrite(sftp, processingPath, archivePath);
                       console.log(`Archived: ${fileName}`);
 
                     } catch (fileError) {
                       console.error(`Error processing file ${fileName}:`, fileError.message);
-                      
-                      // Try to move to error folder
+
+                      // Try to move to error folder; if that also fails, leave it in processing
                       try {
-                        await sftp.mkdir(`${inboundPath}/error`, true);
-                        await sftp.rename(processingPath, errorPath);
-                        console.log(`Moved to error folder: ${fileName}`);
+                        const inProcessing = await sftp.exists(processingPath);
+                        if (inProcessing) {
+                          await moveWithOverwrite(sftp, processingPath, errorPath);
+                          console.log(`Moved to error folder: ${fileName}`);
+                        } else {
+                          console.log(`File is not in processing anymore, cannot move to error: ${fileName}`);
+                        }
                       } catch (moveError) {
                         console.error(`Could not move to error folder:`, moveError.message);
                       }
