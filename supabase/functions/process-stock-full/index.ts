@@ -208,7 +208,7 @@ serve(async (req) => {
     }
     console.log(`Loaded ${stockMap.size} stock records into memory`);
 
-    // STEP 4: Process XML and build batch operations
+    // STEP 4: Process XML and build batch operations + collect missing variants
     console.log("Processing XML items...");
     let processedCount = 0;
     let skippedCount = 0;
@@ -217,6 +217,18 @@ serve(async (req) => {
     const variantUpdates: { id: string; updates: any }[] = [];
     const changedVariantIds = new Set<string>();
     const processedVariantIds = new Set<string>(); // Track which variants were in the XML
+    
+    // Collect missing variants to create
+    interface MissingVariant {
+      product_id: string;
+      maat_id: string;
+      size_label: string;
+      maat_web: string | null;
+      ean: string | null;
+      active: boolean;
+      stockQty: number;
+    }
+    const missingVariants: MissingVariant[] = [];
 
     for (const vrd of vrdElements) {
       try {
@@ -251,6 +263,7 @@ serve(async (req) => {
 
         for (const maat of maten) {
           const maatId = String((maat as any)?.["@_id"] ?? "").trim();
+          const maatAlfa = String((maat as any)?.["maat-alfa"] ?? "").trim();
           const maatWeb = String((maat as any)?.["maat-web"] ?? "").trim();
           const eanBarcode = String((maat as any)?.["ean-barcode"] ?? "").trim();
           const totaalAantal = String((maat as any)?.voorraad?.["totaal-aantal"] ?? (maat as any)?.["totaal-aantal"] ?? "").trim();
@@ -259,7 +272,7 @@ serve(async (req) => {
           if (!maatId) continue;
 
           const productVariants = variantByProductId.get(productId);
-          const variant = productVariants?.find((v) => v.maat_id === maatId);
+          let variant = productVariants?.find((v) => v.maat_id === maatId);
 
           // Debug: log first few maat lookups
           if (processedCount < 3) {
@@ -269,15 +282,34 @@ serve(async (req) => {
             }
           }
 
-          if (!variant) continue;
-
-          processedVariantIds.add(variant.id);
-
           // Determine stock quantity
           let stockQty = parseQty(totaalAantal || "0");
           if (mutatiecode === "D") {
             stockQty = 0;
           }
+
+          // If variant doesn't exist, collect it for creation
+          if (!variant) {
+            // Build size_label from maat-web or maat-alfa
+            const sizeLabel = maatWeb || maatAlfa || maatId;
+            const validEan = eanBarcode && eanBarcode !== "0000000000000" ? eanBarcode : null;
+            const isActive = maatActief !== undefined && maatActief !== null && maatActief !== "" 
+              ? String(maatActief).trim() === "1" 
+              : true;
+
+            missingVariants.push({
+              product_id: productId,
+              maat_id: maatId,
+              size_label: sizeLabel,
+              maat_web: maatWeb || null,
+              ean: validEan,
+              active: isActive,
+              stockQty: stockQty,
+            });
+            continue;
+          }
+
+          processedVariantIds.add(variant.id);
 
           const currentStock = stockMap.get(variant.id);
           if (currentStock === undefined || currentStock !== stockQty) {
@@ -312,6 +344,70 @@ serve(async (req) => {
       }
     }
 
+    // STEP 4a: Create missing variants
+    let createdVariantsCount = 0;
+    if (missingVariants.length > 0) {
+      console.log(`Creating ${missingVariants.length} missing variants...`);
+      
+      const VARIANT_CREATE_BATCH = 100;
+      for (let i = 0; i < missingVariants.length; i += VARIANT_CREATE_BATCH) {
+        const batch = missingVariants.slice(i, i + VARIANT_CREATE_BATCH);
+        const insertData = batch.map(mv => ({
+          product_id: mv.product_id,
+          maat_id: mv.maat_id,
+          size_label: mv.size_label,
+          maat_web: mv.maat_web,
+          ean: mv.ean,
+          active: mv.active,
+        }));
+
+        const { data: createdVariants, error: createError } = await supabase
+          .from("variants")
+          .insert(insertData)
+          .select("id, maat_id, product_id");
+
+        if (createError) {
+          console.error(`Error creating variants batch ${i / VARIANT_CREATE_BATCH + 1}:`, createError);
+          errors.push(`Variant creation error: ${createError.message}`);
+          continue;
+        }
+
+        if (createdVariants && createdVariants.length > 0) {
+          createdVariantsCount += createdVariants.length;
+          
+          // Create stock_totals for newly created variants
+          const newStockUpdates: { variant_id: string; qty: number; updated_at: string }[] = [];
+          
+          for (const cv of createdVariants) {
+            // Find the original missing variant data to get stockQty
+            const originalMv = batch.find(
+              mv => mv.product_id === cv.product_id && mv.maat_id === cv.maat_id
+            );
+            const stockQty = originalMv?.stockQty ?? 0;
+            
+            newStockUpdates.push({
+              variant_id: cv.id,
+              qty: stockQty,
+              updated_at: new Date().toISOString(),
+            });
+            
+            // Mark as changed so it gets synced to WooCommerce
+            changedVariantIds.add(cv.id);
+            processedVariantIds.add(cv.id);
+          }
+          
+          // Add to main stock updates
+          stockUpdates.push(...newStockUpdates);
+          
+          if (i === 0 && createdVariants.length > 0) {
+            console.log(`Sample created variant: ${JSON.stringify(createdVariants[0])}`);
+          }
+        }
+      }
+      
+      console.log(`Created ${createdVariantsCount} new variants`);
+    }
+
     // STEP 4b: Set stock to 0 for variants NOT in the XML but with stock > 0
     console.log('Checking for variants not in XML that need to be zeroed...');
     let zeroedCount = 0;
@@ -343,7 +439,7 @@ serve(async (req) => {
     }
     console.log(`Total variants zeroed (not in XML): ${zeroedCount}`);
 
-    console.log(`Parsed: ${processedCount} products, ${stockUpdates.length} stock updates, ${changedVariantIds.size} changes, ${zeroedCount} zeroed`);
+    console.log(`Parsed: ${processedCount} products, ${stockUpdates.length} stock updates, ${changedVariantIds.size} changes, ${zeroedCount} zeroed, ${createdVariantsCount} created`);
 
     // STEP 5: Execute batch stock updates
     console.log('Executing batch stock updates...');
@@ -377,7 +473,7 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Full stock correction complete: ${processedCount} products, ${stockUpdates.length} variants`);
+    console.log(`Full stock correction complete: ${processedCount} products, ${stockUpdates.length} variants, ${createdVariantsCount} new`);
     console.log(`Changed: ${changedVariantIds.size} variants`);
     
     // Create sync job if there are changes
@@ -405,10 +501,11 @@ serve(async (req) => {
       await supabase.from('changelog').insert({
         tenant_id: tenantId,
         event_type: 'STOCK_FULL_CORRECTION',
-        description: `Volledige voorraad correctie uitgevoerd: ${stockUpdates.length} varianten bijgewerkt van ${actualFileName}. ${changedVariantIds.size} varianten gewijzigd, ${zeroedCount} op 0 gezet (niet in XML).`,
+        description: `Volledige voorraad correctie uitgevoerd: ${stockUpdates.length} varianten bijgewerkt van ${actualFileName}. ${createdVariantsCount} nieuwe varianten aangemaakt, ${changedVariantIds.size} varianten gewijzigd, ${zeroedCount} op 0 gezet (niet in XML).`,
         metadata: {
           productsProcessed: processedCount,
           variantsUpdated: stockUpdates.length,
+          variantsCreated: createdVariantsCount,
           changedVariants: changedVariantIds.size,
           zeroedNotInXml: zeroedCount,
           skipped: skippedCount,
@@ -425,6 +522,7 @@ serve(async (req) => {
         results: {
           productsProcessed: processedCount,
           variantsUpdated: stockUpdates.length,
+          variantsCreated: createdVariantsCount,
           changedVariants: changedVariantIds.size,
           zeroedNotInXml: zeroedCount,
           skipped: skippedCount,
