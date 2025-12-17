@@ -14,8 +14,41 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y sshpass
+          sudo apt-get install -y sshpass openssh-client
           npm install ssh2-sftp-client node-fetch
+
+      - name: Debug SFTP permissions
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          # Setup SSH key
+          mkdir -p ~/.ssh
+          echo "$SFTP_PRIVATE_KEY" > ~/.ssh/sftp_key
+          chmod 600 ~/.ssh/sftp_key
+          
+          # Get tenant config to find the SFTP path
+          SFTP_PATH=$(curl -s "${SUPABASE_URL}/rest/v1/tenant_config?select=sftp_inbound_path&limit=1" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" | jq -r '.[0].sftp_inbound_path')
+          
+          echo "=== SFTP Path: ${SFTP_PATH} ==="
+          echo ""
+          echo "=== Directory listing of inbound path ==="
+          sshpass -P "passphrase" -p "${SFTP_PASSPHRASE}" sftp -o StrictHostKeyChecking=no -i ~/.ssh/sftp_key -P ${SFTP_PORT:-22} ${SFTP_USER}@${SFTP_HOST} << SFTP_COMMANDS
+          ls -la ${SFTP_PATH}
+          ls -la ${SFTP_PATH}/processing 2>/dev/null || echo "processing folder does not exist"
+          ls -la ${SFTP_PATH}/archive 2>/dev/null || echo "archive folder does not exist"
+          ls -la ${SFTP_PATH}/error 2>/dev/null || echo "error folder does not exist"
+          bye
+          SFTP_COMMANDS
+          
+          rm -f ~/.ssh/sftp_key
 
       - name: Sync Full Stock from SFTP
         env:
