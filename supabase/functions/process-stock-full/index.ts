@@ -1,37 +1,67 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { DOMParser } from "https://deno.land/x/deno_dom@v0.1.45/deno-dom-wasm.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { XMLParser } from "https://esm.sh/fast-xml-parser@4.5.3";
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
 function normalizeSku(input: string): string {
   // Keep only digits to avoid hidden whitespace / separators from XML exports
-  return (input || '').replace(/\D/g, '');
+  return (input || "").replace(/\D/g, "");
 }
 
 function parseQty(qty: string): number {
-  return Number(qty.replace(/^0+/, '') || '0');
+  return Number((qty || "0").replace(/^0+/, "") || "0");
+}
+
+function asArray<T>(value: T | T[] | undefined | null): T[] {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function findNodesByKey(obj: unknown, key: string): any[] {
+  const out: any[] = [];
+  const stack: unknown[] = [obj];
+
+  while (stack.length) {
+    const cur: any = stack.pop();
+    if (!cur || typeof cur !== "object") continue;
+
+    if (Array.isArray(cur)) {
+      for (const item of cur) stack.push(item);
+      continue;
+    }
+
+    for (const [k, v] of Object.entries(cur)) {
+      if (k === key) {
+        for (const node of asArray(v as any)) out.push(node);
+      } else if (v && typeof v === "object") {
+        stack.push(v);
+      }
+    }
+  }
+
+  return out;
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-  const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
     const { fileName, xmlContent, xmlUrl, tenantId } = await req.json();
-    
+
     let actualXmlContent = xmlContent;
     let actualFileName = fileName;
-    
+
     // If xmlUrl is provided, fetch the XML content from that URL
     if (xmlUrl && !xmlContent) {
       console.log(`Fetching XML from URL: ${xmlUrl}`);
@@ -40,47 +70,56 @@ serve(async (req) => {
         throw new Error(`Failed to fetch XML from URL: ${response.status} ${response.statusText}`);
       }
       actualXmlContent = await response.text();
-      actualFileName = fileName || xmlUrl.split('/').pop() || 'unknown.xml';
+      actualFileName = fileName || xmlUrl.split("/").pop() || "unknown.xml";
       console.log(`Fetched ${actualXmlContent.length} bytes from URL`);
     }
-    
+
     if (!actualFileName || !actualXmlContent) {
-      return new Response(
-        JSON.stringify({ error: 'Missing fileName/xmlContent or xmlUrl' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ error: "Missing fileName/xmlContent or xmlUrl" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     console.log(`Processing full stock correction: ${actualFileName}`);
-    
-    // Parse XML
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(actualXmlContent, 'text/html');
-    
-    if (!doc) {
-      throw new Error('Failed to parse XML');
+
+    // Parse XML (fast parser — avoids heavy DOM parsing timeouts)
+    console.log(`Parsing XML (${actualXmlContent.length} bytes)...`);
+    const parser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: "@_",
+      processEntities: true,
+      trimValues: true,
+      // Ensure vrd / maat are always arrays where possible
+      isArray: (name) => name === "vrd" || name === "maat",
+    });
+
+    let parsed: any;
+    try {
+      parsed = parser.parse(actualXmlContent);
+    } catch (e: any) {
+      throw new Error(`Failed to parse XML: ${e?.message || String(e)}`);
     }
 
-    const vrdElements = doc.querySelectorAll('vrd');
-    
+    const vrdElements = findNodesByKey(parsed, "vrd");
     if (vrdElements.length === 0) {
-      throw new Error('No stock items found in XML');
+      throw new Error("No stock items found in XML");
     }
 
     console.log(`Found ${vrdElements.length} stock items`);
 
     // STEP 1: Build a SKU set from the XML first (fast, avoids fetching unrelated products)
-    console.log('Collecting SKUs from XML...');
+    console.log("Collecting SKUs from XML...");
     const xmlSkus = new Set<string>();
-    for (const vrd of (vrdElements as any)) {
-      const rawSku = vrd.querySelector('artikelnummer')?.textContent?.trim();
-      const sku = rawSku ? normalizeSku(rawSku) : '';
+    for (const vrd of vrdElements) {
+      const rawSku = String(vrd?.artikelnummer ?? "").trim();
+      const sku = rawSku ? normalizeSku(rawSku) : "";
       if (sku) xmlSkus.add(sku);
     }
     console.log(`Collected ${xmlSkus.size} unique SKUs from XML`);
 
     // STEP 2: Fetch ONLY products that are present in the XML (batched)
-    console.log('Fetching products for XML SKUs...');
+    console.log("Fetching products for XML SKUs...");
     const allProducts: any[] = [];
     const SKU_BATCH_SIZE = 200;
     const xmlSkuList = Array.from(xmlSkus);
@@ -88,10 +127,10 @@ serve(async (req) => {
     for (let i = 0; i < xmlSkuList.length; i += SKU_BATCH_SIZE) {
       const batchSkus = xmlSkuList.slice(i, i + SKU_BATCH_SIZE);
       const { data: batch, error: productsError } = await supabase
-        .from('products')
-        .select('id, sku')
-        .eq('tenant_id', tenantId)
-        .in('sku', batchSkus);
+        .from("products")
+        .select("id, sku")
+        .eq("tenant_id", tenantId)
+        .in("sku", batchSkus);
 
       if (productsError) {
         throw new Error(`Failed to fetch products: ${productsError.message}`);
@@ -119,9 +158,9 @@ serve(async (req) => {
     for (let i = 0; i < productIds.length; i += PRODUCT_BATCH_SIZE) {
       const batchIds = productIds.slice(i, i + PRODUCT_BATCH_SIZE);
       const { data: batchVariants, error: variantsError } = await supabase
-        .from('variants')
-        .select('id, product_id, maat_id, maat_web, ean')
-        .in('product_id', batchIds);
+        .from("variants")
+        .select("id, product_id, maat_id, maat_web, ean")
+        .in("product_id", batchIds);
 
       if (variantsError) {
         console.error(`Batch ${i / PRODUCT_BATCH_SIZE + 1} variants error:`, variantsError);
@@ -145,7 +184,7 @@ serve(async (req) => {
     console.log(`Loaded ${allVariants.length} variants into memory`);
 
     // STEP 4: Pre-fetch existing stock totals (batched)
-    const variantIds = allVariants.map(v => v.id);
+    const variantIds = allVariants.map((v) => v.id);
     console.log(`Fetching stock totals for ${variantIds.length} variants...`);
 
     const existingStocks: any[] = [];
@@ -154,9 +193,9 @@ serve(async (req) => {
     for (let i = 0; i < variantIds.length; i += VARIANT_BATCH_SIZE) {
       const batchIds = variantIds.slice(i, i + VARIANT_BATCH_SIZE);
       const { data: batchStocks } = await supabase
-        .from('stock_totals')
-        .select('variant_id, qty')
-        .in('variant_id', batchIds);
+        .from("stock_totals")
+        .select("variant_id, qty")
+        .in("variant_id", batchIds);
 
       if (batchStocks) {
         existingStocks.push(...batchStocks);
@@ -170,7 +209,7 @@ serve(async (req) => {
     console.log(`Loaded ${stockMap.size} stock records into memory`);
 
     // STEP 4: Process XML and build batch operations
-    console.log('Processing XML items...');
+    console.log("Processing XML items...");
     let processedCount = 0;
     let skippedCount = 0;
     const errors: string[] = [];
@@ -179,11 +218,11 @@ serve(async (req) => {
     const changedVariantIds = new Set<string>();
     const processedVariantIds = new Set<string>(); // Track which variants were in the XML
 
-    for (const vrd of (vrdElements as any)) {
+    for (const vrd of vrdElements) {
       try {
-        const rawSku = vrd.querySelector('artikelnummer')?.textContent?.trim();
-        const sku = rawSku ? normalizeSku(rawSku) : '';
-        const mutatiecode = vrd.querySelector('mutatiecode')?.textContent?.trim();
+        const rawSku = String(vrd?.artikelnummer ?? "").trim();
+        const sku = rawSku ? normalizeSku(rawSku) : "";
+        const mutatiecode = String(vrd?.mutatiecode ?? "").trim();
 
         if (!sku) {
           skippedCount++;
@@ -197,8 +236,9 @@ serve(async (req) => {
         }
 
         // Process maten (variants)
-        const maten = vrd.querySelectorAll('maat');
-        
+        const matenContainer = (vrd as any)?.maten ?? (vrd as any)?.maat ?? undefined;
+        const maten = asArray((matenContainer as any)?.maat ?? matenContainer);
+
         // Debug: log first few products and their maten
         if (processedCount < 3) {
           console.log(`DEBUG SKU ${sku}: found ${maten.length} maten, productId: ${productId}`);
@@ -209,62 +249,56 @@ serve(async (req) => {
           }
         }
 
-        for (const maat of (maten as any)) {
-          const maatId = maat.getAttribute('id')?.trim();
-          const maatWeb = maat.querySelector('maat-web')?.textContent?.trim();
-          const eanBarcode = maat.querySelector('ean-barcode')?.textContent?.trim();
-          const totaalAantal = maat.querySelector('totaal-aantal')?.textContent?.trim();
-          const maatActief = maat.querySelector('maat-actief')?.textContent?.trim();
+        for (const maat of maten) {
+          const maatId = String((maat as any)?.["@_id"] ?? "").trim();
+          const maatWeb = String((maat as any)?.["maat-web"] ?? "").trim();
+          const eanBarcode = String((maat as any)?.["ean-barcode"] ?? "").trim();
+          const totaalAantal = String((maat as any)?.voorraad?.["totaal-aantal"] ?? (maat as any)?.["totaal-aantal"] ?? "").trim();
+          const maatActief = (maat as any)?.["maat-actief"];
 
           if (!maatId) continue;
-          
-          // Find variant using in-memory lookup
-          // maat_id in database is a 6-digit code like "011430" matching XML's maat id attribute
+
           const productVariants = variantByProductId.get(productId);
-          let variant = productVariants?.find(v => v.maat_id === maatId);
-          
+          const variant = productVariants?.find((v) => v.maat_id === maatId);
+
           // Debug: log first few maat lookups
           if (processedCount < 3) {
-            console.log(`DEBUG SKU ${sku}: looking for maat_id "${maatId}", found: ${variant ? 'YES' : 'NO'}`);
+            console.log(`DEBUG SKU ${sku}: looking for maat_id "${maatId}", found: ${variant ? "YES" : "NO"}`);
             if (!variant && productVariants) {
-              console.log(`DEBUG: Available maat_ids: ${productVariants.map(v => v.maat_id).join(', ')}`);
+              console.log(`DEBUG: Available maat_ids: ${productVariants.map((v) => v.maat_id).join(", ")}`);
             }
           }
 
           if (!variant) continue;
 
-          // Mark this variant as processed (it's in the XML)
           processedVariantIds.add(variant.id);
 
           // Determine stock quantity
-          let stockQty = parseQty(totaalAantal || '0');
-          if (mutatiecode === 'D') {
+          let stockQty = parseQty(totaalAantal || "0");
+          if (mutatiecode === "D") {
             stockQty = 0;
           }
 
-          // Track stock change
           const currentStock = stockMap.get(variant.id);
           if (currentStock === undefined || currentStock !== stockQty) {
             changedVariantIds.add(variant.id);
           }
 
-          // Add to batch updates
           stockUpdates.push({
             variant_id: variant.id,
             qty: stockQty,
             updated_at: new Date().toISOString(),
           });
 
-          // Check for variant attribute updates
           const updates: any = {};
           if (maatWeb && maatWeb !== variant.maat_web) {
             updates.maat_web = maatWeb;
           }
-          if (eanBarcode && eanBarcode !== '0000000000000' && eanBarcode !== variant.ean) {
+          if (eanBarcode && eanBarcode !== "0000000000000" && eanBarcode !== variant.ean) {
             updates.ean = eanBarcode;
           }
-          if (maatActief !== undefined) {
-            updates.active = maatActief === '1';
+          if (maatActief !== undefined && maatActief !== null && maatActief !== "") {
+            updates.active = String(maatActief).trim() === "1";
           }
 
           if (Object.keys(updates).length > 0) {
