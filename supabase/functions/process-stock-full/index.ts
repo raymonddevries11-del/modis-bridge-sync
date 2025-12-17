@@ -69,48 +69,53 @@ serve(async (req) => {
 
     console.log(`Found ${vrdElements.length} stock items`);
 
-    // STEP 1: Pre-fetch all products for this tenant (paginated to avoid 1000 limit)
-    console.log('Fetching all products for tenant...');
+    // STEP 1: Build a SKU set from the XML first (fast, avoids fetching unrelated products)
+    console.log('Collecting SKUs from XML...');
+    const xmlSkus = new Set<string>();
+    for (const vrd of (vrdElements as any)) {
+      const rawSku = vrd.querySelector('artikelnummer')?.textContent?.trim();
+      const sku = rawSku ? normalizeSku(rawSku) : '';
+      if (sku) xmlSkus.add(sku);
+    }
+    console.log(`Collected ${xmlSkus.size} unique SKUs from XML`);
+
+    // STEP 2: Fetch ONLY products that are present in the XML (batched)
+    console.log('Fetching products for XML SKUs...');
     const allProducts: any[] = [];
-    const PAGE_SIZE = 1000;
-    let offset = 0;
-    let hasMore = true;
-    
-    while (hasMore) {
+    const SKU_BATCH_SIZE = 200;
+    const xmlSkuList = Array.from(xmlSkus);
+
+    for (let i = 0; i < xmlSkuList.length; i += SKU_BATCH_SIZE) {
+      const batchSkus = xmlSkuList.slice(i, i + SKU_BATCH_SIZE);
       const { data: batch, error: productsError } = await supabase
         .from('products')
         .select('id, sku')
         .eq('tenant_id', tenantId)
-        .range(offset, offset + PAGE_SIZE - 1);
-      
+        .in('sku', batchSkus);
+
       if (productsError) {
         throw new Error(`Failed to fetch products: ${productsError.message}`);
       }
-      
+
       if (batch && batch.length > 0) {
         allProducts.push(...batch);
-        offset += batch.length;
-        hasMore = batch.length === PAGE_SIZE;
-      } else {
-        hasMore = false;
       }
     }
-    console.log(`Fetched ${allProducts.length} products total`);
 
     // Create SKU -> product map for fast lookup (normalized to digits)
     const productMap = new Map<string, string>();
     for (const p of allProducts || []) {
       productMap.set(normalizeSku(p.sku), p.id);
     }
-    console.log(`Loaded ${productMap.size} products into memory`);
+    console.log(`Loaded ${productMap.size} products into memory (from XML)`);
 
-    // STEP 2: Pre-fetch all variants for products (batched to avoid URL length limits)
+    // STEP 3: Pre-fetch all variants for the XML products (batched to avoid URL length limits)
     const productIds = Array.from(productMap.values());
     console.log(`Fetching variants for ${productIds.length} products...`);
-    
+
     const allVariants: any[] = [];
-    const PRODUCT_BATCH_SIZE = 100;
-    
+    const PRODUCT_BATCH_SIZE = 150;
+
     for (let i = 0; i < productIds.length; i += PRODUCT_BATCH_SIZE) {
       const batchIds = productIds.slice(i, i + PRODUCT_BATCH_SIZE);
       const { data: batchVariants, error: variantsError } = await supabase
@@ -122,20 +127,16 @@ serve(async (req) => {
         console.error(`Batch ${i / PRODUCT_BATCH_SIZE + 1} variants error:`, variantsError);
         continue;
       }
-      
+
       if (batchVariants) {
         allVariants.push(...batchVariants);
       }
     }
 
     // Create lookup maps for variants
-    // Key: maat_id is a 6-digit code like "011430"
-    const variantMap = new Map<string, any>();
     const variantByProductId = new Map<string, any[]>();
-    
+
     for (const v of allVariants || []) {
-      // Index by maat_id (6-digit code) within product context
-      // Also index by product_id for scoped lookup
       if (!variantByProductId.has(v.product_id)) {
         variantByProductId.set(v.product_id, []);
       }
@@ -143,20 +144,20 @@ serve(async (req) => {
     }
     console.log(`Loaded ${allVariants.length} variants into memory`);
 
-    // STEP 3: Pre-fetch existing stock totals (batched)
+    // STEP 4: Pre-fetch existing stock totals (batched)
     const variantIds = allVariants.map(v => v.id);
     console.log(`Fetching stock totals for ${variantIds.length} variants...`);
-    
+
     const existingStocks: any[] = [];
-    const VARIANT_BATCH_SIZE = 200;
-    
+    const VARIANT_BATCH_SIZE = 300;
+
     for (let i = 0; i < variantIds.length; i += VARIANT_BATCH_SIZE) {
       const batchIds = variantIds.slice(i, i + VARIANT_BATCH_SIZE);
       const { data: batchStocks } = await supabase
         .from('stock_totals')
         .select('variant_id, qty')
         .in('variant_id', batchIds);
-      
+
       if (batchStocks) {
         existingStocks.push(...batchStocks);
       }
