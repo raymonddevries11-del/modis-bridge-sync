@@ -176,7 +176,7 @@ function formatPrice(price: any): string {
 
 function generateWooCommerceCSV(products: any[]): string {
   // WooCommerce CSV Import columns - standard format
-  // Using pipe (|) for multiple values as WooCommerce expects
+  // IMPORTANT: For attribute values, WooCommerce expects comma-separated terms.
   const headers = [
     'ID',
     'Type',
@@ -300,7 +300,7 @@ function generateWooCommerceCSV(products: any[]): string {
       const sizeValues = activeVariants
         .map((v: any) => v.size_label || v.maat_web || v.maat_id)
         .filter((s: string) => s)
-        .join(' | ');  // WooCommerce expects pipe-separated values for attributes
+        .join(', ');  // Comma-separated terms so WooCommerce creates/links individual global terms
       
       productAttributes.push({
         name: 'Maat',
