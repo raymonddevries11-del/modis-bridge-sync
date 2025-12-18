@@ -310,9 +310,19 @@ function generateWooCommerceCSV(products: any[]): string {
       });
     }
     
+    // Add Merk (Brand) as global attribute for filtering
+    if (product.brands?.name) {
+      productAttributes.push({
+        name: 'Merk',
+        values: product.brands.name,
+        visible: '1',
+        global: '1'  // GLOBAL attribute enables filtering
+      });
+    }
+    
     // Add product attributes from the attributes JSON field
     if (product.attributes && typeof product.attributes === 'object') {
-      const skipKeys = ['maat', 'artikelnummer']; // Skip these, handled separately
+      const skipKeys = ['maat', 'artikelnummer', 'merk']; // Skip these, handled separately
       
       for (const [key, value] of Object.entries(product.attributes)) {
         if (skipKeys.includes(key.toLowerCase())) continue;
