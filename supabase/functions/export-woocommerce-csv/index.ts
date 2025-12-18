@@ -204,6 +204,7 @@ function generateWooCommerceCSV(products: any[]): string {
     'Regular price',
     'Categories',
     'Tags',
+    'Brands',
     'Shipping class',
     'Images',
     'Download limit',
@@ -310,15 +311,7 @@ function generateWooCommerceCSV(products: any[]): string {
       });
     }
     
-    // Add Merk (Brand) as global attribute for filtering
-    if (product.brands?.name) {
-      productAttributes.push({
-        name: 'Merk',
-        values: product.brands.name,
-        visible: '1',
-        global: '1'  // GLOBAL attribute enables filtering
-      });
-    }
+    // Brand is now exported via separate "Brands" column, not as attribute
     
     // Add product attributes from the attributes JSON field
     if (product.attributes && typeof product.attributes === 'object') {
@@ -348,8 +341,9 @@ function generateWooCommerceCSV(products: any[]): string {
       ? activeVariants.reduce((sum: number, v: any) => sum + (v.stock_totals?.qty || 0), 0)
       : 0;
     
-    // Get brand as tag
-    const tags = product.brands?.name || '';
+    // Get brand for Brands taxonomy column
+    const brands = product.brands?.name || '';
+    const tags = '';  // Tags column left empty
     
     // Parent product row
     const parentRow: string[] = [
@@ -379,6 +373,7 @@ function generateWooCommerceCSV(products: any[]): string {
       regularPrice,                               // Regular price
       categories,                                 // Categories
       tags,                                       // Tags
+      brands,                                     // Brands (taxonomy)
       '',                                         // Shipping class
       images,                                     // Images
       '',                                         // Download limit
@@ -483,6 +478,7 @@ function generateWooCommerceCSV(products: any[]): string {
           regularPrice,                           // Regular price (from parent)
           '',                                     // Categories
           '',                                     // Tags
+          '',                                     // Brands
           '',                                     // Shipping class
           '',                                     // Images
           '',                                     // Download limit
