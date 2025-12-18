@@ -295,7 +295,7 @@ function generateWooCommerceCSV(products: any[]): string {
     const productAttributes: { name: string; values: string; visible: string; global: string }[] = [];
     
     // Add Maat attribute FIRST for variable products (this is the variation attribute)
-    // CRITICAL: global = 0 for local attribute - this enables "Used for variations" checkbox
+    // global = 1 for GLOBAL attribute - enables proper filtering in WooCommerce
     if (activeVariants.length > 0) {
       const sizeValues = activeVariants
         .map((v: any) => v.size_label || v.maat_web || v.maat_id)
@@ -306,7 +306,7 @@ function generateWooCommerceCSV(products: any[]): string {
         name: 'Maat',
         values: sizeValues,
         visible: '1',
-        global: '0'  // LOCAL attribute enables "Used for variations"
+        global: '1'  // GLOBAL attribute enables filtering
       });
     }
     
@@ -488,7 +488,7 @@ function generateWooCommerceCSV(products: any[]): string {
           'Maat',
           sizeLabel,                              // Single value for this variation
           '1',
-          '0',  // LOCAL attribute - matches parent
+          '1',  // GLOBAL attribute - enables filtering
           // Attributes 2-10 (empty for variations)
           '', '', '', '',
           '', '', '', '',
