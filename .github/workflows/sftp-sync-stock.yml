@@ -2,8 +2,8 @@ name: SFTP Stock & Price Sync
 
 on:
   schedule:
-    # Runs every 15 minutes
-    - cron: '*/15 * * * *'
+    # Runs every 10 minutes
+    - cron: '*/10 * * * *'
   workflow_dispatch: # Allow manual trigger via Actions tab
 
 jobs:
