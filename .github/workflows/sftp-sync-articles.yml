@@ -173,10 +173,28 @@ jobs:
                 }
                 
                 // Sync only new photos from XML that don't exist yet
+                // Try multiple possible webfoto paths (case-insensitive search)
                 const tenantBasePath = basePath.replace('/modis-to-wp', '');
-                const webfotoPath = `${tenantBasePath}/webfoto`;
                 
-                const webfotoExists = await sftp.exists(webfotoPath);
+                // Try these paths in order until we find one that exists
+                const possibleWebfotoPaths = [
+                  `${tenantBasePath}/webfoto`,      // Sibling to modis-to-wp
+                  `${tenantBasePath}/Webfoto`,      // Case variation
+                  `${basePath}/../webfoto`,         // Relative path up one level
+                  `${basePath}/../Webfoto`,         // Case variation
+                ];
+                
+                let webfotoPath = null;
+                for (const path of possibleWebfotoPaths) {
+                  const exists = await sftp.exists(path);
+                  if (exists) {
+                    webfotoPath = path;
+                    console.log(`✓ Found webfoto directory at: ${path}`);
+                    break;
+                  }
+                }
+                
+                const webfotoExists = webfotoPath !== null;
                 if (webfotoExists && imagesToSync.size > 0) {
                   const imagesToUpload = Array.from(imagesToSync).filter(img => !existingImages.has(img));
                   console.log(`Need to upload ${imagesToUpload.length} new images`);
@@ -224,7 +242,13 @@ jobs:
                     }
                   }
                 } else if (!webfotoExists) {
-                  console.log('⚠ Webfoto directory does not exist');
+                  console.log('⚠ Webfoto directory not found. Tried paths:');
+                  const tenantBasePathLog = basePath.replace('/modis-to-wp', '');
+                  console.log(`   - ${tenantBasePathLog}/webfoto`);
+                  console.log(`   - ${tenantBasePathLog}/Webfoto`);
+                  console.log(`   - ${basePath}/../webfoto`);
+                  console.log(`   - ${basePath}/../Webfoto`);
+                  console.log(`   basePath was: ${basePath}`);
                 }
                 
                 // Process artikel files
