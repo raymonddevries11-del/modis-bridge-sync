@@ -127,15 +127,19 @@ jobs:
                     const xmlContent = await sftp.get(xmlPath);
                     const xmlString = xmlContent.toString('utf-8');
                     
-                    // Extract image filenames from <Foto> tags
-                    const fotoMatches = xmlString.match(/<Foto[^>]*>([^<]+)<\/Foto>/gi);
-                    if (fotoMatches) {
-                      fotoMatches.forEach(match => {
-                        const filename = match.replace(/<[^>]+>/g, '').trim();
-                        if (filename && /\.(jpg|jpeg|png|gif|webp)$/i.test(filename)) {
-                          imagesToSync.add(filename);
-                        }
-                      });
+                    // Extract image filenames from <foto-01> through <foto-06> tags
+                    for (let i = 1; i <= 6; i++) {
+                      const fotoTag = `foto-0${i}`;
+                      const fotoRegex = new RegExp(`<${fotoTag}>([^<]+)</${fotoTag}>`, 'gi');
+                      const matches = xmlString.match(fotoRegex);
+                      if (matches) {
+                        matches.forEach(match => {
+                          const filename = match.replace(/<[^>]+>/g, '').trim();
+                          if (filename && /\.(jpg|jpeg|png|gif|webp)$/i.test(filename)) {
+                            imagesToSync.add(filename);
+                          }
+                        });
+                      }
                     }
                   } catch (error) {
                     console.error(`Error reading ${xmlFile.name}:`, error.message);
