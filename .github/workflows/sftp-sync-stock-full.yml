@@ -2,8 +2,8 @@ name: SFTP Stock Full Correction Sync
 
 on:
   schedule:
-    # Elke zaterdag om 02:00 uur (vrijdagnacht)
-    - cron: '0 2 * * 6'
+    # Runs daily at 04:00
+    - cron: '0 4 * * *'
   workflow_dispatch: # Sta handmatig starten toe
 
 jobs:
