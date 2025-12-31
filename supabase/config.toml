@@ -92,3 +92,6 @@ verify_jwt = false
 
 [functions.export-woocommerce-csv]
 verify_jwt = false
+
+[functions.direct-woo-sync]
+verify_jwt = false
