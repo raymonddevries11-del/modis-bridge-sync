@@ -95,3 +95,6 @@ verify_jwt = false
 
 [functions.direct-woo-sync]
 verify_jwt = false
+
+[functions.cleanup-old-jobs]
+verify_jwt = false
