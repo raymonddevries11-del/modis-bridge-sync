@@ -30,147 +30,89 @@ Deno.serve(async (req) => {
       .eq('type', 'SYNC_TO_WOO')
       .eq('state', 'processing');
 
-    const { count: errorCount } = await supabase
+    console.log(`Found jobs - ready: ${readyCount}, processing: ${processingCount}`);
+
+    // Use direct delete without fetching IDs first - much faster
+    let deletedReady = 0;
+    let deletedProcessing = 0;
+
+    // Delete ready jobs in batches using a simple approach
+    // We'll delete up to 5000 per invocation to avoid timeout
+    const MAX_DELETE_PER_RUN = 5000;
+    
+    // Delete ready jobs directly
+    const { count: deletedReadyCount, error: readyError } = await supabase
       .from('jobs')
-      .select('*', { count: 'exact', head: true })
+      .delete({ count: 'exact' })
       .eq('type', 'SYNC_TO_WOO')
-      .eq('state', 'error');
+      .eq('state', 'ready')
+      .limit(MAX_DELETE_PER_RUN);
 
-    console.log(`Found jobs - ready: ${readyCount}, processing: ${processingCount}, error: ${errorCount}`);
-
-    // Delete all ready and processing SYNC_TO_WOO jobs in batches
-    let deletedTotal = 0;
-    const BATCH_SIZE = 100; // Smaller batch to avoid Bad Request errors
-
-    // Delete ready jobs
-    let batchCount = 0;
-    while (batchCount < 500) { // Max 500 batches to prevent infinite loops
-      const { data: jobsToDelete, error: fetchError } = await supabase
-        .from('jobs')
-        .select('id')
-        .eq('type', 'SYNC_TO_WOO')
-        .eq('state', 'ready')
-        .limit(BATCH_SIZE);
-
-      if (fetchError) {
-        console.error('Error fetching jobs:', fetchError);
-        break;
-      }
-
-      if (!jobsToDelete || jobsToDelete.length === 0) {
-        console.log('No more ready jobs to delete');
-        break;
-      }
-
-      // Delete one by one for reliability
-      let batchDeleted = 0;
-      for (const job of jobsToDelete) {
-        const { error: deleteError } = await supabase
-          .from('jobs')
-          .delete()
-          .eq('id', job.id);
-
-        if (!deleteError) {
-          batchDeleted++;
-        }
-      }
-
-      deletedTotal += batchDeleted;
-      batchCount++;
-      console.log(`Batch ${batchCount}: Deleted ${batchDeleted} ready jobs, total: ${deletedTotal}`);
+    if (readyError) {
+      console.error('Error deleting ready jobs:', readyError);
+    } else {
+      deletedReady = deletedReadyCount || 0;
+      console.log(`Deleted ${deletedReady} ready jobs`);
     }
 
     // Delete processing jobs
-    batchCount = 0;
-    while (batchCount < 50) {
-      const { data: jobsToDelete, error: fetchError } = await supabase
-        .from('jobs')
-        .select('id')
-        .eq('type', 'SYNC_TO_WOO')
-        .eq('state', 'processing')
-        .limit(BATCH_SIZE);
+    const { count: deletedProcessingCount, error: processingError } = await supabase
+      .from('jobs')
+      .delete({ count: 'exact' })
+      .eq('type', 'SYNC_TO_WOO')
+      .eq('state', 'processing')
+      .limit(1000);
 
-      if (fetchError) {
-        console.error('Error fetching processing jobs:', fetchError);
-        break;
-      }
-
-      if (!jobsToDelete || jobsToDelete.length === 0) {
-        console.log('No more processing jobs to delete');
-        break;
-      }
-
-      let batchDeleted = 0;
-      for (const job of jobsToDelete) {
-        const { error: deleteError } = await supabase
-          .from('jobs')
-          .delete()
-          .eq('id', job.id);
-
-        if (!deleteError) {
-          batchDeleted++;
-        }
-      }
-
-      deletedTotal += batchDeleted;
-      batchCount++;
-      console.log(`Batch ${batchCount}: Deleted ${batchDeleted} processing jobs, total: ${deletedTotal}`);
+    if (processingError) {
+      console.error('Error deleting processing jobs:', processingError);
+    } else {
+      deletedProcessing = deletedProcessingCount || 0;
+      console.log(`Deleted ${deletedProcessing} processing jobs`);
     }
 
-    // Delete error jobs older than 7 days
+    // Delete old error jobs (older than 7 days)
     let deletedErrors = 0;
-    batchCount = 0;
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     
-    while (batchCount < 50) {
-      const { data: jobsToDelete, error: fetchError } = await supabase
-        .from('jobs')
-        .select('id')
-        .eq('type', 'SYNC_TO_WOO')
-        .eq('state', 'error')
-        .lt('created_at', sevenDaysAgo)
-        .limit(BATCH_SIZE);
+    const { count: deletedErrorCount, error: errorError } = await supabase
+      .from('jobs')
+      .delete({ count: 'exact' })
+      .eq('type', 'SYNC_TO_WOO')
+      .eq('state', 'error')
+      .lt('created_at', sevenDaysAgo)
+      .limit(1000);
 
-      if (fetchError) {
-        console.error('Error fetching error jobs:', fetchError);
-        break;
-      }
-
-      if (!jobsToDelete || jobsToDelete.length === 0) {
-        console.log('No more old error jobs to delete');
-        break;
-      }
-
-      let batchDeleted = 0;
-      for (const job of jobsToDelete) {
-        const { error: deleteError } = await supabase
-          .from('jobs')
-          .delete()
-          .eq('id', job.id);
-
-        if (!deleteError) {
-          batchDeleted++;
-        }
-      }
-
-      deletedErrors += batchDeleted;
-      deletedTotal += batchDeleted;
-      batchCount++;
-      console.log(`Batch ${batchCount}: Deleted ${batchDeleted} old error jobs, total errors: ${deletedErrors}`);
+    if (errorError) {
+      console.error('Error deleting error jobs:', errorError);
+    } else {
+      deletedErrors = deletedErrorCount || 0;
+      console.log(`Deleted ${deletedErrors} old error jobs`);
     }
 
-    console.log(`Job cleanup complete. Total deleted: ${deletedTotal}`);
+    const totalDeleted = deletedReady + deletedProcessing + deletedErrors;
+    
+    // Get remaining count
+    const { count: remainingReady } = await supabase
+      .from('jobs')
+      .select('*', { count: 'exact', head: true })
+      .eq('type', 'SYNC_TO_WOO')
+      .eq('state', 'ready');
+
+    console.log(`Job cleanup complete. Deleted: ${totalDeleted}, Remaining ready: ${remainingReady}`);
 
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Cleaned up ${deletedTotal} jobs`,
+        message: `Cleaned up ${totalDeleted} jobs`,
         details: {
           readyJobsBefore: readyCount,
           processingJobsBefore: processingCount,
-          errorJobsBefore: errorCount,
-          totalDeleted: deletedTotal,
-          oldErrorsDeleted: deletedErrors,
+          deletedReady,
+          deletedProcessing,
+          deletedErrors,
+          totalDeleted,
+          remainingReady,
+          needsMoreRuns: (remainingReady || 0) > 0,
         },
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
