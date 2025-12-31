@@ -476,23 +476,25 @@ serve(async (req) => {
     console.log(`Full stock correction complete: ${processedCount} products, ${stockUpdates.length} variants, ${createdVariantsCount} new`);
     console.log(`Changed: ${changedVariantIds.size} variants`);
     
-    // Create sync job if there are changes
+    // Direct sync to WooCommerce if there are changes (no job queue)
     if (changedVariantIds.size > 0) {
-      const { error: jobError } = await supabase
-        .from('jobs')
-        .insert({
-          type: 'SYNC_TO_WOO',
-          state: 'ready',
-          payload: {
+      console.log(`Direct syncing ${changedVariantIds.size} variants to WooCommerce...`);
+      
+      try {
+        const { error: syncError } = await supabase.functions.invoke('direct-woo-sync', {
+          body: { 
+            tenantId,
             variantIds: Array.from(changedVariantIds)
-          },
-          tenant_id: tenantId,
+          }
         });
 
-      if (jobError) {
-        console.error('Error creating sync job:', jobError);
-      } else {
-        console.log(`Created SYNC_TO_WOO job for ${changedVariantIds.size} variants`);
+        if (syncError) {
+          console.error('Direct WooCommerce sync failed:', syncError);
+        } else {
+          console.log(`Direct WooCommerce sync triggered for ${changedVariantIds.size} variants`);
+        }
+      } catch (syncErr) {
+        console.error('Error invoking direct-woo-sync:', syncErr);
       }
     }
     
@@ -527,7 +529,7 @@ serve(async (req) => {
           zeroedNotInXml: zeroedCount,
           skipped: skippedCount,
           errors: errors.length,
-          syncJobCreated: changedVariantIds.size > 0
+          directSyncTriggered: changedVariantIds.size > 0
         }
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
