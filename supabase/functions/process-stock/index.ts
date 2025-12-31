@@ -312,31 +312,46 @@ Deno.serve(async (req) => {
         skippedItems.forEach(item => console.log(`  - ${item.sku}: ${item.reason}`));
       }
 
-      // Create sync job if there are changes
+      // Direct sync to WooCommerce if there are changes (no more job queue)
       if (changedProductIds.size > 0 || changedVariantIds.size > 0) {
-        const jobPayload: any = {};
+        console.log(`Direct syncing to WooCommerce: ${changedProductIds.size} products, ${changedVariantIds.size} variants`);
         
-        if (changedProductIds.size > 0) {
-          jobPayload.productIds = Array.from(changedProductIds);
-        }
-        
-        if (changedVariantIds.size > 0) {
-          jobPayload.variantIds = Array.from(changedVariantIds);
-        }
-
-        const { error: jobError } = await supabase
-          .from('jobs')
-          .insert({
-            type: 'SYNC_TO_WOO',
-            state: 'ready',
-            payload: jobPayload,
-            tenant_id: tenantId,
+        try {
+          // Invoke direct-woo-sync function
+          const syncPayload: any = { tenantId };
+          
+          if (changedVariantIds.size > 0) {
+            syncPayload.variantIds = Array.from(changedVariantIds);
+          }
+          
+          // For price changes, prepare price updates array
+          if (changedProductIds.size > 0) {
+            // Fetch current prices for changed products
+            const { data: priceData } = await supabase
+              .from('product_prices')
+              .select('product_id, regular, list')
+              .in('product_id', Array.from(changedProductIds));
+            
+            if (priceData && priceData.length > 0) {
+              syncPayload.priceUpdates = priceData.map(p => ({
+                productId: p.product_id,
+                regularPrice: p.regular,
+                listPrice: p.list,
+              }));
+            }
+          }
+          
+          const { error: syncError } = await supabase.functions.invoke('direct-woo-sync', {
+            body: syncPayload
           });
 
-        if (jobError) {
-          console.error('Error creating sync job:', jobError);
-        } else {
-          console.log(`Created SYNC_TO_WOO job for ${changedProductIds.size} products and ${changedVariantIds.size} variants`);
+          if (syncError) {
+            console.error('Direct WooCommerce sync failed:', syncError);
+          } else {
+            console.log(`Direct WooCommerce sync triggered for ${changedProductIds.size} products and ${changedVariantIds.size} variants`);
+          }
+        } catch (syncErr) {
+          console.error('Error invoking direct-woo-sync:', syncErr);
         }
       }
 
