@@ -15,105 +15,72 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    console.log('Starting job cleanup...');
+    // Parse batch size from request (default 500 for speed)
+    let batchSize = 500;
+    try {
+      const body = await req.json();
+      batchSize = body.batchSize || 500;
+    } catch {
+      // Ignore parse errors, use default
+    }
 
-    // Count jobs before deletion
-    const { count: readyCount } = await supabase
-      .from('jobs')
-      .select('*', { count: 'exact', head: true })
-      .eq('type', 'SYNC_TO_WOO')
-      .eq('state', 'ready');
+    console.log(`Starting job cleanup with batch size: ${batchSize}`);
 
-    const { count: processingCount } = await supabase
-      .from('jobs')
-      .select('*', { count: 'exact', head: true })
-      .eq('type', 'SYNC_TO_WOO')
-      .eq('state', 'processing');
-
-    console.log(`Found jobs - ready: ${readyCount}, processing: ${processingCount}`);
-
-    // Use direct delete without fetching IDs first - much faster
-    let deletedReady = 0;
-    let deletedProcessing = 0;
-
-    // Delete ready jobs in batches using a simple approach
-    // We'll delete up to 5000 per invocation to avoid timeout
-    const MAX_DELETE_PER_RUN = 5000;
-    
-    // Delete ready jobs directly
+    // Delete ready jobs directly - smaller batch for reliability
     const { count: deletedReadyCount, error: readyError } = await supabase
       .from('jobs')
       .delete({ count: 'exact' })
       .eq('type', 'SYNC_TO_WOO')
       .eq('state', 'ready')
-      .limit(MAX_DELETE_PER_RUN);
+      .limit(batchSize);
 
     if (readyError) {
       console.error('Error deleting ready jobs:', readyError);
-    } else {
-      deletedReady = deletedReadyCount || 0;
-      console.log(`Deleted ${deletedReady} ready jobs`);
+      throw readyError;
     }
 
-    // Delete processing jobs
+    const deletedReady = deletedReadyCount || 0;
+    console.log(`Deleted ${deletedReady} ready jobs`);
+
+    // Delete processing jobs - smaller batch
     const { count: deletedProcessingCount, error: processingError } = await supabase
       .from('jobs')
       .delete({ count: 'exact' })
       .eq('type', 'SYNC_TO_WOO')
       .eq('state', 'processing')
-      .limit(1000);
+      .limit(batchSize);
 
     if (processingError) {
       console.error('Error deleting processing jobs:', processingError);
-    } else {
-      deletedProcessing = deletedProcessingCount || 0;
-      console.log(`Deleted ${deletedProcessing} processing jobs`);
     }
 
-    // Delete old error jobs (older than 7 days)
-    let deletedErrors = 0;
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const deletedProcessing = deletedProcessingCount || 0;
+    console.log(`Deleted ${deletedProcessing} processing jobs`);
+
+    const totalDeleted = deletedReady + deletedProcessing;
     
-    const { count: deletedErrorCount, error: errorError } = await supabase
+    // Quick check if more remain (without blocking on count)
+    const { data: remainingSample } = await supabase
       .from('jobs')
-      .delete({ count: 'exact' })
+      .select('id')
       .eq('type', 'SYNC_TO_WOO')
-      .eq('state', 'error')
-      .lt('created_at', sevenDaysAgo)
-      .limit(1000);
+      .in('state', ['ready', 'processing'])
+      .limit(1);
 
-    if (errorError) {
-      console.error('Error deleting error jobs:', errorError);
-    } else {
-      deletedErrors = deletedErrorCount || 0;
-      console.log(`Deleted ${deletedErrors} old error jobs`);
-    }
+    const hasMore = (remainingSample?.length || 0) > 0;
 
-    const totalDeleted = deletedReady + deletedProcessing + deletedErrors;
-    
-    // Get remaining count
-    const { count: remainingReady } = await supabase
-      .from('jobs')
-      .select('*', { count: 'exact', head: true })
-      .eq('type', 'SYNC_TO_WOO')
-      .eq('state', 'ready');
-
-    console.log(`Job cleanup complete. Deleted: ${totalDeleted}, Remaining ready: ${remainingReady}`);
+    console.log(`Cleanup complete. Deleted: ${totalDeleted}, Has more: ${hasMore}`);
 
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Cleaned up ${totalDeleted} jobs`,
-        details: {
-          readyJobsBefore: readyCount,
-          processingJobsBefore: processingCount,
-          deletedReady,
-          deletedProcessing,
-          deletedErrors,
-          totalDeleted,
-          remainingReady,
-          needsMoreRuns: (remainingReady || 0) > 0,
-        },
+        deleted: totalDeleted,
+        deletedReady,
+        deletedProcessing,
+        hasMore,
+        message: hasMore 
+          ? `Deleted ${totalDeleted} jobs. Run again to delete more.`
+          : `Deleted ${totalDeleted} jobs. Cleanup complete!`,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
