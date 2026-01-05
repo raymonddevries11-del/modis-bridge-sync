@@ -81,8 +81,15 @@ Deno.serve(async (req) => {
       );
     }
     
-    const orderNumber = String(wooOrder.number || wooOrder.id);
-    console.log(`Processing order ${orderNumber} from webhook`);
+    // Handle both full order payload and checkout_order_created (which only sends order ID)
+    let orderId = wooOrder.id;
+    let orderNumber = wooOrder.number ? String(wooOrder.number) : null;
+    let orderStatus = wooOrder.status;
+    
+    // If we only got an ID (from checkout_order_created), we need to fetch the full order
+    const needsFullFetch = !orderNumber || !orderStatus || !wooOrder.billing;
+    
+    console.log(`Processing order ${orderNumber || orderId} from webhook, needsFullFetch: ${needsFullFetch}`);
 
     // Determine tenant from webhook source or _links
     let tenantId: string | null = null;
@@ -135,6 +142,58 @@ Deno.serve(async (req) => {
       }
     }
 
+    // If we need to fetch full order data from WooCommerce API
+    if (needsFullFetch && tenantId) {
+      console.log(`Fetching full order data from WooCommerce for order ID: ${orderId}`);
+      
+      // Get WooCommerce credentials
+      const { data: tenantConfig } = await supabase
+        .from('tenant_config')
+        .select('woocommerce_url, woocommerce_consumer_key, woocommerce_consumer_secret')
+        .eq('tenant_id', tenantId)
+        .single();
+      
+      if (tenantConfig) {
+        try {
+          const wooBaseUrl = tenantConfig.woocommerce_url.replace(/\/$/, '');
+          const credentials = btoa(`${tenantConfig.woocommerce_consumer_key}:${tenantConfig.woocommerce_consumer_secret}`);
+          
+          const orderResponse = await fetch(
+            `${wooBaseUrl}/wp-json/wc/v3/orders/${orderId}`,
+            {
+              headers: {
+                'Authorization': `Basic ${credentials}`,
+                'Content-Type': 'application/json',
+              },
+            }
+          );
+          
+          if (orderResponse.ok) {
+            const fullOrder = await orderResponse.json();
+            // Update with full order data
+            wooOrder = fullOrder;
+            orderNumber = String(fullOrder.number || fullOrder.id);
+            orderStatus = fullOrder.status;
+            console.log(`Successfully fetched full order data: #${orderNumber}, status: ${orderStatus}`);
+          } else {
+            console.error(`Failed to fetch order from WooCommerce: ${orderResponse.status}`);
+            // Continue with partial data, using defaults
+            orderNumber = orderNumber || String(orderId);
+            orderStatus = orderStatus || 'pending';
+          }
+        } catch (fetchError) {
+          console.error('Error fetching order from WooCommerce:', fetchError);
+          orderNumber = orderNumber || String(orderId);
+          orderStatus = orderStatus || 'pending';
+        }
+      }
+    }
+    
+    // Ensure we have an order number
+    if (!orderNumber) {
+      orderNumber = String(orderId);
+    }
+
     // Check if order already exists
     const { data: existingOrder } = await supabase
       .from('orders')
@@ -155,7 +214,7 @@ Deno.serve(async (req) => {
     // Prepare order data
     const orderData = {
       order_number: orderNumber,
-      status: wooOrder.status,
+      status: orderStatus || 'pending',
       currency: wooOrder.currency || 'EUR',
       tenant_id: tenantId,
       customer: {
@@ -238,7 +297,7 @@ Deno.serve(async (req) => {
     console.log(`Order lines inserted for ${orderNumber}`);
 
     // Trigger XML export to SFTP for processing/completed orders
-    if (['processing', 'completed'].includes(wooOrder.status)) {
+    if (['processing', 'completed'].includes(orderStatus || '')) {
       console.log(`Triggering XML export for order ${orderNumber}`);
       
       try {
