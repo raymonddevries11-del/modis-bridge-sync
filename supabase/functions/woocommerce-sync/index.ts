@@ -670,6 +670,23 @@ async function createProductInWooCommerce(
     });
   }
 
+  // Add brand as global attribute (pa_merk) for filtering
+  if (brands?.name) {
+    const globalBrand = findGlobalAttribute('merk') || findGlobalAttribute('brand');
+    if (globalBrand?.id) {
+      await ensureAttributeTerm(globalBrand.id, brands.name);
+      console.log(`Using global brand attribute (ID: ${globalBrand.id}) with value: ${brands.name}`);
+    }
+    productAttributes.push({
+      id: globalBrand?.id || 0,
+      name: 'Merk',
+      position: productAttributes.length,
+      visible: true,
+      variation: false,
+      options: [brands.name]
+    });
+  }
+
   // Map attribute codes to readable values
   const mappedAttributes = tenantId && attributes 
     ? await mapAttributeCodes(attributes, tenantId, supabase)
@@ -1322,6 +1339,38 @@ async function updateProductInWooCommerce(
       } else {
         updatedAttributes.push(newAttr);
       }
+    }
+  }
+  
+  // Add brand as global attribute (pa_merk) for filtering
+  if (brands?.name) {
+    const globalBrand = findGlobalAttribute('merk') || findGlobalAttribute('brand');
+    
+    // Check if Merk attribute already exists
+    const merkIndex = updatedAttributes.findIndex((a: any) => 
+      a.name?.toLowerCase() === 'merk' ||
+      a.slug?.toLowerCase() === 'merk' ||
+      a.slug?.toLowerCase() === 'pa_merk'
+    );
+    
+    const merkAttr = {
+      id: globalBrand?.id || 0,
+      name: 'Merk',
+      position: merkIndex >= 0 ? updatedAttributes[merkIndex].position : updatedAttributes.length,
+      visible: true,
+      variation: false,
+      options: [brands.name]
+    };
+    
+    if (globalBrand?.id) {
+      await ensureAttributeTerm(globalBrand.id, brands.name);
+      console.log(`Using global brand attribute (ID: ${globalBrand.id}) with value: ${brands.name}`);
+    }
+    
+    if (merkIndex >= 0) {
+      updatedAttributes[merkIndex] = merkAttr;
+    } else {
+      updatedAttributes.push(merkAttr);
     }
   }
   
