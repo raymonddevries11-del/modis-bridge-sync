@@ -311,7 +311,15 @@ function generateWooCommerceCSV(products: any[]): string {
       });
     }
     
-    // Brand is now exported via separate "Brands" column, not as attribute
+    // Add Brand/Merk as global attribute for product filtering
+    if (product.brands?.name) {
+      productAttributes.push({
+        name: 'Merk',
+        values: product.brands.name,
+        visible: '1',
+        global: '1'  // GLOBAL attribute enables filtering
+      });
+    }
     
     // Add product attributes from the attributes JSON field
     if (product.attributes && typeof product.attributes === 'object') {
