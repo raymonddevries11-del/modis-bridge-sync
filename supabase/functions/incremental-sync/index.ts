@@ -54,8 +54,9 @@ serve(async (req) => {
       throw new Error('No active tenant found');
     }
 
-    // Get 5 products that haven't been synced or were synced longest ago
+    // Get 50 products that haven't been synced or were synced longest ago
     // Left join with product_sync_status to include products never synced
+    const BATCH_SIZE = 50;
     const { data: productsToSync, error: productsError } = await supabase
       .from('products')
       .select(`
@@ -67,7 +68,7 @@ serve(async (req) => {
       `)
       .eq('tenant_id', tenant.id)
       .order('product_sync_status(last_synced_at)', { ascending: true, nullsFirst: true })
-      .limit(5);
+      .limit(BATCH_SIZE);
 
     if (productsError) {
       console.error('Error fetching products:', productsError);
