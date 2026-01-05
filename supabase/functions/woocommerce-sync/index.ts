@@ -105,6 +105,65 @@ async function ensureCategoryExists(categoryName: string, wooConfig: WooCommerce
   }
 }
 
+// Helper function to ensure brand exists in WooCommerce (Perfect WooCommerce Brands plugin)
+async function ensureBrandExists(brandName: string, wooConfig: WooCommerceConfig): Promise<number | null> {
+  try {
+    // Search for existing brand in pwb-brand taxonomy
+    const searchUrl = new URL(`${wooConfig.url}/wp-json/wp/v2/pwb-brand`);
+    searchUrl.searchParams.append("search", brandName);
+    
+    // Add WooCommerce auth
+    const auth = btoa(`${wooConfig.consumerKey}:${wooConfig.consumerSecret}`);
+    
+    const searchResponse = await fetchWithRetry(searchUrl.toString(), {
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Basic ${auth}`
+      },
+    });
+    
+    if (searchResponse.ok) {
+      const existingBrands = await searchResponse.json();
+      if (existingBrands.length > 0) {
+        const exactMatch = existingBrands.find((brand: any) => 
+          brand.name?.toLowerCase() === brandName.toLowerCase()
+        );
+        if (exactMatch) {
+          console.log(`Brand "${brandName}" already exists with ID ${exactMatch.id}`);
+          return exactMatch.id;
+        }
+      }
+    }
+
+    // Create new brand
+    const createUrl = new URL(`${wooConfig.url}/wp-json/wp/v2/pwb-brand`);
+    
+    const createResponse = await fetchWithRetry(createUrl.toString(), {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Basic ${auth}`
+      },
+      body: JSON.stringify({ 
+        name: brandName,
+        slug: brandName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
+      }),
+    });
+
+    if (createResponse.ok) {
+      const newBrand = await createResponse.json();
+      console.log(`Created brand "${brandName}" with ID ${newBrand.id}`);
+      return newBrand.id;
+    } else {
+      const errorText = await createResponse.text();
+      console.error(`Failed to create brand "${brandName}": ${errorText}`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`Error ensuring brand "${brandName}" exists:`, error);
+    return null;
+  }
+}
 
 
 Deno.serve(async (req) => {
@@ -675,11 +734,15 @@ async function createProductInWooCommerce(
       productData.categories = categoryIds.map(id => ({ id }));
       console.log(`Added ${categoryIds.length} categories to product`);
     }
-  } else if (brands?.name) {
-    // Fallback to brand as category if no categories available
-    const brandCatId = await ensureCategoryExists(brands.name, wooConfig);
-    if (brandCatId) {
-      productData.categories = [{ id: brandCatId }];
+  }
+
+  // Add brand using Perfect WooCommerce Brands taxonomy (separate from categories)
+  if (brands?.name) {
+    console.log(`Ensuring brand exists: ${brands.name}`);
+    const brandId = await ensureBrandExists(brands.name, wooConfig);
+    if (brandId) {
+      productData.brand_ids = [brandId];
+      console.log(`Added brand "${brands.name}" (ID: ${brandId}) to product`);
     }
   }
 
@@ -1055,13 +1118,15 @@ async function updateProductInWooCommerce(
       updateData.categories = categoryIds.map(id => ({ id }));
       console.log(`Added ${categoryIds.length} categories to product`);
     }
-  } else if (brands?.name) {
-    // Fallback to brand as category
-    console.log(`Using brand "${brands.name}" as category`);
-    const brandCatId = await ensureCategoryExists(brands.name, wooConfig);
-    if (brandCatId) {
-      updateData.categories = [{ id: brandCatId }];
-      console.log(`Added brand "${brands.name}" as category`);
+  }
+
+  // Update brand using Perfect WooCommerce Brands taxonomy (separate from categories)
+  if (brands?.name) {
+    console.log(`Ensuring brand exists for update: ${brands.name}`);
+    const brandId = await ensureBrandExists(brands.name, wooConfig);
+    if (brandId) {
+      updateData.brand_ids = [brandId];
+      console.log(`Updated brand "${brands.name}" (ID: ${brandId}) on product`);
     }
   }
 
