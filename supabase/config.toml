@@ -98,3 +98,6 @@ verify_jwt = false
 
 [functions.cleanup-old-jobs]
 verify_jwt = false
+
+[functions.bulk-delete-jobs]
+verify_jwt = false
