@@ -15,10 +15,11 @@ Deno.serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
-    let targetBatches = 10; // Number of delete batches to run
-    let batchSize = 1000;   // Items per batch
+    let targetBatches = 50; // Number of delete batches to run
+    let batchSize = 500;    // Items per batch (smaller to avoid DB overload)
     let jobType = 'SYNC_TO_WOO';
     let targetStates = ['ready', 'processing', 'done', 'error'];
+    let delayMs = 500;      // Delay between batches
 
     try {
       const body = await req.json();
@@ -33,6 +34,9 @@ Deno.serve(async (req) => {
       }
       if (body.states && Array.isArray(body.states)) {
         targetStates = body.states;
+      }
+      if (body.delayMs && Number.isFinite(body.delayMs)) {
+        delayMs = Math.min(Math.max(body.delayMs, 100), 2000);
       }
     } catch {
       // Use defaults
@@ -85,8 +89,8 @@ Deno.serve(async (req) => {
       totalDeleted += batchDeleted;
       console.log(`[bulk-delete-jobs] Batch ${i + 1}/${targetBatches}: deleted ${batchDeleted} jobs`);
 
-      // Small delay to prevent overwhelming the DB
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Delay between batches to prevent DB overload
+      await new Promise(resolve => setTimeout(resolve, delayMs));
     }
 
     const elapsedMs = Date.now() - startTime;
