@@ -354,6 +354,87 @@ export type Database = {
         }
         Relationships: []
       }
+      product_ai_content: {
+        Row: {
+          ai_features: Json | null
+          ai_keywords: string | null
+          ai_long_description: string | null
+          ai_meta_description: string | null
+          ai_meta_title: string | null
+          ai_short_description: string | null
+          ai_suggested_categories: Json | null
+          ai_title: string | null
+          approved_at: string | null
+          approved_by: string | null
+          created_at: string
+          generated_at: string | null
+          id: string
+          product_id: string
+          rejected_at: string | null
+          rejected_reason: string | null
+          status: Database["public"]["Enums"]["ai_content_status"]
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          ai_features?: Json | null
+          ai_keywords?: string | null
+          ai_long_description?: string | null
+          ai_meta_description?: string | null
+          ai_meta_title?: string | null
+          ai_short_description?: string | null
+          ai_suggested_categories?: Json | null
+          ai_title?: string | null
+          approved_at?: string | null
+          approved_by?: string | null
+          created_at?: string
+          generated_at?: string | null
+          id?: string
+          product_id: string
+          rejected_at?: string | null
+          rejected_reason?: string | null
+          status?: Database["public"]["Enums"]["ai_content_status"]
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          ai_features?: Json | null
+          ai_keywords?: string | null
+          ai_long_description?: string | null
+          ai_meta_description?: string | null
+          ai_meta_title?: string | null
+          ai_short_description?: string | null
+          ai_suggested_categories?: Json | null
+          ai_title?: string | null
+          approved_at?: string | null
+          approved_by?: string | null
+          created_at?: string
+          generated_at?: string | null
+          id?: string
+          product_id?: string
+          rejected_at?: string | null
+          rejected_reason?: string | null
+          status?: Database["public"]["Enums"]["ai_content_status"]
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_ai_content_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_ai_content_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_prices: {
         Row: {
           currency: string | null
@@ -748,6 +829,7 @@ export type Database = {
       }
     }
     Enums: {
+      ai_content_status: "pending" | "generated" | "approved" | "rejected"
       app_role: "admin" | "user"
       job_state: "ready" | "processing" | "done" | "error"
     }
@@ -877,6 +959,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      ai_content_status: ["pending", "generated", "approved", "rejected"],
       app_role: ["admin", "user"],
       job_state: ["ready", "processing", "done", "error"],
     },

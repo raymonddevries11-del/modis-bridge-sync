@@ -1,5 +1,8 @@
 project_id = "dnllaaspkqqfuuxkvoma"
 
+[functions.generate-ai-content]
+verify_jwt = false
+
 [functions.export-products-xml]
 verify_jwt = false
 
