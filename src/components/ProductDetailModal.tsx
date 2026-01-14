@@ -242,22 +242,22 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
         </DialogHeader>
 
         <Tabs defaultValue="details" className="w-full">
-          <TabsList className="grid w-full grid-cols-7">
-            <TabsTrigger value="details">Details</TabsTrigger>
-            <TabsTrigger value="content">Content & SEO</TabsTrigger>
-            <TabsTrigger value="ai-content" className="flex items-center gap-1">
+          <TabsList className="flex w-full overflow-x-auto">
+            <TabsTrigger value="details" className="flex-shrink-0">Details</TabsTrigger>
+            <TabsTrigger value="content" className="flex-shrink-0">SEO</TabsTrigger>
+            <TabsTrigger value="ai-content" className="flex-shrink-0 flex items-center gap-1">
               <Sparkles className="h-3 w-3" />
-              AI Content
+              AI
             </TabsTrigger>
-            <TabsTrigger value="variants">Variants ({product.variants?.length || 0})</TabsTrigger>
-            <TabsTrigger value="images">Afbeeldingen ({product.images?.length || 0})</TabsTrigger>
-            <TabsTrigger value="compare">
-              Vergelijk WooCommerce
+            <TabsTrigger value="variants" className="flex-shrink-0">Varianten ({product.variants?.length || 0})</TabsTrigger>
+            <TabsTrigger value="images" className="flex-shrink-0">Afb. ({product.images?.length || 0})</TabsTrigger>
+            <TabsTrigger value="compare" className="flex-shrink-0 flex items-center gap-1">
+              Vergelijk
               {compareData?.differences?.fields && Object.keys(compareData.differences.fields).length > 0 && (
-                <Badge variant="destructive" className="ml-2">{Object.keys(compareData.differences.fields).length}</Badge>
+                <Badge variant="destructive" className="ml-1 h-5 w-5 p-0 flex items-center justify-center text-xs">{Object.keys(compareData.differences.fields).length}</Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="woo-mapping">Mapping</TabsTrigger>
+            <TabsTrigger value="woo-mapping" className="flex-shrink-0">Mapping</TabsTrigger>
           </TabsList>
 
           <TabsContent value="details" className="space-y-4">
