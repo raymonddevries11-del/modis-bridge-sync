@@ -10,8 +10,9 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Save, Image as ImageIcon, RefreshCw, AlertCircle, Package } from "lucide-react";
+import { Save, Image as ImageIcon, RefreshCw, AlertCircle, Package, Sparkles } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AiContentTab } from "@/components/AiContentTab";
 
 interface VariantStockCardProps {
   variant: any;
@@ -241,9 +242,13 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
         </DialogHeader>
 
         <Tabs defaultValue="details" className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
+          <TabsList className="grid w-full grid-cols-7">
             <TabsTrigger value="details">Details</TabsTrigger>
             <TabsTrigger value="content">Content & SEO</TabsTrigger>
+            <TabsTrigger value="ai-content" className="flex items-center gap-1">
+              <Sparkles className="h-3 w-3" />
+              AI Content
+            </TabsTrigger>
             <TabsTrigger value="variants">Variants ({product.variants?.length || 0})</TabsTrigger>
             <TabsTrigger value="images">Afbeeldingen ({product.images?.length || 0})</TabsTrigger>
             <TabsTrigger value="compare">
@@ -480,6 +485,10 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
                 />
               </div>
             </div>
+          </TabsContent>
+
+          <TabsContent value="ai-content" className="space-y-4">
+            <AiContentTab product={product} />
           </TabsContent>
 
           <TabsContent value="variants" className="space-y-4">
