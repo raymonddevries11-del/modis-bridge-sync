@@ -105,6 +105,14 @@ serve(async (req) => {
           variants(
             *,
             stock_totals(qty)
+          ),
+          product_ai_content(
+            ai_title,
+            ai_short_description,
+            ai_long_description,
+            ai_meta_title,
+            ai_meta_description,
+            status
           )
         `)
         .eq('tenant_id', tenantId)
@@ -353,17 +361,26 @@ function generateWooCommerceCSV(products: any[]): string {
     const brands = product.brands?.name || '';
     const tags = '';  // Tags column left empty
     
+    // Check for approved AI content - use it instead of original content
+    const aiContent = product.product_ai_content;
+    const hasApprovedAi = aiContent && aiContent.status === 'approved';
+    
+    // Use AI content if approved, otherwise fallback to original
+    const productTitle = hasApprovedAi && aiContent.ai_title ? aiContent.ai_title : product.title;
+    const shortDescription = hasApprovedAi && aiContent.ai_short_description ? aiContent.ai_short_description : (product.internal_description || '');
+    const longDescription = hasApprovedAi && aiContent.ai_long_description ? aiContent.ai_long_description : (product.webshop_text || '');
+    
     // Parent product row
     const parentRow: string[] = [
       '',                                         // ID (empty for new products)
       productType,                                // Type
       product.sku,                                // SKU
-      product.title,                              // Name
+      productTitle,                               // Name (AI or original)
       '1',                                        // Published
       '0',                                        // Is featured?
       'visible',                                  // Visibility in catalog
-      product.internal_description || '',         // Short description
-      product.webshop_text || '',                 // Description
+      shortDescription,                           // Short description (AI or original)
+      longDescription,                            // Description (AI or original)
       'taxable',                                  // Tax status
       '',                                         // Tax class
       totalStock > 0 ? '1' : '0',                // In stock?
@@ -463,7 +480,7 @@ function generateWooCommerceCSV(products: any[]): string {
           '',                                     // ID
           'variation',                            // Type
           variationSKU,                           // SKU
-          `${product.title} - ${sizeLabel}`,     // Name
+          `${productTitle} - ${sizeLabel}`,       // Name (use AI title if approved)
           '1',                                    // Published
           '0',                                    // Is featured?
           'visible',                              // Visibility in catalog
