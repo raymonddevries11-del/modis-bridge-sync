@@ -21,20 +21,34 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useState, useEffect, useRef } from "react";
-import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package } from "lucide-react";
+import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 
 const Products = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const stockInputRef = useRef<HTMLInputElement>(null);
+  const tagCsvInputRef = useRef<HTMLInputElement>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [brandFilter, setBrandFilter] = useState<string>("all");
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
   const [stockFilter, setStockFilter] = useState<string>("all");
+  const [tagFilter, setTagFilter] = useState<string>("all");
   const [selectedTenant, setSelectedTenant] = useState<string>("");
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
+  const [tagName, setTagName] = useState("2025-assortiment");
+  const [pendingTagFile, setPendingTagFile] = useState<File | null>(null);
   const queryClient = useQueryClient();
 
   // Auto-select first active tenant
@@ -78,8 +92,28 @@ const Products = () => {
     },
   });
 
+  // Fetch unique tags for filter
+  const { data: tags } = useQuery({
+    queryKey: ["product-tags", selectedTenant],
+    queryFn: async () => {
+      if (!selectedTenant) return [];
+      const { data } = await supabase
+        .from("products")
+        .select("tags")
+        .eq("tenant_id", selectedTenant)
+        .not("tags", "is", null);
+      
+      const allTags = new Set<string>();
+      data?.forEach((p: any) => {
+        p.tags?.forEach((t: string) => allTags.add(t));
+      });
+      return Array.from(allTags).sort();
+    },
+    enabled: !!selectedTenant,
+  });
+
   const { data: products, isLoading } = useQuery({
-    queryKey: ["products", searchTerm, brandFilter, supplierFilter, stockFilter, selectedTenant],
+    queryKey: ["products", searchTerm, brandFilter, supplierFilter, stockFilter, tagFilter, selectedTenant],
     queryFn: async () => {
       if (!selectedTenant) return [];
       
@@ -105,6 +139,10 @@ const Products = () => {
 
       if (supplierFilter !== "all") {
         query = query.eq("supplier_id", supplierFilter);
+      }
+
+      if (tagFilter !== "all") {
+        query = query.contains("tags", [tagFilter]);
       }
 
       const { data } = await query.limit(500);
@@ -215,6 +253,104 @@ const Products = () => {
     },
   });
 
+  const tagProducts = useMutation({
+    mutationFn: async ({ file, tag }: { file: File; tag: string }) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('tag', tag);
+      formData.append('tenantId', selectedTenant);
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/tag-products-from-csv`,
+        {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to tag products');
+      }
+
+      return response.json();
+    },
+    onSuccess: (data) => {
+      toast.success(`Tag "${data.tag}" toegevoegd aan ${data.updated} producten. ${data.notFoundCount} SKUs niet gevonden.`);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["product-tags"] });
+      setIsTagDialogOpen(false);
+      setPendingTagFile(null);
+    },
+    onError: (error: any) => {
+      toast.error(`Taggen mislukt: ${error.message}`);
+    },
+  });
+
+  const [aiProgress, setAiProgress] = useState<{ current: number; total: number } | null>(null);
+
+  const bulkGenerateAiContent = useMutation({
+    mutationFn: async (tag: string) => {
+      // Get all product IDs with the given tag
+      const { data: taggedProducts, error: fetchError } = await supabase
+        .from("products")
+        .select("id")
+        .eq("tenant_id", selectedTenant)
+        .contains("tags", [tag]);
+
+      if (fetchError) throw fetchError;
+      if (!taggedProducts || taggedProducts.length === 0) {
+        throw new Error(`Geen producten gevonden met tag "${tag}"`);
+      }
+
+      const productIds = taggedProducts.map(p => p.id);
+      const batchSize = 10;
+      let processed = 0;
+      let successCount = 0;
+      let failedCount = 0;
+
+      setAiProgress({ current: 0, total: productIds.length });
+
+      for (let i = 0; i < productIds.length; i += batchSize) {
+        const batch = productIds.slice(i, i + batchSize);
+        
+        const { data, error } = await supabase.functions.invoke("generate-ai-content", {
+          body: { productIds: batch, tenantId: selectedTenant },
+        });
+
+        if (error) {
+          console.error("Batch error:", error);
+          failedCount += batch.length;
+        } else {
+          successCount += data.successCount || 0;
+          failedCount += data.failedCount || 0;
+        }
+
+        processed += batch.length;
+        setAiProgress({ current: processed, total: productIds.length });
+
+        // Small delay between batches
+        if (i + batchSize < productIds.length) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+
+      return { successCount, failedCount, total: productIds.length };
+    },
+    onSuccess: (data) => {
+      toast.success(`AI content gegenereerd: ${data.successCount} succesvol, ${data.failedCount} mislukt`);
+      setAiProgress(null);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: (error: any) => {
+      toast.error(`AI generatie mislukt: ${error.message}`);
+      setAiProgress(null);
+    },
+  });
+
   const [resetJobId, setResetJobId] = useState<string | null>(null);
   const [resetProgress, setResetProgress] = useState<{ current: number; total: number; updated: number } | null>(null);
 
@@ -254,6 +390,29 @@ const Products = () => {
       setResetProgress(null);
     },
   });
+
+  const handleTagCsvSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      toast.error('Alleen CSV bestanden zijn toegestaan');
+      return;
+    }
+
+    setPendingTagFile(file);
+    setIsTagDialogOpen(true);
+
+    if (tagCsvInputRef.current) {
+      tagCsvInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmTag = () => {
+    if (pendingTagFile && tagName.trim()) {
+      tagProducts.mutate({ file: pendingTagFile, tag: tagName.trim() });
+    }
+  };
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -407,6 +566,21 @@ const Products = () => {
             </SelectContent>
           </Select>
 
+          <Select value={tagFilter} onValueChange={setTagFilter}>
+            <SelectTrigger className="w-[180px]">
+              <Tag className="h-4 w-4 mr-2" />
+              <SelectValue placeholder="Filter by tag" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Alle tags</SelectItem>
+              {tags?.map((tag) => (
+                <SelectItem key={tag} value={tag}>
+                  {tag}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           <Button
             onClick={() => updatePrices.mutate()}
             disabled={updatePrices.isPending}
@@ -473,6 +647,49 @@ const Products = () => {
             Import Voorraad XML
           </Button>
 
+          {/* Tag products from CSV */}
+          <input
+            ref={tagCsvInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleTagCsvSelect}
+            className="hidden"
+          />
+          <Button
+            onClick={() => tagCsvInputRef.current?.click()}
+            disabled={tagProducts.isPending || !selectedTenant}
+            variant="secondary"
+          >
+            <Tag className={`h-4 w-4 mr-2 ${tagProducts.isPending ? "animate-spin" : ""}`} />
+            Tag Producten (CSV)
+          </Button>
+
+          {/* Bulk AI generation */}
+          {tagFilter !== "all" && (
+            aiProgress ? (
+              <div className="flex items-center gap-3 bg-primary/10 rounded-md px-4 py-2 min-w-[280px]">
+                <Sparkles className="h-4 w-4 animate-pulse text-primary" />
+                <div className="flex-1">
+                  <div className="flex justify-between text-sm mb-1">
+                    <span>AI generatie...</span>
+                    <span className="font-medium">{aiProgress.current}/{aiProgress.total}</span>
+                  </div>
+                  <Progress value={(aiProgress.current / aiProgress.total) * 100} className="h-2" />
+                </div>
+              </div>
+            ) : (
+              <Button
+                onClick={() => bulkGenerateAiContent.mutate(tagFilter)}
+                disabled={bulkGenerateAiContent.isPending || !selectedTenant}
+                variant="default"
+                className="bg-primary"
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                AI Genereren ({tagFilter})
+              </Button>
+            )
+          )}
+
           {resetProgress ? (
             <div className="flex items-center gap-3 bg-muted rounded-md px-4 py-2 min-w-[280px]">
               <RefreshCw className="h-4 w-4 animate-spin text-destructive" />
@@ -517,6 +734,55 @@ const Products = () => {
             </AlertDialog>
           )}
         </div>
+
+        {/* Tag Dialog */}
+        <Dialog open={isTagDialogOpen} onOpenChange={setIsTagDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Producten taggen</DialogTitle>
+              <DialogDescription>
+                Geef een tagnaam op voor de producten in het geüploade CSV bestand.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="tagName">Tagnaam</Label>
+                <Input
+                  id="tagName"
+                  value={tagName}
+                  onChange={(e) => setTagName(e.target.value)}
+                  placeholder="bijv. 2025-assortiment"
+                />
+              </div>
+              {pendingTagFile && (
+                <p className="text-sm text-muted-foreground">
+                  Bestand: {pendingTagFile.name}
+                </p>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsTagDialogOpen(false)}>
+                Annuleren
+              </Button>
+              <Button 
+                onClick={handleConfirmTag} 
+                disabled={!tagName.trim() || tagProducts.isPending}
+              >
+                {tagProducts.isPending ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Bezig...
+                  </>
+                ) : (
+                  <>
+                    <Tag className="h-4 w-4 mr-2" />
+                    Tag Toekennen
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {isLoading ? (
           <div className="text-center py-12">

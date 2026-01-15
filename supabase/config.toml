@@ -104,3 +104,6 @@ verify_jwt = false
 
 [functions.bulk-delete-jobs]
 verify_jwt = false
+
+[functions.tag-products-from-csv]
+verify_jwt = false

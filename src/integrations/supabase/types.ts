@@ -517,6 +517,7 @@ export type Database = {
           plan_period: string | null
           sku: string
           supplier_id: string | null
+          tags: string[] | null
           tax_code: string | null
           tenant_id: string | null
           title: string
@@ -546,6 +547,7 @@ export type Database = {
           plan_period?: string | null
           sku: string
           supplier_id?: string | null
+          tags?: string[] | null
           tax_code?: string | null
           tenant_id?: string | null
           title: string
@@ -575,6 +577,7 @@ export type Database = {
           plan_period?: string | null
           sku?: string
           supplier_id?: string | null
+          tags?: string[] | null
           tax_code?: string | null
           tenant_id?: string | null
           title?: string
