@@ -107,3 +107,6 @@ verify_jwt = false
 
 [functions.tag-products-from-csv]
 verify_jwt = false
+
+[functions.export-stock-csv]
+verify_jwt = false
