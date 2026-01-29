@@ -87,7 +87,7 @@ serve(async (req) => {
 
     console.log(`Exporting stock & prices CSV for tenant ${tenantId}`);
 
-    // Fetch all products with only price and variant stock data
+    // Fetch all products with price, variant stock data and EAN codes
     const allProducts: any[] = [];
     const pageSize = 1000;
     let offset = 0;
@@ -103,6 +103,7 @@ serve(async (req) => {
             maat_id,
             size_label,
             maat_web,
+            ean,
             active,
             stock_totals(qty)
           )
@@ -177,13 +178,14 @@ function formatPrice(price: any): string {
 }
 
 function generateStockPriceCSV(products: any[]): string {
-  // Minimal WooCommerce CSV columns for stock & price updates only
+  // WooCommerce CSV columns for stock, price & EAN updates
   const headers = [
     'SKU',
     'Regular price',
     'Sale price',
     'Stock',
-    'In stock?'
+    'In stock?',
+    'GTIN, UPC, EAN or ISBN'
   ];
 
   const rows: string[][] = [];
@@ -211,7 +213,8 @@ function generateStockPriceCSV(products: any[]): string {
       regularPrice,
       salePrice,
       hasVariants ? '' : String(totalStock),  // Empty for variable products
-      totalStock > 0 ? '1' : '0'
+      totalStock > 0 ? '1' : '0',
+      ''  // Parent products don't have EAN
     ];
     
     rows.push(parentRow);
@@ -221,6 +224,7 @@ function generateStockPriceCSV(products: any[]): string {
       for (const variant of activeVariants) {
         const variantStock = variant.stock_totals?.qty || 0;
         const sizeLabel = variant.size_label || variant.maat_web || variant.maat_id;
+        const ean = variant.ean || '';
         
         // Build variation SKU
         const variationSKU = (() => {
@@ -235,7 +239,8 @@ function generateStockPriceCSV(products: any[]): string {
           regularPrice,
           salePrice,
           String(variantStock),
-          variantStock > 0 ? '1' : '0'
+          variantStock > 0 ? '1' : '0',
+          ean
         ];
         
         rows.push(variationRow);
