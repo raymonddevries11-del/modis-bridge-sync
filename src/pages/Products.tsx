@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
+import { useNavigate } from "react-router-dom";
 import { TenantSelector } from "@/components/TenantSelector";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -44,8 +45,7 @@ const Products = () => {
   const [stockFilter, setStockFilter] = useState<string>("all");
   const [tagFilter, setTagFilter] = useState<string>("all");
   const [selectedTenant, setSelectedTenant] = useState<string>("");
-  const [selectedProduct, setSelectedProduct] = useState<any>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const navigate = useNavigate();
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [tagName, setTagName] = useState("2025-assortiment");
   const [pendingTagFile, setPendingTagFile] = useState<File | null>(null);
@@ -836,10 +836,7 @@ const Products = () => {
               <Card 
                 key={product.id} 
                 className="hover:shadow-md transition-shadow cursor-pointer"
-                onClick={() => {
-                  setSelectedProduct(product);
-                  setIsModalOpen(true);
-                }}
+                onClick={() => navigate(`/products/${product.id}`)}
               >
                 <CardHeader>
                   <div className="flex items-start justify-between">
@@ -905,13 +902,6 @@ const Products = () => {
           </Card>
         )}
 
-        {selectedProduct && (
-          <ProductDetailModal
-            product={selectedProduct}
-            open={isModalOpen}
-            onOpenChange={setIsModalOpen}
-          />
-        )}
       </div>
     </Layout>
   );
