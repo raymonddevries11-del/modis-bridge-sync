@@ -110,3 +110,6 @@ verify_jwt = false
 
 [functions.export-stock-csv]
 verify_jwt = false
+
+[functions.import-csv-products]
+verify_jwt = false
