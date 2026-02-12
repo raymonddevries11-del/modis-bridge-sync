@@ -9,6 +9,8 @@ import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   Image,
   DollarSign,
@@ -23,6 +25,8 @@ import {
   TrendingUp,
   Shield,
   BarChart3,
+  Sparkles,
+  Wand2,
 } from "lucide-react";
 import { calculateCompleteness } from "@/lib/completeness";
 
@@ -40,6 +44,68 @@ interface ValidationIssue {
 const Validation = () => {
   const [selectedTenant, setSelectedTenant] = useState<string>("");
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  // Bulk AI content generation state
+  const [aiProgress, setAiProgress] = useState<{ current: number; total: number; success: number; failed: number } | null>(null);
+
+  const bulkGenerateAi = useMutation({
+    mutationFn: async (productIds: string[]) => {
+      if (productIds.length === 0) throw new Error("Geen producten om te verwerken");
+
+      // Filter out products that already have AI content
+      const existingIds = new Set<string>();
+      let aiOffset = 0;
+      while (true) {
+        const { data } = await supabase
+          .from("product_ai_content")
+          .select("product_id")
+          .eq("tenant_id", selectedTenant)
+          .not("ai_title", "is", null)
+          .range(aiOffset, aiOffset + 999);
+        if (!data || data.length === 0) break;
+        data.forEach(d => existingIds.add(d.product_id));
+        if (data.length < 1000) break;
+        aiOffset += 1000;
+      }
+
+      const ids = productIds.filter(id => !existingIds.has(id));
+      if (ids.length === 0) throw new Error("Alle getroffen producten hebben al AI-content");
+
+      toast.info(`${ids.length} producten zonder AI-content. Generatie gestart...`);
+      const batchSize = 10;
+      let successCount = 0;
+      let failedCount = 0;
+      setAiProgress({ current: 0, total: ids.length, success: 0, failed: 0 });
+
+      for (let i = 0; i < ids.length; i += batchSize) {
+        const batch = ids.slice(i, i + batchSize);
+        try {
+          const { data, error } = await supabase.functions.invoke("generate-ai-content", {
+            body: { productIds: batch, tenantId: selectedTenant },
+          });
+          if (error) { failedCount += batch.length; } else {
+            successCount += data.success || 0;
+            failedCount += data.failed || 0;
+          }
+        } catch { failedCount += batch.length; }
+
+        const processed = Math.min(i + batchSize, ids.length);
+        setAiProgress({ current: processed, total: ids.length, success: successCount, failed: failedCount });
+        if (i + batchSize < ids.length) await new Promise(r => setTimeout(r, 1000));
+      }
+      return { successCount, failedCount, total: ids.length };
+    },
+    onSuccess: (data) => {
+      toast.success(`AI content: ${data.successCount} succesvol, ${data.failedCount} mislukt van ${data.total}`);
+      setAiProgress(null);
+      queryClient.invalidateQueries({ queryKey: ["validation-products"] });
+    },
+    onError: (error: any) => {
+      toast.error(`AI generatie mislukt: ${error.message}`);
+      setAiProgress(null);
+    },
+  });
 
   const { data: tenants } = useQuery({
     queryKey: ["tenants"],
@@ -338,6 +404,28 @@ const Validation = () => {
               </Card>
             </div>
 
+            {/* AI Progress */}
+            {aiProgress && (
+              <Card className="border-primary/30 bg-primary/5">
+                <CardContent className="py-4">
+                  <div className="flex items-center gap-4">
+                    <Sparkles className="h-5 w-5 text-primary animate-pulse" />
+                    <div className="flex-1 space-y-1">
+                      <div className="flex justify-between text-sm">
+                        <span className="font-medium">AI content genereren...</span>
+                        <span className="text-muted-foreground">{aiProgress.current}/{aiProgress.total}</span>
+                      </div>
+                      <Progress value={(aiProgress.current / aiProgress.total) * 100} className="h-2" />
+                      <div className="flex gap-4 text-xs text-muted-foreground">
+                        <span className="text-success">✓ {aiProgress.success} succesvol</span>
+                        {aiProgress.failed > 0 && <span className="text-destructive">✗ {aiProgress.failed} mislukt</span>}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {/* Issue cards */}
             <div className="space-y-3">
               <h2 className="text-lg font-semibold">Issues per categorie</h2>
@@ -395,18 +483,51 @@ const Validation = () => {
                         </TooltipProvider>
 
                         {issue.count > 0 && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-between text-xs"
-                            onClick={() => {
-                              // Navigate to products filtered — for now just go to products list
-                              navigate("/products");
-                            }}
-                          >
-                            Bekijk getroffen producten
-                            <ArrowRight className="h-3 w-3" />
-                          </Button>
+                          <div className="flex gap-2">
+                            {issue.id === "no-description" && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                className="flex-1 text-xs"
+                                disabled={bulkGenerateAi.isPending}
+                                onClick={() => bulkGenerateAi.mutate(issue.productIds)}
+                              >
+                                <Wand2 className="h-3 w-3 mr-1" />
+                                {bulkGenerateAi.isPending ? "Bezig..." : "AI genereren"}
+                              </Button>
+                            )}
+                            {(issue.id === "no-meta-title" || issue.id === "no-meta-description") && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                className="flex-1 text-xs"
+                                disabled={bulkGenerateAi.isPending}
+                                onClick={() => bulkGenerateAi.mutate(issue.productIds)}
+                              >
+                                <Sparkles className="h-3 w-3 mr-1" />
+                                {bulkGenerateAi.isPending ? "Bezig..." : "AI meta genereren"}
+                              </Button>
+                            )}
+                            {issue.id === "missing-images" && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                className="flex-1 text-xs"
+                                onClick={() => navigate("/products")}
+                              >
+                                <Image className="h-3 w-3 mr-1" />
+                                Afbeeldingen uploaden
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-xs"
+                              onClick={() => navigate("/products")}
+                            >
+                              <ArrowRight className="h-3 w-3" />
+                            </Button>
+                          </div>
                         )}
                       </CardContent>
                     </Card>
