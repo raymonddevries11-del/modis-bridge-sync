@@ -116,3 +116,6 @@ verify_jwt = false
 
 [functions.fix-size-labels]
 verify_jwt = false
+
+[functions.google-merchant-feed]
+verify_jwt = false

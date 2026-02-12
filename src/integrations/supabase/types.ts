@@ -188,6 +188,103 @@ export type Database = {
           },
         ]
       }
+      google_category_mappings: {
+        Row: {
+          age_group: string | null
+          article_group_description: string | null
+          article_group_id: string
+          condition: string | null
+          created_at: string
+          gender: string | null
+          google_category: string
+          id: string
+          material: string | null
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          age_group?: string | null
+          article_group_description?: string | null
+          article_group_id: string
+          condition?: string | null
+          created_at?: string
+          gender?: string | null
+          google_category: string
+          id?: string
+          material?: string | null
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          age_group?: string | null
+          article_group_description?: string | null
+          article_group_id?: string
+          condition?: string | null
+          created_at?: string
+          gender?: string | null
+          google_category?: string
+          id?: string
+          material?: string | null
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "google_category_mappings_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      google_feed_config: {
+        Row: {
+          created_at: string
+          currency: string | null
+          enabled: boolean | null
+          feed_description: string | null
+          feed_title: string | null
+          shipping_country: string | null
+          shipping_price: number | null
+          shop_url: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          currency?: string | null
+          enabled?: boolean | null
+          feed_description?: string | null
+          feed_title?: string | null
+          shipping_country?: string | null
+          shipping_price?: number | null
+          shop_url?: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          currency?: string | null
+          enabled?: boolean | null
+          feed_description?: string | null
+          feed_title?: string | null
+          shipping_country?: string | null
+          shipping_price?: number | null
+          shop_url?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "google_feed_config_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       jobs: {
         Row: {
           attempts: number

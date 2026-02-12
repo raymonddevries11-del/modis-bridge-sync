@@ -8,7 +8,8 @@ import {
   Activity,
   Building2,
   History,
-  LogOut
+  LogOut,
+  Rss
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
@@ -21,6 +22,7 @@ const navigation = [
   { name: "Jobs", href: "/jobs", icon: Activity },
   { name: "Tenants", href: "/tenants", icon: Building2 },
   { name: "Logs", href: "/logs", icon: FileText },
+  { name: "Google Feed", href: "/google-feed", icon: Rss },
   { name: "Changelog", href: "/changelog", icon: History },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
