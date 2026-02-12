@@ -1,3 +1,4 @@
+// Google Merchant Feed v2 - optimized for Apparel & Accessories > Shoes
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -70,7 +71,15 @@ serve(async (req) => {
 
   try {
     const url = new URL(req.url);
-    const tenantId = url.searchParams.get('tenantId');
+    let tenantId = url.searchParams.get('tenantId');
+
+    // Support POST body for tenantId (bypasses Cloudflare GET caching)
+    if (!tenantId && req.method === 'POST') {
+      try {
+        const body = await req.json();
+        tenantId = body.tenantId || null;
+      } catch { /* ignore parse errors */ }
+    }
 
     if (!tenantId) {
       return new Response('Missing tenantId', { status: 400, headers: corsHeaders });
@@ -136,7 +145,9 @@ serve(async (req) => {
         const effectiveMaterial = mapping?.material || null;
 
         const brandName = (product.brands as any)?.name || '';
-        const price = (product.product_prices as any)?.[0];
+        // Handle product_prices as object (1-to-1) or array
+        const priceData = product.product_prices as any;
+        const price = Array.isArray(priceData) ? priceData[0] : priceData;
         const regularPrice = price?.regular || 0;
         const salePrice = price?.list && price.list < regularPrice ? price.list : null;
         const currency = price?.currency || feedConfig.currency || 'EUR';
