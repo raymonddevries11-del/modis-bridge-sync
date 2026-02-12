@@ -2,110 +2,112 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
+/* Modis Bridge — Premium PIM Design System (Intercom-inspired)
+   All colors MUST be HSL. 8px spacing grid. */
 
 @layer base {
   :root {
-    --background: 220 17% 97%;
-    --foreground: 220 15% 15%;
+    --background: 0 0% 98.5%;
+    --foreground: 220 14% 10%;
 
     --card: 0 0% 100%;
-    --card-foreground: 220 15% 15%;
+    --card-foreground: 220 14% 10%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 220 15% 15%;
+    --popover-foreground: 220 14% 10%;
 
-    --primary: 217 91% 60%;
+    --primary: 222 47% 31%;
     --primary-foreground: 0 0% 100%;
 
     --secondary: 220 14% 96%;
-    --secondary-foreground: 220 15% 25%;
+    --secondary-foreground: 220 14% 25%;
 
     --muted: 220 14% 96%;
     --muted-foreground: 220 9% 46%;
 
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 222 47% 95%;
+    --accent-foreground: 222 47% 31%;
 
-    --success: 142 76% 36%;
+    --success: 152 69% 31%;
     --success-foreground: 0 0% 100%;
 
     --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 100%;
+    --warning-foreground: 38 92% 14%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
 
     --border: 220 13% 91%;
     --input: 220 13% 91%;
-    --ring: 217 91% 60%;
+    --ring: 222 47% 31%;
 
-    --radius: 0.5rem;
+    --radius: 0.625rem;
 
-    --sidebar-background: 220 15% 15%;
-    --sidebar-foreground: 220 10% 85%;
-    --sidebar-primary: 217 91% 60%;
+    /* Sidebar — light clean style */
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 220 9% 46%;
+    --sidebar-primary: 222 47% 31%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 15% 20%;
-    --sidebar-accent-foreground: 220 10% 90%;
-    --sidebar-border: 220 15% 25%;
-    --sidebar-ring: 217 91% 60%;
-    
-    --chart-1: 217 91% 60%;
-    --chart-2: 142 76% 36%;
+    --sidebar-accent: 222 47% 95%;
+    --sidebar-accent-foreground: 222 47% 31%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 222 47% 31%;
+    --sidebar-muted: 220 14% 96%;
+
+    --chart-1: 222 47% 31%;
+    --chart-2: 152 69% 31%;
     --chart-3: 38 92% 50%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 82% 52%;
+    --chart-4: 280 65% 55%;
+    --chart-5: 340 75% 55%;
   }
 
   .dark {
-    --background: 220 15% 12%;
+    --background: 224 14% 8%;
     --foreground: 220 10% 95%;
 
-    --card: 220 15% 15%;
+    --card: 224 14% 11%;
     --card-foreground: 220 10% 95%;
 
-    --popover: 220 15% 15%;
+    --popover: 224 14% 11%;
     --popover-foreground: 220 10% 95%;
 
     --primary: 217 91% 60%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 220 15% 20%;
+    --secondary: 220 14% 16%;
     --secondary-foreground: 220 10% 90%;
 
-    --muted: 220 15% 20%;
-    --muted-foreground: 220 9% 60%;
+    --muted: 220 14% 16%;
+    --muted-foreground: 220 9% 55%;
 
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 217 50% 18%;
+    --accent-foreground: 217 91% 70%;
 
-    --success: 142 76% 36%;
+    --success: 152 69% 36%;
     --success-foreground: 0 0% 100%;
 
     --warning: 38 92% 50%;
     --warning-foreground: 0 0% 100%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 220 15% 25%;
-    --input: 220 15% 25%;
+    --border: 220 14% 18%;
+    --input: 220 14% 18%;
     --ring: 217 91% 60%;
-    
-    --sidebar-background: 220 15% 10%;
-    --sidebar-foreground: 220 10% 85%;
+
+    --sidebar-background: 224 14% 10%;
+    --sidebar-foreground: 220 10% 65%;
     --sidebar-primary: 217 91% 60%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 15% 15%;
-    --sidebar-accent-foreground: 220 10% 90%;
-    --sidebar-border: 220 15% 20%;
+    --sidebar-accent: 217 50% 18%;
+    --sidebar-accent-foreground: 217 91% 70%;
+    --sidebar-border: 220 14% 18%;
     --sidebar-ring: 217 91% 60%;
-    
+    --sidebar-muted: 220 14% 16%;
+
     --chart-1: 217 91% 60%;
-    --chart-2: 142 76% 36%;
+    --chart-2: 152 69% 36%;
     --chart-3: 38 92% 50%;
     --chart-4: 280 65% 60%;
     --chart-5: 340 82% 52%;
@@ -118,6 +120,57 @@ All colors MUST be HSL.
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Premium typography scale */
+  h1 { @apply text-2xl font-semibold tracking-tight; }
+  h2 { @apply text-xl font-semibold tracking-tight; }
+  h3 { @apply text-base font-medium; }
+}
+
+@layer components {
+  /* Premium card with subtle elevation */
+  .card-elevated {
+    @apply bg-card border border-border rounded-xl shadow-sm;
+  }
+  .card-interactive {
+    @apply bg-card border border-border rounded-xl shadow-sm transition-all duration-150;
+  }
+  .card-interactive:hover {
+    @apply shadow-md border-primary/20;
+  }
+
+  /* Status badges — pill style */
+  .badge-success {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full;
+    background: hsl(152 69% 95%);
+    color: hsl(152 69% 25%);
+  }
+  .badge-warning {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full;
+    background: hsl(38 92% 95%);
+    color: hsl(38 70% 30%);
+  }
+  .badge-error {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full;
+    background: hsl(0 72% 95%);
+    color: hsl(0 72% 40%);
+  }
+  .badge-info {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full;
+    background: hsl(222 47% 95%);
+    color: hsl(222 47% 31%);
+  }
+  .badge-neutral {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-muted text-muted-foreground;
+  }
+
+  /* Clean table rows */
+  .table-row-clean {
+    @apply border-b border-border/60 hover:bg-muted/50 transition-colors cursor-pointer;
   }
 }
