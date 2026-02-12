@@ -119,3 +119,6 @@ verify_jwt = false
 
 [functions.google-merchant-feed]
 verify_jwt = false
+
+[functions.google-taxonomy]
+verify_jwt = false
