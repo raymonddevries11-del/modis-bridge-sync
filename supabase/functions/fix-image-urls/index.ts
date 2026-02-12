@@ -15,13 +15,34 @@ Deno.serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Find products with modis/foto paths
-    const { data: products, error } = await supabase
-      .from('products')
-      .select('id, sku, images')
-      .filter('images', 'cs', '"modis/foto"');
-
-    if (error) throw error;
+    // Find products with modis/foto paths using text cast filter
+    // PostgREST doesn't support LIKE on jsonb, so we fetch in batches and filter
+    const allProducts: any[] = [];
+    let from = 0;
+    const batchSize = 1000;
+    while (true) {
+      const { data: batch, error: batchError } = await supabase
+        .from('products')
+        .select('id, sku, images')
+        .not('images', 'is', null)
+        .range(from, from + batchSize - 1);
+      
+      if (batchError) throw batchError;
+      if (!batch || batch.length === 0) break;
+      
+      for (const p of batch) {
+        const imagesStr = JSON.stringify(p.images || []);
+        if (imagesStr.includes('modis/foto')) {
+          allProducts.push(p);
+        }
+      }
+      
+      if (batch.length < batchSize) break;
+      from += batchSize;
+    }
+    
+    const products = allProducts;
+    console.log(`Found ${products.length} products with modis/foto paths`);
 
     console.log(`Found ${products?.length || 0} products with modis/foto paths`);
 
