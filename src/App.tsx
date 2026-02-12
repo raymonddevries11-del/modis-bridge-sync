@@ -7,6 +7,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import Products from "./pages/Products";
+import ProductDetail from "./pages/ProductDetail";
 import Orders from "./pages/Orders";
 import Settings from "./pages/Settings";
 import Tenants from "./pages/Tenants";
@@ -28,6 +29,7 @@ const App = () => (
           <Route path="/auth" element={<Auth />} />
           <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/products" element={<ProtectedRoute><Products /></ProtectedRoute>} />
+          <Route path="/products/:id" element={<ProtectedRoute><ProductDetail /></ProtectedRoute>} />
           <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
           <Route path="/channels/google" element={<ProtectedRoute><ChannelGoogle /></ProtectedRoute>} />
           <Route path="/channels/woocommerce" element={<ProtectedRoute><ChannelWooCommerce /></ProtectedRoute>} />
