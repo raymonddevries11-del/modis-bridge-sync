@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { calculateCompleteness, scoreColor, scoreBg } from "@/lib/completeness";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -23,7 +24,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useState, useEffect, useRef } from "react";
-import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles, FilterX } from "lucide-react";
+import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles, FilterX, X, MoreVertical, ChevronDown } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -570,130 +571,166 @@ const Products = () => {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-4">
-          <TenantSelector 
-            value={selectedTenant} 
-            onChange={setSelectedTenant} 
-          />
-          
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by SKU or title..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9"
-            />
-          </div>
+        {/* Row 1: Search & Filters */}
+        <Card className="border shadow-sm">
+          <CardContent className="py-3 px-4 space-y-3">
+            {/* Search + Tenant */}
+            <div className="flex items-center gap-3">
+              <TenantSelector value={selectedTenant} onChange={setSelectedTenant} />
+              <div className="relative flex-1 max-w-md">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Zoek op SKU of titel..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              {/* Active filter count + clear */}
+              {(() => {
+                const activeCount = [
+                  brandFilter !== "all",
+                  supplierFilter !== "all",
+                  stockFilter !== "all",
+                  tagFilter !== "all",
+                  completenessFilter !== "all",
+                  validationFilter !== "all",
+                ].filter(Boolean).length;
+                return activeCount > 0 ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-muted-foreground"
+                    onClick={() => {
+                      setBrandFilter("all");
+                      setSupplierFilter("all");
+                      setStockFilter("all");
+                      setTagFilter("all");
+                      setCompletenessFilter("all");
+                      setValidationFilter("all");
+                      searchParams.delete("validation");
+                      setSearchParams(searchParams, { replace: true });
+                    }}
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    {activeCount} filter{activeCount > 1 ? "s" : ""} wissen
+                  </Button>
+                ) : null;
+              })()}
+            </div>
 
-          <Select value={brandFilter} onValueChange={setBrandFilter}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Filter by brand" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Brands</SelectItem>
-              {brands?.map((brand) => (
-                <SelectItem key={brand.id} value={brand.id}>
-                  {brand.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            {/* Filters row */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider mr-1">Filters</span>
 
-          <Select value={supplierFilter} onValueChange={setSupplierFilter}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Filter by supplier" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Suppliers</SelectItem>
-              {suppliers?.map((supplier) => (
-                <SelectItem key={supplier.id} value={supplier.id}>
-                  {supplier.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <Select value={brandFilter} onValueChange={setBrandFilter}>
+                <SelectTrigger className="h-8 w-auto min-w-[130px] text-xs">
+                  <SelectValue placeholder="Merk" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle merken</SelectItem>
+                  {brands?.map((brand) => (
+                    <SelectItem key={brand.id} value={brand.id}>{brand.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-          <Select value={stockFilter} onValueChange={setStockFilter}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Filter by stock" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Alle producten</SelectItem>
-              <SelectItem value="in_stock">Op voorraad</SelectItem>
-              <SelectItem value="out_of_stock">Niet op voorraad</SelectItem>
-            </SelectContent>
-          </Select>
+              <Select value={supplierFilter} onValueChange={setSupplierFilter}>
+                <SelectTrigger className="h-8 w-auto min-w-[130px] text-xs">
+                  <SelectValue placeholder="Leverancier" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle leveranciers</SelectItem>
+                  {suppliers?.map((supplier) => (
+                    <SelectItem key={supplier.id} value={supplier.id}>{supplier.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-          <Select value={tagFilter} onValueChange={setTagFilter}>
-            <SelectTrigger className="w-[180px]">
-              <Tag className="h-4 w-4 mr-2" />
-              <SelectValue placeholder="Filter by tag" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Alle tags</SelectItem>
-              {tags?.map((tag) => (
-                <SelectItem key={tag} value={tag}>
-                  {tag}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <Select value={stockFilter} onValueChange={setStockFilter}>
+                <SelectTrigger className="h-8 w-auto min-w-[120px] text-xs">
+                  <SelectValue placeholder="Voorraad" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle voorraad</SelectItem>
+                  <SelectItem value="in_stock">Op voorraad</SelectItem>
+                  <SelectItem value="out_of_stock">Niet op voorraad</SelectItem>
+                </SelectContent>
+              </Select>
 
-          <Select value={completenessFilter} onValueChange={setCompletenessFilter}>
-            <SelectTrigger className="w-[200px]">
-              <SelectValue placeholder="Completeness" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Alle scores</SelectItem>
-              <SelectItem value="critical">
-                <span className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full bg-destructive" />
-                  Kritiek (0–49%)
-                </span>
-              </SelectItem>
-              <SelectItem value="warning">
-                <span className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full bg-warning" />
-                  Waarschuwing (50–79%)
-                </span>
-              </SelectItem>
-              <SelectItem value="complete">
-                <span className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full bg-success" />
-                  Compleet (80–100%)
-                </span>
-              </SelectItem>
-            </SelectContent>
-          </Select>
+              <Select value={tagFilter} onValueChange={setTagFilter}>
+                <SelectTrigger className="h-8 w-auto min-w-[120px] text-xs">
+                  <Tag className="h-3 w-3 mr-1" />
+                  <SelectValue placeholder="Tag" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle tags</SelectItem>
+                  {tags?.map((tag) => (
+                    <SelectItem key={tag} value={tag}>{tag}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-          <Select value={validationFilter} onValueChange={(v) => {
-            setValidationFilter(v);
-            if (v === "all") {
-              searchParams.delete("validation");
-            } else {
-              searchParams.set("validation", v);
-            }
-            setSearchParams(searchParams, { replace: true });
-          }}>
-            <SelectTrigger className="w-[220px]">
-              <FilterX className="h-4 w-4 mr-2" />
-              <SelectValue placeholder="Validation issue" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Alle producten</SelectItem>
-              {Object.entries(VALIDATION_FILTERS).map(([key, { label }]) => (
-                <SelectItem key={key} value={key}>{label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <Select value={completenessFilter} onValueChange={setCompletenessFilter}>
+                <SelectTrigger className="h-8 w-auto min-w-[130px] text-xs">
+                  <SelectValue placeholder="Score" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle scores</SelectItem>
+                  <SelectItem value="critical">
+                    <span className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-destructive" />
+                      Kritiek (0–49%)
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="warning">
+                    <span className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-warning" />
+                      Waarschuwing (50–79%)
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="complete">
+                    <span className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-success" />
+                      Compleet (80–100%)
+                    </span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
 
+              <Select value={validationFilter} onValueChange={(v) => {
+                setValidationFilter(v);
+                if (v === "all") {
+                  searchParams.delete("validation");
+                } else {
+                  searchParams.set("validation", v);
+                }
+                setSearchParams(searchParams, { replace: true });
+              }}>
+                <SelectTrigger className="h-8 w-auto min-w-[160px] text-xs">
+                  <FilterX className="h-3 w-3 mr-1" />
+                  <SelectValue placeholder="Validation" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle issues</SelectItem>
+                  {Object.entries(VALIDATION_FILTERS).map(([key, { label }]) => (
+                    <SelectItem key={key} value={key}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Row 2: Actions */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Primary actions exposed */}
           <Button
             onClick={() => updatePrices.mutate()}
             disabled={updatePrices.isPending}
-            variant="default"
+            size="sm"
           >
-            <RefreshCw className={`h-4 w-4 mr-2 ${updatePrices.isPending ? "animate-spin" : ""}`} />
+            <RefreshCw className={`h-4 w-4 mr-1.5 ${updatePrices.isPending ? "animate-spin" : ""}`} />
             Update Prijzen
           </Button>
 
@@ -701,143 +738,133 @@ const Products = () => {
             onClick={() => syncToWooCommerce.mutate()}
             disabled={syncToWooCommerce.isPending}
             variant="outline"
+            size="sm"
           >
-            <RefreshCw className={`h-4 w-4 mr-2 ${syncToWooCommerce.isPending ? "animate-spin" : ""}`} />
-            Sync Nieuwe Producten
+            <RefreshCw className={`h-4 w-4 mr-1.5 ${syncToWooCommerce.isPending ? "animate-spin" : ""}`} />
+            Sync Producten
           </Button>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xml,.csv"
-            onChange={handleFileUpload}
-            className="hidden"
-          />
-          <Button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={updateMaatIds.isPending || !selectedTenant}
-            variant="secondary"
-          >
-            <Upload className={`h-4 w-4 mr-2 ${updateMaatIds.isPending ? "animate-spin" : ""}`} />
-            Update Maat IDs
-          </Button>
-
-          <input
-            ref={csvInputRef}
-            type="file"
-            accept=".csv"
-            onChange={handleCsvUpload}
-            className="hidden"
-          />
-          <Button
-            onClick={() => csvInputRef.current?.click()}
-            disabled={updateWooSkus.isPending || !selectedTenant}
-            variant="secondary"
-          >
-            <FileSpreadsheet className={`h-4 w-4 mr-2 ${updateWooSkus.isPending ? "animate-spin" : ""}`} />
-            Update WooCommerce SKUs
-          </Button>
-
-          <input
-            ref={stockInputRef}
-            type="file"
-            accept=".xml"
-            onChange={handleStockUpload}
-            className="hidden"
-          />
-          <Button
-            onClick={() => stockInputRef.current?.click()}
-            disabled={importStock.isPending || !selectedTenant}
-            variant="default"
-          >
-            <Package className={`h-4 w-4 mr-2 ${importStock.isPending ? "animate-spin" : ""}`} />
-            Import Voorraad XML
-          </Button>
-
-          {/* Tag products from CSV */}
-          <input
-            ref={tagCsvInputRef}
-            type="file"
-            accept=".csv"
-            onChange={handleTagCsvSelect}
-            className="hidden"
-          />
-          <Button
-            onClick={() => tagCsvInputRef.current?.click()}
-            disabled={tagProducts.isPending || !selectedTenant}
-            variant="secondary"
-          >
-            <Tag className={`h-4 w-4 mr-2 ${tagProducts.isPending ? "animate-spin" : ""}`} />
-            Tag Producten (CSV)
-          </Button>
-
-          {/* Bulk AI generation */}
           {aiProgress ? (
-            <div className="flex items-center gap-3 bg-primary/10 rounded-md px-4 py-2 min-w-[320px]">
+            <div className="flex items-center gap-3 bg-primary/10 rounded-md px-3 py-1.5 min-w-[280px]">
               <Sparkles className="h-4 w-4 animate-pulse text-primary" />
               <div className="flex-1">
-                <div className="flex justify-between text-sm mb-1">
+                <div className="flex justify-between text-xs mb-1">
                   <span>AI generatie...</span>
                   <span className="font-medium">{aiProgress.current}/{aiProgress.total} ({aiProgress.success} ✓ {aiProgress.failed > 0 ? `${aiProgress.failed} ✗` : ''})</span>
                 </div>
-                <Progress value={(aiProgress.current / aiProgress.total) * 100} className="h-2" />
+                <Progress value={(aiProgress.current / aiProgress.total) * 100} className="h-1.5" />
               </div>
             </div>
           ) : (
             <Button
               onClick={() => bulkGenerateAiContent.mutate(tagFilter !== "all" ? "tag" : "all")}
               disabled={bulkGenerateAiContent.isPending || !selectedTenant}
-              variant="default"
-              className="bg-primary"
+              size="sm"
             >
-              <Sparkles className="h-4 w-4 mr-2" />
-              {tagFilter !== "all" ? `AI Genereren (${tagFilter})` : "AI Genereren (alle zonder)"}
+              <Sparkles className="h-4 w-4 mr-1.5" />
+              {tagFilter !== "all" ? `AI (${tagFilter})` : "AI Genereren"}
             </Button>
           )}
 
-          {resetProgress ? (
-            <div className="flex items-center gap-3 bg-muted rounded-md px-4 py-2 min-w-[280px]">
+          {/* Secondary actions in dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                <MoreVertical className="h-4 w-4 mr-1.5" />
+                Meer acties
+                <ChevronDown className="h-3 w-3 ml-1" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56 bg-popover">
+              <DropdownMenuItem
+                onClick={() => fileInputRef.current?.click()}
+                disabled={updateMaatIds.isPending || !selectedTenant}
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                Update Maat IDs
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => csvInputRef.current?.click()}
+                disabled={updateWooSkus.isPending || !selectedTenant}
+              >
+                <FileSpreadsheet className="h-4 w-4 mr-2" />
+                Update WooCommerce SKUs
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => stockInputRef.current?.click()}
+                disabled={importStock.isPending || !selectedTenant}
+              >
+                <Package className="h-4 w-4 mr-2" />
+                Import Voorraad XML
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => tagCsvInputRef.current?.click()}
+                disabled={tagProducts.isPending || !selectedTenant}
+              >
+                <Tag className="h-4 w-4 mr-2" />
+                Tag Producten (CSV)
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onClick={() => {
+                  // Trigger the alert dialog by clicking the hidden trigger
+                  const trigger = document.getElementById('reset-stock-trigger');
+                  trigger?.click();
+                }}
+                disabled={resetWooStock.isPending || !selectedTenant}
+              >
+                <AlertTriangle className="h-4 w-4 mr-2" />
+                Reset WooCommerce Voorraad
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Hidden file inputs */}
+          <input ref={fileInputRef} type="file" accept=".xml,.csv" onChange={handleFileUpload} className="hidden" />
+          <input ref={csvInputRef} type="file" accept=".csv" onChange={handleCsvUpload} className="hidden" />
+          <input ref={stockInputRef} type="file" accept=".xml" onChange={handleStockUpload} className="hidden" />
+          <input ref={tagCsvInputRef} type="file" accept=".csv" onChange={handleTagCsvSelect} className="hidden" />
+
+          {/* Reset progress bar */}
+          {resetProgress && (
+            <div className="flex items-center gap-3 bg-muted rounded-md px-3 py-1.5 min-w-[250px]">
               <RefreshCw className="h-4 w-4 animate-spin text-destructive" />
               <div className="flex-1">
-                <div className="flex justify-between text-sm mb-1">
+                <div className="flex justify-between text-xs mb-1">
                   <span>Reset bezig...</span>
                   <span className="font-medium">{resetProgress.current}/{resetProgress.total}</span>
                 </div>
-                <Progress value={(resetProgress.current / resetProgress.total) * 100} className="h-2" />
-                <p className="text-xs text-muted-foreground mt-1">{resetProgress.updated} variaties op 0 gezet</p>
+                <Progress value={(resetProgress.current / resetProgress.total) * 100} className="h-1.5" />
+                <p className="text-xs text-muted-foreground mt-0.5">{resetProgress.updated} variaties op 0</p>
               </div>
             </div>
-          ) : (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  disabled={resetWooStock.isPending || !selectedTenant}
-                  variant="destructive"
-                >
-                  <AlertTriangle className={`h-4 w-4 mr-2 ${resetWooStock.isPending ? "animate-spin" : ""}`} />
-                  Reset WooCommerce Voorraad
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Weet je het zeker?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Dit zet de voorraad van ALLE productvariaties in WooCommerce op 0. 
-                    Dit kan niet ongedaan worden gemaakt. Dit proces kan enkele minuten duren.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Annuleren</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() => resetWooStock.mutate(undefined)}
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  >
-                    Ja, reset voorraad
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
           )}
+
+          {/* Hidden AlertDialog for reset stock */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button id="reset-stock-trigger" className="hidden" />
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Weet je het zeker?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Dit zet de voorraad van ALLE productvariaties in WooCommerce op 0.
+                  Dit kan niet ongedaan worden gemaakt. Dit proces kan enkele minuten duren.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Annuleren</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => resetWooStock.mutate(undefined)}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Ja, reset voorraad
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
 
         {/* Tag Dialog */}
