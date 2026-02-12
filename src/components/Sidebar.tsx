@@ -12,6 +12,7 @@ import {
   Map,
   BarChart3,
   ChevronDown,
+  ClipboardCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
@@ -39,6 +40,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: "Products", href: "/products", icon: Package },
       { name: "Orders", href: "/orders", icon: ShoppingCart },
+      { name: "Validation", href: "/validation", icon: ClipboardCheck },
     ],
   },
   {
