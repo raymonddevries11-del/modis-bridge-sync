@@ -193,10 +193,17 @@ serve(async (req) => {
             itemXml += `\n      <g:additional_image_link>${escapeXml(images[i] as string)}</g:additional_image_link>`;
           }
 
-          // Availability & price (price is always the real price, never 0)
+          // Availability & price
           itemXml += `
       <g:availability>${availability}</g:availability>
       <g:price>${regularPrice.toFixed(2)} ${currency}</g:price>`;
+
+          // availability_date for out_of_stock (30 days from now as default)
+          if (availability === 'out_of_stock') {
+            const availDate = new Date();
+            availDate.setDate(availDate.getDate() + 30);
+            itemXml += `\n      <g:availability_date>${availDate.toISOString().split('T')[0]}T00:00:00+01:00</g:availability_date>`;
+          }
 
           // 7️⃣ Sale pricing
           if (salePrice && salePrice > 0) {
@@ -256,6 +263,13 @@ serve(async (req) => {
 
           // 4️⃣ Item group ID links variants together
           itemXml += `\n      <g:item_group_id>${escapeXml(product.sku)}</g:item_group_id>`;
+
+          // Exclude from personalized advertising if description contains health/comfort terms
+          const descLower = (description || '').toLowerCase();
+          const sensitiveTerms = ['comfort', 'orthop', 'pijn', 'steun', 'voetbed', 'diabete', 'reuma', 'therapeut', 'medisch', 'gezond'];
+          if (sensitiveTerms.some(term => descLower.includes(term))) {
+            itemXml += `\n      <g:excluded_destination>Personalized_advertising</g:excluded_destination>`;
+          }
 
           // 8️⃣ Shipping - always filled, no empty nodes
           const shippingRules = Array.isArray(feedConfig.shipping_rules) ? feedConfig.shipping_rules : [];
