@@ -5,6 +5,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -178,6 +180,17 @@ const ProductDetail = () => {
     enabled: !!id,
   });
 
+  const { data: allBrands } = useQuery({
+    queryKey: ["brands"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("brands").select("id, name").order("name");
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const [brandPopoverOpen, setBrandPopoverOpen] = useState(false);
+
   const [editedFields, setEditedFields] = useState<Record<string, any>>({});
   const edited = product ? { ...product, ...editedFields, product_prices: { ...product.product_prices, ...(editedFields.product_prices || {}) } } : null;
   const hasChanges = Object.keys(editedFields).length > 0;
@@ -187,7 +200,9 @@ const ProductDetail = () => {
   const updateMutation = useMutation({
     mutationFn: async () => {
       if (!product || !edited) return;
-      const { error: pErr } = await supabase.from("products").update({ title: edited.title, sku: edited.sku, tax_code: edited.tax_code, url_key: edited.url_key }).eq("id", product.id);
+      const updateFields: any = { title: edited.title, sku: edited.sku, tax_code: edited.tax_code, url_key: edited.url_key };
+      if (editedFields.brand_id !== undefined) updateFields.brand_id = editedFields.brand_id;
+      const { error: pErr } = await supabase.from("products").update(updateFields).eq("id", product.id);
       if (pErr) throw pErr;
       if (editedFields.product_prices) {
         const { error: prErr } = await supabase.from("product_prices").update({ regular: edited.product_prices.regular, list: edited.product_prices.list }).eq("product_id", product.id);
@@ -337,7 +352,34 @@ const ProductDetail = () => {
               <CardContent className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Titel</Label><Input value={edited?.title || ""} onChange={(e) => setField("title", e.target.value)} /></div>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">SKU</Label><Input value={edited?.sku || ""} onChange={(e) => setField("sku", e.target.value)} /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Merk</Label><Input value={product.brands?.name || "N/A"} disabled /></div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Merk</Label>
+                  <Popover open={brandPopoverOpen} onOpenChange={setBrandPopoverOpen}>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" role="combobox" className="w-full justify-between font-normal h-9">
+                        {editedFields.brand_id !== undefined
+                          ? (allBrands?.find((b) => b.id === editedFields.brand_id)?.name || "—")
+                          : (product.brands?.name || "Selecteer merk...")}
+                        <ChevronDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[250px] p-0" align="start">
+                      <Command>
+                        <CommandInput placeholder="Zoek merk..." />
+                        <CommandList>
+                          <CommandEmpty>Geen merk gevonden.</CommandEmpty>
+                          <CommandGroup>
+                            {allBrands?.map((brand) => (
+                              <CommandItem key={brand.id} value={brand.name} onSelect={() => { setField("brand_id", brand.id); setBrandPopoverOpen(false); }}>
+                                {brand.name}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                </div>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Leverancier</Label><Input value={product.suppliers?.name || "N/A"} disabled /></div>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Tax Code</Label><Input value={edited?.tax_code || ""} onChange={(e) => setField("tax_code", e.target.value)} /></div>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">URL Key</Label><Input value={edited?.url_key || ""} onChange={(e) => setField("url_key", e.target.value)} /></div>
