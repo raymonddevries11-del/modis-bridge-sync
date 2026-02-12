@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import {
   ArrowLeft, Save, Image as ImageIcon, RefreshCw, AlertCircle,
   Package, Sparkles, Rss, Send, ChevronRight, ChevronDown, CheckCircle2, XCircle,
+  Plus,
 } from "lucide-react";
 
 const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; tenantId: string; productSku: string }) => {
@@ -74,6 +75,67 @@ const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; ten
   );
 };
 
+const CreateVariantsFromAttributes = ({ product }: { product: any }) => {
+  const queryClient = useQueryClient();
+  const attrs = product.attributes as Record<string, any> | null;
+  const maatStr = attrs?.Maat as string | undefined;
+
+  const parseSizes = (maat: string): string[] => {
+    // Format: "35 = 2½, 36 = 3, 36.5 = 3½, 37 = 4, ..."
+    return maat.split(",").map((s) => s.trim()).filter(Boolean);
+  };
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      if (!maatStr) throw new Error("Geen Maat attribuut gevonden");
+      const sizes = parseSizes(maatStr);
+      if (sizes.length === 0) throw new Error("Geen maten gevonden");
+
+      const variants = sizes.map((sizeEntry) => {
+        // Extract EU size as size_label (part before " = ")
+        const euSize = sizeEntry.split("=")[0].trim();
+        return {
+          product_id: product.id,
+          size_label: euSize,
+          maat_web: sizeEntry,
+          maat_id: `${product.sku}-${euSize.replace(/[^0-9.]/g, "")}`,
+          active: true,
+        };
+      });
+
+      const { data, error } = await supabase.from("variants").insert(variants).select();
+      if (error) throw error;
+
+      // Create stock_totals entries for new variants
+      if (data && data.length > 0) {
+        const stockEntries = data.map((v: any) => ({
+          variant_id: v.id,
+          qty: 0,
+          updated_at: new Date().toISOString(),
+        }));
+        const { error: stockErr } = await supabase.from("stock_totals").insert(stockEntries);
+        if (stockErr) throw stockErr;
+      }
+
+      return data;
+    },
+    onSuccess: (data) => {
+      toast.success(`${data?.length || 0} varianten aangemaakt`);
+      queryClient.invalidateQueries({ queryKey: ["product-detail", product.id] });
+    },
+    onError: (e: any) => toast.error(`Fout: ${e.message}`),
+  });
+
+  if (!maatStr) return null;
+  const sizes = parseSizes(maatStr);
+
+  return (
+    <Button size="sm" variant="outline" onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
+      <Plus className="h-4 w-4 mr-1" />
+      {createMutation.isPending ? "Aanmaken..." : `${sizes.length} varianten aanmaken`}
+    </Button>
+  );
+};
 const wooFieldMapping = [
   { label: "Title", dbField: "title", wooField: "name" },
   { label: "SKU", dbField: "sku", wooField: "sku" },
@@ -340,7 +402,12 @@ const ProductDetail = () => {
               <CardHeader>
                 <CardTitle className="text-base flex items-center justify-between">
                   <span>Varianten & Voorraad</span>
-                  <span className="badge-info">{totalStock} totaal</span>
+                  <div className="flex items-center gap-2">
+                    {(!product.variants || product.variants.length === 0) && attrs?.Maat && (
+                      <CreateVariantsFromAttributes product={product} />
+                    )}
+                    <span className="badge-info">{totalStock} totaal</span>
+                  </div>
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -353,7 +420,11 @@ const ProductDetail = () => {
                     {product.variants.map((v: any) => <VariantStockCard key={v.id} variant={v} tenantId={product.tenant_id} productSku={product.sku} />)}
                   </div>
                 ) : (
-                  <div className="text-center py-8 text-muted-foreground"><Package className="h-8 w-8 mx-auto mb-2 opacity-40" /><p className="text-sm">Geen varianten</p></div>
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Package className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                    <p className="text-sm">Geen varianten</p>
+                    {attrs?.Maat && <p className="text-xs mt-1">Maten gevonden in attributen — gebruik de knop hierboven om varianten aan te maken.</p>}
+                  </div>
                 )}
               </CardContent>
             </Card>
