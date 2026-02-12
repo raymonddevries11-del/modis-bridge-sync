@@ -857,9 +857,10 @@ async function createVariationsInWooCommerce(
   console.log(`Creating ${variants.length} variations for product ${wooProductId} with parent SKU ${parentSku}`);
   
   for (const variant of variants) {
-    // Build variation SKU in format: productSku-maat_id (e.g., "101069102000-071041")
-    // maat_id contains the 6-digit Modis maat code
-    const variationSku = parentSku && variant.maat_id ? `${parentSku}-${variant.maat_id}` : (variant.ean || '');
+    // Build variation SKU in format: productSku-suffix (e.g., "101069102000-071041")
+    // maat_id may already contain the parent SKU prefix, so extract only the suffix
+    const maatSuffix = variant.maat_id && variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id;
+    const variationSku = parentSku && maatSuffix ? `${parentSku}-${maatSuffix}` : (variant.ean || '');
     
     const variationData: any = {
       attributes: [
@@ -922,8 +923,9 @@ async function createMissingVariation(
   tenantId?: string,
   productTitle?: string
 ): Promise<any | null> {
-  // Build variation SKU in format: productSku-maat_id (e.g., "101069102000-071041")
-  const variationSku = parentSku && variant.maat_id ? `${parentSku}-${variant.maat_id}` : (variant.ean || '');
+  // Build variation SKU - extract suffix from maat_id to avoid double-prefixing
+  const maatSuffix = variant.maat_id && variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id;
+  const variationSku = parentSku && maatSuffix ? `${parentSku}-${maatSuffix}` : (variant.ean || '');
   
   const variationData: any = {
     attributes: [
@@ -1508,10 +1510,9 @@ async function syncVariantToWooCommerce(
   
   const dbSizeParts = extractSizeParts(variant.size_label);
   
-  // Build expected SKU suffix for SKU-based matching
-  // NEW Format: productSku-maat_id (e.g., "101069102000-071041")
-  // maat_id contains the 6-digit Modis maat code
-  const expectedFullSku = productSku && variant.maat_id ? `${productSku}-${variant.maat_id}` : null;
+  // Build expected SKU - extract suffix from maat_id to avoid double-prefixing
+  const maatSuffix = variant.maat_id && variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id;
+  const expectedFullSku = productSku && maatSuffix ? `${productSku}-${maatSuffix}` : null;
   // Also keep old format for backwards compatibility during migration
   const legacyFullSku = productSku ? `${productSku}-${variant.size_label}` : null;
   
@@ -1607,9 +1608,9 @@ async function syncVariantToWooCommerce(
     stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
   };
 
-  // Update variation SKU to new format: {productSku}-{maat_id}
-  // Only update if maat_id is a 6-digit code and SKU differs
-  if (expectedFullSku && variant.maat_id && variant.maat_id.length === 6) {
+  // Update variation SKU to new format: {productSku}-{suffix}
+  // Only update if suffix is a valid code and SKU differs
+  if (expectedFullSku && maatSuffix && maatSuffix.length === 6) {
     const currentWooSku = matchingVariation.sku || '';
     if (currentWooSku !== expectedFullSku) {
       updateData.sku = expectedFullSku;

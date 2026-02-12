@@ -158,7 +158,8 @@ Deno.serve(async (req) => {
         }
       } else if (wooProduct.type === 'variable') {
         for (const variant of product.variants || []) {
-          const variantSku = `${product.sku}-${variant.maat_id}`;
+          const maatSuffix = variant.maat_id && variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id;
+          const variantSku = `${product.sku}-${maatSuffix}`;
           const wooVariation = wooVariationMap.get(variantSku);
           
           if (wooVariation) {
