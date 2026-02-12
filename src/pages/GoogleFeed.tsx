@@ -32,6 +32,7 @@ interface FeedConfig {
   shipping_price: number;
   shipping_rules: ShippingRule[];
   enabled: boolean;
+  fallback_google_category: string | null;
 }
 
 interface CategoryMapping {
@@ -353,6 +354,33 @@ const GoogleFeed = () => {
                         onBlur={() => feedConfig && saveFeedConfig({ currency: feedConfig.currency })}
                       />
                     </div>
+                  </div>
+
+                  {/* Fallback Category */}
+                  <div className="space-y-2 pt-2">
+                    <Label className="text-base">Fallback Google Categorie</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Producten zonder artikelgroep worden met deze categorie in de feed opgenomen.
+                    </p>
+                    <GoogleCategorySearch
+                      value={feedConfig?.fallback_google_category || ''}
+                      onSelect={(val) => {
+                        setFeedConfig(prev => ({ ...prev!, fallback_google_category: val }));
+                        saveFeedConfig({ fallback_google_category: val });
+                      }}
+                    />
+                    {feedConfig?.fallback_google_category && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setFeedConfig(prev => ({ ...prev!, fallback_google_category: null }));
+                          saveFeedConfig({ fallback_google_category: null });
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 mr-1" /> Fallback verwijderen
+                      </Button>
+                    )}
                   </div>
 
                   {/* Shipping Rules */}

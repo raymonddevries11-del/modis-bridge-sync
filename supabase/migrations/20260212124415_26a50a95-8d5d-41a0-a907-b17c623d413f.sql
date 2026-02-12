@@ -1,0 +1,1 @@
+ALTER TABLE public.google_feed_config ADD COLUMN fallback_google_category text DEFAULT NULL;
