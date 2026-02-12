@@ -1,0 +1,235 @@
+name: SFTP Image Sync
+
+on:
+  workflow_dispatch: # Manual trigger only
+
+jobs:
+  sync-images:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install ssh2-sftp-client node-fetch
+
+      - name: Sync Images from SFTP to Storage
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          node << 'EOF'
+          const SftpClient = require('ssh2-sftp-client');
+          const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+
+          async function syncImages() {
+            const sftp = new SftpClient();
+            
+            try {
+              console.log('=== SFTP Image Sync ===');
+              
+              // Step 1: Fix image URLs in database
+              console.log('Step 1: Fixing image URLs in database...');
+              const fixResponse = await fetch(
+                `${process.env.SUPABASE_URL}/functions/v1/fix-image-urls`,
+                {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                  },
+                  body: JSON.stringify({}),
+                }
+              );
+              
+              if (!fixResponse.ok) {
+                console.error('Fix image URLs failed:', await fixResponse.text());
+              } else {
+                const fixResult = await fixResponse.json();
+                console.log(`✓ Fixed ${fixResult.fixedProducts} products`);
+                console.log(`  ${fixResult.alreadyInStorage} images already in storage`);
+                console.log(`  ${fixResult.missingFromStorage} images need uploading`);
+              }
+              
+              // Step 2: Get list of all image filenames needed
+              console.log('\nStep 2: Getting list of needed images...');
+              const productsResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/products?images=not.is.null&select=images&limit=5000`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                  }
+                }
+              );
+              
+              const products = await productsResponse.json();
+              const neededImages = new Set();
+              
+              for (const p of products) {
+                if (p.images && Array.isArray(p.images)) {
+                  for (const url of p.images) {
+                    if (typeof url === 'string' && url.includes('/product-images/')) {
+                      const filename = url.split('/product-images/').pop();
+                      if (filename) neededImages.add(filename);
+                    }
+                  }
+                }
+              }
+              
+              console.log(`Found ${neededImages.size} unique image filenames needed`);
+              
+              // Step 3: Check which already exist in Storage
+              console.log('\nStep 3: Checking existing images in Storage...');
+              const existingImages = new Set();
+              let offset = 0;
+              const limit = 1000;
+              
+              while (true) {
+                const listResponse = await fetch(
+                  `${process.env.SUPABASE_URL}/storage/v1/object/list/product-images`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                    },
+                    body: JSON.stringify({ limit, offset, prefix: '' }),
+                  }
+                );
+                
+                if (!listResponse.ok) break;
+                const files = await listResponse.json();
+                if (!files || files.length === 0) break;
+                files.forEach(f => { if (f.name) existingImages.add(f.name); });
+                if (files.length < limit) break;
+                offset += limit;
+              }
+              
+              console.log(`Found ${existingImages.size} existing images in Storage`);
+              
+              const missingImages = Array.from(neededImages).filter(img => !existingImages.has(img));
+              console.log(`Need to upload ${missingImages.length} missing images`);
+              
+              if (missingImages.length === 0) {
+                console.log('✓ All images are already in Storage!');
+                return;
+              }
+              
+              // Step 4: Connect to SFTP and upload missing images
+              console.log('\nStep 4: Connecting to SFTP...');
+              await sftp.connect({
+                host: process.env.SFTP_HOST,
+                port: parseInt(process.env.SFTP_PORT),
+                username: process.env.SFTP_USERNAME,
+                privateKey: Buffer.from(process.env.SFTP_PRIVATE_KEY, 'utf-8'),
+                passphrase: process.env.SFTP_PASSPHRASE || undefined,
+                readyTimeout: 30000,
+              });
+              console.log('✓ Connected to SFTP');
+              
+              // Find webfoto directory
+              const basePath = '/home/customer/www/modisbridge.nl/public_html/kosterschoenmode';
+              const possiblePaths = [
+                `${basePath}/webfoto`,
+                `${basePath}/Webfoto`,
+                `${basePath}/modis-to-wp/../webfoto`,
+              ];
+              
+              let webfotoPath = null;
+              for (const path of possiblePaths) {
+                const exists = await sftp.exists(path);
+                if (exists) {
+                  webfotoPath = path;
+                  console.log(`✓ Found webfoto at: ${path}`);
+                  break;
+                }
+              }
+              
+              if (!webfotoPath) {
+                console.error('✗ Webfoto directory not found!');
+                await sftp.end();
+                return;
+              }
+              
+              // Upload missing images
+              let uploaded = 0;
+              let notFound = 0;
+              let errors = 0;
+              
+              for (const imageName of missingImages) {
+                try {
+                  const imagePath = `${webfotoPath}/${imageName}`;
+                  const exists = await sftp.exists(imagePath);
+                  
+                  if (!exists) {
+                    notFound++;
+                    if (notFound <= 10) console.log(`⚠ Not found: ${imageName}`);
+                    continue;
+                  }
+                  
+                  const imageBuffer = await sftp.get(imagePath);
+                  
+                  // Upload directly to Storage via REST API
+                  const uploadResponse = await fetch(
+                    `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${imageName}`,
+                    {
+                      method: 'POST',
+                      headers: {
+                        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                        'Content-Type': 'image/jpeg',
+                        'x-upsert': 'false',
+                      },
+                      body: imageBuffer,
+                    }
+                  );
+                  
+                  if (uploadResponse.ok || uploadResponse.status === 409) {
+                    uploaded++;
+                    if (uploaded % 50 === 0) console.log(`  Progress: ${uploaded}/${missingImages.length}`);
+                  } else {
+                    errors++;
+                    if (errors <= 5) {
+                      console.error(`✗ Upload failed for ${imageName}: ${uploadResponse.status}`);
+                    }
+                  }
+                } catch (error) {
+                  errors++;
+                  if (errors <= 5) console.error(`Error with ${imageName}:`, error.message);
+                }
+              }
+              
+              console.log(`\n=== Results ===`);
+              console.log(`Uploaded: ${uploaded}`);
+              console.log(`Not found on SFTP: ${notFound}`);
+              console.log(`Errors: ${errors}`);
+              
+              await sftp.end();
+              console.log('✓ Image sync complete');
+              
+            } catch (error) {
+              console.error('Fatal error:', error);
+              try { await sftp.end(); } catch(e) {}
+              throw error;
+            }
+          }
+
+          syncImages().catch(err => {
+            console.error('Sync failed:', err);
+            process.exit(1);
+          });
+          EOF
