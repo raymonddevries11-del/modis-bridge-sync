@@ -13,7 +13,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { TenantSelector } from "@/components/TenantSelector";
-import { Rss, Copy, ExternalLink, Plus, Pencil, Trash2, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { Rss, Copy, ExternalLink, Plus, Pencil, Trash2, AlertCircle, CheckCircle2, Loader2, CheckSquare } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { GoogleCategorySearch } from "@/components/GoogleCategorySearch";
 
 interface FeedConfig {
@@ -53,6 +54,11 @@ const GoogleFeed = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editMapping, setEditMapping] = useState<Partial<CategoryMapping> | null>(null);
   const [feedStats, setFeedStats] = useState<{ total: number; mapped: number; unmapped: number } | null>(null);
+  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
+  const [bulkSelectedGroups, setBulkSelectedGroups] = useState<Set<string>>(new Set());
+  const [bulkMapping, setBulkMapping] = useState<{ google_category: string; gender: string; age_group: string; condition: string; material: string }>({
+    google_category: '', gender: 'unisex', age_group: 'adult', condition: 'new', material: '',
+  });
   const { toast } = useToast();
 
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -205,6 +211,57 @@ const GoogleFeed = () => {
   const copyFeedUrl = () => {
     navigator.clipboard.writeText(feedUrl);
     toast({ title: "Feed URL gekopieerd" });
+  };
+
+  const toggleBulkSelect = (id: string) => {
+    setBulkSelectedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllBulk = (groups: typeof articleGroups) => {
+    if (bulkSelectedGroups.size === groups.length) {
+      setBulkSelectedGroups(new Set());
+    } else {
+      setBulkSelectedGroups(new Set(groups.map(g => g.id)));
+    }
+  };
+
+  const saveBulkMappings = async () => {
+    if (!bulkMapping.google_category || bulkSelectedGroups.size === 0) return;
+    setSaving(true);
+    try {
+      const rows = Array.from(bulkSelectedGroups).map(groupId => {
+        const group = articleGroups.find(g => g.id === groupId);
+        return {
+          tenant_id: tenantId,
+          article_group_id: groupId,
+          article_group_description: group?.description || groupId,
+          google_category: bulkMapping.google_category,
+          gender: bulkMapping.gender,
+          age_group: bulkMapping.age_group,
+          condition: bulkMapping.condition,
+          material: bulkMapping.material || null,
+        };
+      });
+
+      const { error } = await supabase
+        .from('google_category_mappings')
+        .insert(rows as any);
+      if (error) throw error;
+
+      await loadMappings();
+      setBulkDialogOpen(false);
+      setBulkSelectedGroups(new Set());
+      setBulkMapping({ google_category: '', gender: 'unisex', age_group: 'adult', condition: 'new', material: '' });
+      toast({ title: `${rows.length} mappings aangemaakt` });
+    } catch (err: any) {
+      toast({ title: "Fout", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const unmappedGroups = articleGroups.filter(g => !mappings.find(m => m.article_group_id === g.id));
@@ -365,31 +422,44 @@ const GoogleFeed = () => {
             <TabsContent value="mappings" className="space-y-4">
               {unmappedGroups.length > 0 && (
                 <Card className="border-orange-300 bg-orange-50 dark:bg-orange-950/20">
-                  <CardHeader>
+                  <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle className="flex items-center gap-2 text-orange-700 dark:text-orange-400">
                       <AlertCircle className="h-5 w-5" />
                       {unmappedGroups.length} artikelgroepen zonder Google categorie
                     </CardTitle>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => toggleAllBulk(unmappedGroups)}
+                      >
+                        {bulkSelectedGroups.size === unmappedGroups.length ? 'Deselecteer alles' : 'Selecteer alles'}
+                      </Button>
+                      {bulkSelectedGroups.size > 0 && (
+                        <Button
+                          size="sm"
+                          onClick={() => setBulkDialogOpen(true)}
+                        >
+                          <CheckSquare className="h-4 w-4 mr-2" />
+                          Bulk toewijzen ({bulkSelectedGroups.size})
+                        </Button>
+                      )}
+                    </div>
                   </CardHeader>
                   <CardContent>
                     <div className="flex flex-wrap gap-2">
                       {unmappedGroups.map(g => (
                         <Badge
                           key={g.id}
-                          variant="outline"
-                          className="cursor-pointer hover:bg-orange-100 dark:hover:bg-orange-900"
-                          onClick={() => {
-                            setEditMapping({
-                              article_group_id: g.id,
-                              article_group_description: g.description,
-                              google_category: '',
-                              gender: 'unisex',
-                              age_group: 'adult',
-                              condition: 'new',
-                            });
-                            setDialogOpen(true);
-                          }}
+                          variant={bulkSelectedGroups.has(g.id) ? "default" : "outline"}
+                          className="cursor-pointer hover:bg-orange-100 dark:hover:bg-orange-900 gap-1.5"
+                          onClick={() => toggleBulkSelect(g.id)}
                         >
+                          <Checkbox
+                            checked={bulkSelectedGroups.has(g.id)}
+                            className="h-3.5 w-3.5 pointer-events-none"
+                            tabIndex={-1}
+                          />
                           {g.description} ({g.productCount})
                         </Badge>
                       ))}
@@ -564,6 +634,77 @@ const GoogleFeed = () => {
               <Button onClick={saveMapping} disabled={saving}>
                 {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Opslaan
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Bulk Mapping Dialog */}
+        <Dialog open={bulkDialogOpen} onOpenChange={setBulkDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Bulk categorie toewijzen</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Wijs dezelfde Google categorie toe aan <strong>{bulkSelectedGroups.size}</strong> geselecteerde artikelgroepen:
+            </p>
+            <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+              {Array.from(bulkSelectedGroups).map(id => {
+                const g = articleGroups.find(ag => ag.id === id);
+                return <Badge key={id} variant="secondary" className="text-xs">{g?.description || id}</Badge>;
+              })}
+            </div>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Google Product Categorie</Label>
+                <GoogleCategorySearch
+                  value={bulkMapping.google_category}
+                  onSelect={(v) => setBulkMapping(prev => ({ ...prev, google_category: v }))}
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label>Geslacht</Label>
+                  <Select value={bulkMapping.gender} onValueChange={(v) => setBulkMapping(prev => ({ ...prev, gender: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {GENDER_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Leeftijdsgroep</Label>
+                  <Select value={bulkMapping.age_group} onValueChange={(v) => setBulkMapping(prev => ({ ...prev, age_group: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {AGE_GROUP_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Conditie</Label>
+                  <Select value={bulkMapping.condition} onValueChange={(v) => setBulkMapping(prev => ({ ...prev, condition: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {CONDITION_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Materiaal (optioneel)</Label>
+                <Input
+                  value={bulkMapping.material}
+                  placeholder="bijv. Leer, Textiel"
+                  onChange={(e) => setBulkMapping(prev => ({ ...prev, material: e.target.value }))}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setBulkDialogOpen(false)}>Annuleren</Button>
+              <Button onClick={saveBulkMappings} disabled={saving || !bulkMapping.google_category}>
+                {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                {bulkSelectedGroups.size} mappings opslaan
               </Button>
             </DialogFooter>
           </DialogContent>
