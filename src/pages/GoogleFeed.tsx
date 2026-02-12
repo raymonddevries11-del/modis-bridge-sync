@@ -33,6 +33,8 @@ interface FeedConfig {
   shipping_rules: ShippingRule[];
   enabled: boolean;
   fallback_google_category: string | null;
+  fallback_gender: string | null;
+  fallback_age_group: string | null;
 }
 
 interface CategoryMapping {
@@ -404,6 +406,46 @@ const GoogleFeed = () => {
                       </Button>
                     )}
                   </div>
+
+                  {/* Fallback Gender & Age Group */}
+                  {feedConfig?.fallback_google_category && (
+                    <div className="grid grid-cols-2 gap-4 pt-2">
+                      <div className="space-y-2">
+                        <Label>Fallback Gender</Label>
+                        <Select
+                          value={feedConfig?.fallback_gender || 'unisex'}
+                          onValueChange={(val) => {
+                            setFeedConfig(prev => ({ ...prev!, fallback_gender: val }));
+                            saveFeedConfig({ fallback_gender: val } as any);
+                          }}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {GENDER_OPTIONS.map(g => (
+                              <SelectItem key={g} value={g}>{g}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Fallback Leeftijdsgroep</Label>
+                        <Select
+                          value={feedConfig?.fallback_age_group || 'adult'}
+                          onValueChange={(val) => {
+                            setFeedConfig(prev => ({ ...prev!, fallback_age_group: val }));
+                            saveFeedConfig({ fallback_age_group: val } as any);
+                          }}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {AGE_GROUP_OPTIONS.map(a => (
+                              <SelectItem key={a} value={a}>{a}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Shipping Rules */}
                   <div className="space-y-3 pt-2">
