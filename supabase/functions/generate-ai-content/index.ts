@@ -165,11 +165,17 @@ function buildProductContext(product: any): string {
     ?.map((v: any) => v.size_label)
     ?.join(', ') || '';
 
+  // Extract supplier model code from title or attributes
+  const supplierDescription = product.attributes?.['Leveranciers omschrijving'] || '';
+  const supplierName = product.attributes?.['Leveranciers naam'] || '';
+
   return `
 Product informatie:
 - Titel: ${product.title || 'Geen titel'}
 - SKU: ${product.sku || 'Geen SKU'}
 - Merk: ${brand}
+- Leverancier/model naam: ${supplierName || 'Niet beschikbaar'}
+- Leverancier/model code: ${supplierDescription || 'Niet beschikbaar'}
 - Prijs: €${price}${listPrice ? ` (adviesprijs: €${listPrice})` : ''}
 - Kleur: ${color || 'Niet gespecificeerd'}
 - Categorieën: ${categories || 'Geen categorieën'}
@@ -192,10 +198,10 @@ Focus op de praktische voordelen en unieke eigenschappen van het product.`;
 ${productContext}
 
 Genereer:
-1. Een pakkende producttitel (max 70 karakters)
+1. Een pakkende producttitel (max 70 karakters) - Begin ALTIJD met het merk, gevolgd door de modelnaam/code (bijv. "Waldläufer Helios Heren Wandelschoen - Donkerblauw"). Gebruik de leverancier/model code als modelnaam als er geen duidelijke modelnaam beschikbaar is.
 2. Een korte productomschrijving (50-100 woorden) - focus op de belangrijkste kenmerken
 3. Een uitgebreide productomschrijving (150-300 woorden) - SEO-geoptimaliseerd met natuurlijke zoekwoorden
-4. Een SEO meta titel (max 60 karakters)
+4. Een SEO meta titel (max 60 karakters) - Begin met het merk en model
 5. Een SEO meta description (max 155 karakters)
 6. Relevante zoekwoorden (5-10 keywords, kommagescheiden)
 7. 3-5 product features/USPs als korte bullets
@@ -224,7 +230,7 @@ Genereer:
               properties: {
                 title: {
                   type: "string",
-                  description: "Geoptimaliseerde producttitel (max 70 karakters)"
+                  description: "Geoptimaliseerde producttitel (max 70 karakters), begin altijd met merk + modelnaam/code"
                 },
                 short_description: {
                   type: "string",
