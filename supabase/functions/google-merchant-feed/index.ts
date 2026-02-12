@@ -141,26 +141,29 @@ serve(async (req) => {
     }
     const fallbackCategory = feedConfig.fallback_google_category || null;
 
-    // Pre-fetch AI titles for all products (bulk lookup)
-    const aiTitleMap = new Map<string, string>();
+    // Pre-fetch AI content for all products (bulk lookup)
+    const aiContentMap = new Map<string, { title: string; description: string; meta_description: string }>();
     let aiOffset = 0;
     while (true) {
       const { data: aiContent } = await supabase
         .from('product_ai_content')
-        .select('product_id, ai_title, status')
+        .select('product_id, ai_title, ai_long_description, ai_short_description, ai_meta_description, status')
         .eq('tenant_id', tenantId)
-        .not('ai_title', 'is', null)
-        .in('status', ['approved', 'generated'])
+        .eq('status', 'approved')
         .range(aiOffset, aiOffset + 999);
       
       if (!aiContent || aiContent.length === 0) break;
       for (const ac of aiContent) {
-        if (ac.ai_title) aiTitleMap.set(ac.product_id, ac.ai_title);
+        aiContentMap.set(ac.product_id, {
+          title: ac.ai_title || '',
+          description: ac.ai_long_description || ac.ai_short_description || '',
+          meta_description: ac.ai_meta_description || '',
+        });
       }
       if (aiContent.length < 1000) break;
       aiOffset += 1000;
     }
-    console.log(`Loaded ${aiTitleMap.size} AI titles`);
+    console.log(`Loaded ${aiContentMap.size} approved AI content entries`);
 
     const allItems: string[] = [];
     let offset = 0;
@@ -207,7 +210,8 @@ serve(async (req) => {
         const currency = price?.currency || feedConfig.currency || 'EUR';
         const images = (product.images as string[]) || [];
         const color = (product.color as any);
-        const description = product.webshop_text || product.meta_description || product.title;
+        const aiData = aiContentMap.get(product.id);
+        const description = aiData?.description || product.webshop_text || product.meta_description || product.title;
         const shopUrl = feedConfig.shop_url?.replace(/\/$/, '') || '';
 
         // 1️⃣ Skip products with no real price (price must never be 0)
@@ -233,10 +237,9 @@ serve(async (req) => {
           // Skip if no image
           if (!imageLink) continue;
 
-          // 3️⃣ Optimized title: AI title (if available) > formula title
-          const aiTitle = aiTitleMap.get(product.id);
+          // 3️⃣ Optimized title: approved AI title > formula title
+          const aiTitle = aiData?.title;
           const formulaTitle = buildTitle(product, brandName, sizeLabel);
-          // For AI titles, append size if not already included
           let optimizedTitle: string;
           if (aiTitle) {
             const primarySize = sizeLabel ? sizeLabel.split('=')[0].trim() : null;
