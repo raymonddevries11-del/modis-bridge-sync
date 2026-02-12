@@ -468,7 +468,7 @@ const GoogleFeed = () => {
 
             {/* Mappings Tab */}
             <TabsContent value="mappings" className="space-y-4">
-              {unmappedGroups.length > 0 && (
+            {unmappedGroups.length > 0 && (
                 <Card className="border-orange-300 bg-orange-50 dark:bg-orange-950/20">
                   <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle className="flex items-center gap-2 text-orange-700 dark:text-orange-400">
@@ -495,23 +495,56 @@ const GoogleFeed = () => {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <div className="flex flex-wrap gap-2">
-                      {unmappedGroups.map(g => (
-                        <Badge
-                          key={g.id}
-                          variant={bulkSelectedGroups.has(g.id) ? "default" : "outline"}
-                          className="cursor-pointer hover:bg-orange-100 dark:hover:bg-orange-900 gap-1.5"
-                          onClick={() => toggleBulkSelect(g.id)}
-                        >
-                          <Checkbox
-                            checked={bulkSelectedGroups.has(g.id)}
-                            className="h-3.5 w-3.5 pointer-events-none"
-                            tabIndex={-1}
-                          />
-                          {g.description} ({g.productCount})
-                        </Badge>
-                      ))}
-                    </div>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-10">
+                            <Checkbox
+                              checked={bulkSelectedGroups.size === unmappedGroups.length && unmappedGroups.length > 0}
+                              onCheckedChange={() => toggleAllBulk(unmappedGroups)}
+                            />
+                          </TableHead>
+                          <TableHead>Code</TableHead>
+                          <TableHead>Beschrijving</TableHead>
+                          <TableHead className="text-right">Producten</TableHead>
+                          <TableHead className="w-24">Actie</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {unmappedGroups.map(g => (
+                          <TableRow key={g.id}>
+                            <TableCell>
+                              <Checkbox
+                                checked={bulkSelectedGroups.has(g.id)}
+                                onCheckedChange={() => toggleBulkSelect(g.id)}
+                              />
+                            </TableCell>
+                            <TableCell className="font-mono text-sm">{g.id}</TableCell>
+                            <TableCell className="font-medium">{g.description}</TableCell>
+                            <TableCell className="text-right">{g.productCount}</TableCell>
+                            <TableCell>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setEditMapping({
+                                    article_group_id: g.id,
+                                    article_group_description: g.description,
+                                    google_category: '',
+                                    gender: 'unisex',
+                                    age_group: 'adult',
+                                    condition: 'new',
+                                  });
+                                  setDialogOpen(true);
+                                }}
+                              >
+                                <Plus className="h-3.5 w-3.5 mr-1" /> Map
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                   </CardContent>
                 </Card>
               )}
