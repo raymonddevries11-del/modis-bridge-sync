@@ -18,7 +18,24 @@ function escapeXml(str: string): string {
 }
 
 /**
- * Build an optimized title: Brand + ProductType + Color + Size
+ * Strip internal article codes/numbers from a product title.
+ * Removes patterns like "46020 40572 H", "A-902 C", "222321 996", etc.
+ */
+function cleanTitle(title: string): string {
+  if (!title) return '';
+  return title
+    // Remove patterns like "46020 40572 H" (multiple number groups with optional single letters)
+    .replace(/\b\d{3,}[\s\-]?\d*[\s\-]?[A-Z]?\b/gi, '')
+    // Remove standalone single/double letter codes like "H", "C", "LM"
+    .replace(/\s+[A-Z]{1,2}\s+/g, ' ')
+    // Remove leading/trailing dashes and extra spaces
+    .replace(/\s*-\s*-\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Build an optimized title: Brand + ProductType + Color + Maat Size
  * Strips internal article numbers for better Shopping CTR.
  */
 function buildTitle(product: any, brandName: string, sizeLabel: string | null): string {
@@ -31,13 +48,13 @@ function buildTitle(product: any, brandName: string, sizeLabel: string | null): 
   const articleGroup = product.article_group as any;
   const productType = articleGroup?.description || articleGroup?.name || null;
   if (productType) {
-    parts.push(productType);
+    parts.push(cleanTitle(productType));
   } else {
     // Try first category name
     const cats = product.categories as any[];
     if (cats?.length) {
       const catName = typeof cats[0] === 'object' ? cats[0].name : String(cats[0]);
-      if (catName) parts.push(catName);
+      if (catName) parts.push(cleanTitle(catName));
     }
   }
 
@@ -47,17 +64,18 @@ function buildTitle(product: any, brandName: string, sizeLabel: string | null): 
     parts.push(color.label || color.name);
   }
 
-  // Size
+  // Size - only the primary size, strip conversion notation
   if (sizeLabel) {
-    parts.push(`Maat ${sizeLabel}`);
+    const primarySize = sizeLabel.split('=')[0].trim();
+    parts.push(`Maat ${primarySize}`);
   }
 
-  // Fallback: if we only have brand, add original title (cleaned)
+  // Fallback: if we only have brand, add cleaned original title
   if (parts.length <= 1) {
-    parts.push(product.title);
+    parts.push(cleanTitle(product.title));
   }
 
-  return parts.join(' ');
+  return parts.filter(p => p).join(' ');
 }
 
 serve(async (req) => {
@@ -107,6 +125,27 @@ serve(async (req) => {
       mappingMap.set(m.article_group_id, m);
     }
     const fallbackCategory = feedConfig.fallback_google_category || null;
+
+    // Pre-fetch AI titles for all products (bulk lookup)
+    const aiTitleMap = new Map<string, string>();
+    let aiOffset = 0;
+    while (true) {
+      const { data: aiContent } = await supabase
+        .from('product_ai_content')
+        .select('product_id, ai_title, status')
+        .eq('tenant_id', tenantId)
+        .not('ai_title', 'is', null)
+        .in('status', ['approved', 'generated'])
+        .range(aiOffset, aiOffset + 999);
+      
+      if (!aiContent || aiContent.length === 0) break;
+      for (const ac of aiContent) {
+        if (ac.ai_title) aiTitleMap.set(ac.product_id, ac.ai_title);
+      }
+      if (aiContent.length < 1000) break;
+      aiOffset += 1000;
+    }
+    console.log(`Loaded ${aiTitleMap.size} AI titles`);
 
     const allItems: string[] = [];
     let offset = 0;
@@ -178,8 +217,19 @@ serve(async (req) => {
           // Skip if no image
           if (!imageLink) continue;
 
-          // 3️⃣ Optimized title: Brand + Type + Color + Size
-          const optimizedTitle = buildTitle(product, brandName, sizeLabel);
+          // 3️⃣ Optimized title: AI title (if available) > formula title
+          const aiTitle = aiTitleMap.get(product.id);
+          const formulaTitle = buildTitle(product, brandName, sizeLabel);
+          // For AI titles, append size if not already included
+          let optimizedTitle: string;
+          if (aiTitle) {
+            const primarySize = sizeLabel ? sizeLabel.split('=')[0].trim() : null;
+            optimizedTitle = primarySize && !aiTitle.toLowerCase().includes(`maat ${primarySize.toLowerCase()}`)
+              ? `${aiTitle} - Maat ${primarySize}`
+              : aiTitle;
+          } else {
+            optimizedTitle = formulaTitle;
+          }
 
           let itemXml = `    <item>
       <g:id>${escapeXml(itemId)}</g:id>
