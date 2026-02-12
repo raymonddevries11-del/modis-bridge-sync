@@ -190,6 +190,7 @@ const ProductDetail = () => {
   });
 
   const [brandPopoverOpen, setBrandPopoverOpen] = useState(false);
+  const [brandSearch, setBrandSearch] = useState("");
 
   const [editedFields, setEditedFields] = useState<Record<string, any>>({});
   const edited = product ? { ...product, ...editedFields, product_prices: { ...product.product_prices, ...(editedFields.product_prices || {}) } } : null;
@@ -364,13 +365,30 @@ const ProductDetail = () => {
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-[250px] p-0" align="start">
-                      <Command>
-                        <CommandInput placeholder="Zoek merk..." />
+                      <Command shouldFilter={true}>
+                        <CommandInput placeholder="Zoek merk..." value={brandSearch} onValueChange={setBrandSearch} />
                         <CommandList>
-                          <CommandEmpty>Geen merk gevonden.</CommandEmpty>
+                          <CommandEmpty>
+                            <button
+                              className="w-full px-2 py-1.5 text-sm text-left hover:bg-accent rounded-sm flex items-center gap-2"
+                              onClick={async () => {
+                                const name = brandSearch.trim();
+                                if (!name) return;
+                                const { data, error } = await supabase.from("brands").insert({ name }).select("id").single();
+                                if (error) { toast.error(`Merk aanmaken mislukt: ${error.message}`); return; }
+                                queryClient.invalidateQueries({ queryKey: ["brands"] });
+                                setField("brand_id", data.id);
+                                setBrandSearch("");
+                                setBrandPopoverOpen(false);
+                                toast.success(`Merk "${name}" aangemaakt`);
+                              }}
+                            >
+                              <Plus className="h-3.5 w-3.5" /> "{brandSearch}" aanmaken
+                            </button>
+                          </CommandEmpty>
                           <CommandGroup>
                             {allBrands?.map((brand) => (
-                              <CommandItem key={brand.id} value={brand.name} onSelect={() => { setField("brand_id", brand.id); setBrandPopoverOpen(false); }}>
+                              <CommandItem key={brand.id} value={brand.name} onSelect={() => { setField("brand_id", brand.id); setBrandPopoverOpen(false); setBrandSearch(""); }}>
                                 {brand.name}
                               </CommandItem>
                             ))}
