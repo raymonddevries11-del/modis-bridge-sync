@@ -140,8 +140,8 @@ serve(async (req) => {
 
         const effectiveCategory = mapping?.google_category || fallbackCategory;
         const effectiveCondition = mapping?.condition || 'new';
-        const effectiveGender = mapping?.gender || null;
-        const effectiveAgeGroup = mapping?.age_group || null;
+        const effectiveGender = mapping?.gender || (mapping ? null : feedConfig.fallback_gender) || null;
+        const effectiveAgeGroup = mapping?.age_group || (mapping ? null : feedConfig.fallback_age_group) || null;
         const effectiveMaterial = mapping?.material || null;
 
         const brandName = (product.brands as any)?.name || '';
