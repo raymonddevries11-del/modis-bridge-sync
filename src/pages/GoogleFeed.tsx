@@ -14,6 +14,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { TenantSelector } from "@/components/TenantSelector";
 import { Rss, Copy, ExternalLink, Plus, Pencil, Trash2, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { GoogleCategorySearch } from "@/components/GoogleCategorySearch";
 
 interface FeedConfig {
   tenant_id: string;
@@ -506,17 +507,10 @@ const GoogleFeed = () => {
               </div>
               <div className="space-y-2">
                 <Label>Google Product Categorie</Label>
-                <Input
+                <GoogleCategorySearch
                   value={editMapping?.google_category || ''}
-                  placeholder="bijv. Apparel & Accessories > Shoes"
-                  onChange={(e) => setEditMapping(prev => ({ ...prev!, google_category: e.target.value }))}
+                  onSelect={(v) => setEditMapping(prev => ({ ...prev!, google_category: v }))}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Gebruik de officiële{' '}
-                  <a href="https://support.google.com/merchants/answer/6324436" target="_blank" rel="noopener" className="underline">
-                    Google Product Taxonomy
-                  </a>
-                </p>
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-2">
