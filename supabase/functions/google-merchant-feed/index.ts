@@ -16,6 +16,49 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&apos;');
 }
 
+/**
+ * Build an optimized title: Brand + ProductType + Color + Size
+ * Strips internal article numbers for better Shopping CTR.
+ */
+function buildTitle(product: any, brandName: string, sizeLabel: string | null): string {
+  const parts: string[] = [];
+
+  // Brand
+  if (brandName) parts.push(brandName);
+
+  // Product type: derive from article_group description or first category
+  const articleGroup = product.article_group as any;
+  const productType = articleGroup?.description || articleGroup?.name || null;
+  if (productType) {
+    parts.push(productType);
+  } else {
+    // Try first category name
+    const cats = product.categories as any[];
+    if (cats?.length) {
+      const catName = typeof cats[0] === 'object' ? cats[0].name : String(cats[0]);
+      if (catName) parts.push(catName);
+    }
+  }
+
+  // Color
+  const color = product.color as any;
+  if (color?.label || color?.name) {
+    parts.push(color.label || color.name);
+  }
+
+  // Size
+  if (sizeLabel) {
+    parts.push(`Maat ${sizeLabel}`);
+  }
+
+  // Fallback: if we only have brand, add original title (cleaned)
+  if (parts.length <= 1) {
+    parts.push(product.title);
+  }
+
+  return parts.join(' ');
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -28,7 +71,7 @@ serve(async (req) => {
   try {
     const url = new URL(req.url);
     const tenantId = url.searchParams.get('tenantId');
-    
+
     if (!tenantId) {
       return new Response('Missing tenantId', { status: 400, headers: corsHeaders });
     }
@@ -82,7 +125,7 @@ serve(async (req) => {
       for (const product of products) {
         const articleGroupId = (product.article_group as any)?.id;
         const mapping = articleGroupId ? mappingMap.get(articleGroupId) : null;
-        
+
         // Skip products without category mapping AND without fallback
         if (!mapping && !fallbackCategory) continue;
 
@@ -102,6 +145,14 @@ serve(async (req) => {
         const description = product.webshop_text || product.meta_description || product.title;
         const shopUrl = feedConfig.shop_url?.replace(/\/$/, '') || '';
 
+        // 1️⃣ Skip products with no real price (price must never be 0)
+        if (regularPrice <= 0) continue;
+
+        // 2️⃣ Product URL: prefer direct PDP via url_key, fallback to search
+        const productUrl = product.url_key
+          ? `${shopUrl}/product/${product.url_key}`
+          : `${shopUrl}/?s=${product.sku}`;
+
         // Each active variant = unique product
         const variants = (product.variants as any[]) || [];
         for (const variant of variants) {
@@ -111,69 +162,93 @@ serve(async (req) => {
           const availability = stockQty > 0 ? 'in_stock' : 'out_of_stock';
           const itemId = `${product.sku}-${variant.maat_id}`;
           const sizeLabel = variant.maat_web || variant.size_label;
-          const productUrl = product.url_key 
-            ? `${shopUrl}/product/${product.url_key}` 
-            : `${shopUrl}/?s=${product.sku}`;
           const imageLink = images.length > 0 ? images[0] : '';
+
+          // Skip if no image
+          if (!imageLink) continue;
+
+          // 3️⃣ Optimized title: Brand + Type + Color + Size
+          const optimizedTitle = buildTitle(product, brandName, sizeLabel);
 
           let itemXml = `    <item>
       <g:id>${escapeXml(itemId)}</g:id>
-      <g:title>${escapeXml(product.title)}${sizeLabel ? ' - ' + escapeXml(sizeLabel) : ''}</g:title>
+      <g:title>${escapeXml(optimizedTitle)}</g:title>
       <g:description>${escapeXml(description)}</g:description>
       <g:link>${escapeXml(productUrl)}</g:link>
       <g:image_link>${escapeXml(imageLink as string)}</g:image_link>`;
 
-          // Additional images
+          // Additional images (max 10)
           for (let i = 1; i < Math.min(images.length, 10); i++) {
             itemXml += `\n      <g:additional_image_link>${escapeXml(images[i] as string)}</g:additional_image_link>`;
           }
 
+          // Availability & price (price is always the real price, never 0)
           itemXml += `
       <g:availability>${availability}</g:availability>
       <g:price>${regularPrice.toFixed(2)} ${currency}</g:price>`;
 
-          if (salePrice) {
+          // 7️⃣ Sale pricing
+          if (salePrice && salePrice > 0) {
             itemXml += `\n      <g:sale_price>${salePrice.toFixed(2)} ${currency}</g:sale_price>`;
           }
 
+          // Brand & condition
           itemXml += `
-       <g:brand>${escapeXml(brandName)}</g:brand>
+      <g:brand>${escapeXml(brandName)}</g:brand>
       <g:condition>${escapeXml(effectiveCondition)}</g:condition>
       <g:google_product_category>${escapeXml(effectiveCategory)}</g:google_product_category>`;
 
-          if (variant.ean) {
-            itemXml += `\n      <g:gtin>${escapeXml(variant.ean)}</g:gtin>`;
+          // 5️⃣ GTIN / Identifiers - no empty GTIN fields
+          if (variant.ean && variant.ean.trim() !== '') {
+            itemXml += `\n      <g:gtin>${escapeXml(variant.ean.trim())}</g:gtin>`;
           } else {
             itemXml += `\n      <g:identifier_exists>false</g:identifier_exists>`;
           }
 
+          // Size
           if (sizeLabel) {
             itemXml += `\n      <g:size>${escapeXml(sizeLabel)}</g:size>`;
           }
 
-          if (color?.label) {
-            itemXml += `\n      <g:color>${escapeXml(color.label)}</g:color>`;
+          // Color
+          if (color?.label || color?.name) {
+            itemXml += `\n      <g:color>${escapeXml(color.label || color.name)}</g:color>`;
           }
 
+          // Gender & age group
           if (effectiveGender) {
             itemXml += `\n      <g:gender>${escapeXml(effectiveGender)}</g:gender>`;
           }
-
           if (effectiveAgeGroup) {
             itemXml += `\n      <g:age_group>${escapeXml(effectiveAgeGroup)}</g:age_group>`;
           }
 
+          // 6️⃣ Product type from article group or category
+          const articleGroup = product.article_group as any;
+          const productType = articleGroup?.description || articleGroup?.name || null;
+          if (productType) {
+            itemXml += `\n      <g:product_type>${escapeXml(productType)}</g:product_type>`;
+          } else {
+            const cats = product.categories as any[];
+            if (cats?.length) {
+              const catName = typeof cats[0] === 'object' ? cats[0].name : String(cats[0]);
+              if (catName) {
+                itemXml += `\n      <g:product_type>${escapeXml(catName)}</g:product_type>`;
+              }
+            }
+          }
+
+          // Material
           if (effectiveMaterial) {
             itemXml += `\n      <g:material>${escapeXml(effectiveMaterial)}</g:material>`;
           }
 
-          // Item group ID links variants together
+          // 4️⃣ Item group ID links variants together
           itemXml += `\n      <g:item_group_id>${escapeXml(product.sku)}</g:item_group_id>`;
 
-          // Shipping - support multiple countries
+          // 8️⃣ Shipping - always filled, no empty nodes
           const shippingRules = Array.isArray(feedConfig.shipping_rules) ? feedConfig.shipping_rules : [];
-          
-          // Use shipping_rules if available, fall back to legacy single country
+
           if (shippingRules.length > 0) {
             for (const rule of shippingRules) {
               if (rule.country) {
