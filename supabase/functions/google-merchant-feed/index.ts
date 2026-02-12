@@ -213,8 +213,8 @@ serve(async (req) => {
         // 1️⃣ Skip products with no real price (price must never be 0)
         if (regularPrice <= 0) continue;
 
-        // 2️⃣ Product URL: generate WooCommerce-compatible slug from title
-        const productSlug = slugify(product.title);
+        // 2️⃣ Product URL: prefer url_key from DB, fallback to slugified title
+        const productSlug = product.url_key || slugify(product.title);
         const productUrl = productSlug
           ? `${shopUrl}/product/${productSlug}/`
           : `${shopUrl}/shop/`;
