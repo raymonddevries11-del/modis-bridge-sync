@@ -54,8 +54,8 @@ serve(async (req) => {
     for (const m of (mappings || [])) {
       mappingMap.set(m.article_group_id, m);
     }
+    const fallbackCategory = feedConfig.fallback_google_category || null;
 
-    // Load products with variants, prices, brands in batches
     const allItems: string[] = [];
     let offset = 0;
     const batchSize = 500;
@@ -83,8 +83,14 @@ serve(async (req) => {
         const articleGroupId = (product.article_group as any)?.id;
         const mapping = articleGroupId ? mappingMap.get(articleGroupId) : null;
         
-        // Skip products without category mapping
-        if (!mapping) continue;
+        // Skip products without category mapping AND without fallback
+        if (!mapping && !fallbackCategory) continue;
+
+        const effectiveCategory = mapping?.google_category || fallbackCategory;
+        const effectiveCondition = mapping?.condition || 'new';
+        const effectiveGender = mapping?.gender || null;
+        const effectiveAgeGroup = mapping?.age_group || null;
+        const effectiveMaterial = mapping?.material || null;
 
         const brandName = (product.brands as any)?.name || '';
         const price = (product.product_prices as any)?.[0];
@@ -131,9 +137,9 @@ serve(async (req) => {
           }
 
           itemXml += `
-      <g:brand>${escapeXml(brandName)}</g:brand>
-      <g:condition>${escapeXml(mapping.condition || 'new')}</g:condition>
-      <g:google_product_category>${escapeXml(mapping.google_category)}</g:google_product_category>`;
+       <g:brand>${escapeXml(brandName)}</g:brand>
+      <g:condition>${escapeXml(effectiveCondition)}</g:condition>
+      <g:google_product_category>${escapeXml(effectiveCategory)}</g:google_product_category>`;
 
           if (variant.ean) {
             itemXml += `\n      <g:gtin>${escapeXml(variant.ean)}</g:gtin>`;
@@ -149,16 +155,16 @@ serve(async (req) => {
             itemXml += `\n      <g:color>${escapeXml(color.label)}</g:color>`;
           }
 
-          if (mapping.gender) {
-            itemXml += `\n      <g:gender>${escapeXml(mapping.gender)}</g:gender>`;
+          if (effectiveGender) {
+            itemXml += `\n      <g:gender>${escapeXml(effectiveGender)}</g:gender>`;
           }
 
-          if (mapping.age_group) {
-            itemXml += `\n      <g:age_group>${escapeXml(mapping.age_group)}</g:age_group>`;
+          if (effectiveAgeGroup) {
+            itemXml += `\n      <g:age_group>${escapeXml(effectiveAgeGroup)}</g:age_group>`;
           }
 
-          if (mapping.material) {
-            itemXml += `\n      <g:material>${escapeXml(mapping.material)}</g:material>`;
+          if (effectiveMaterial) {
+            itemXml += `\n      <g:material>${escapeXml(effectiveMaterial)}</g:material>`;
           }
 
           // Item group ID links variants together

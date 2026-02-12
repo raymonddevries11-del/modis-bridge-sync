@@ -243,6 +243,7 @@ export type Database = {
           created_at: string
           currency: string | null
           enabled: boolean | null
+          fallback_google_category: string | null
           feed_description: string | null
           feed_title: string | null
           shipping_country: string | null
@@ -256,6 +257,7 @@ export type Database = {
           created_at?: string
           currency?: string | null
           enabled?: boolean | null
+          fallback_google_category?: string | null
           feed_description?: string | null
           feed_title?: string | null
           shipping_country?: string | null
@@ -269,6 +271,7 @@ export type Database = {
           created_at?: string
           currency?: string | null
           enabled?: boolean | null
+          fallback_google_category?: string | null
           feed_description?: string | null
           feed_title?: string | null
           shipping_country?: string | null
