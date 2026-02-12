@@ -35,29 +35,29 @@ serve(async (req) => {
       );
     }
 
-    // Check if file already exists
+    // Check if file already exists (at root level, not tenant subfolder)
     const { data: existingFiles } = await supabase.storage
       .from('product-images')
-      .list(tenantId, {
+      .list('', {
         search: fileName
       });
 
-    if (existingFiles && existingFiles.length > 0) {
+    if (existingFiles && existingFiles.some(f => f.name === fileName)) {
       console.log(`File ${fileName} already exists, skipping upload`);
       return new Response(
         JSON.stringify({ 
           message: 'File already exists',
-          path: `${tenantId}/${fileName}`
+          path: fileName
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Upload the file
+    // Upload the file to root of bucket (no tenant subfolder)
     const fileBytes = await file.arrayBuffer();
     const { data, error } = await supabase.storage
       .from('product-images')
-      .upload(`${tenantId}/${fileName}`, fileBytes, {
+      .upload(fileName, fileBytes, {
         contentType: file.type || 'image/jpeg',
         upsert: false
       });
