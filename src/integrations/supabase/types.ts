@@ -247,6 +247,7 @@ export type Database = {
           feed_title: string | null
           shipping_country: string | null
           shipping_price: number | null
+          shipping_rules: Json | null
           shop_url: string
           tenant_id: string
           updated_at: string
@@ -259,6 +260,7 @@ export type Database = {
           feed_title?: string | null
           shipping_country?: string | null
           shipping_price?: number | null
+          shipping_rules?: Json | null
           shop_url?: string
           tenant_id: string
           updated_at?: string
@@ -271,6 +273,7 @@ export type Database = {
           feed_title?: string | null
           shipping_country?: string | null
           shipping_price?: number | null
+          shipping_rules?: Json | null
           shop_url?: string
           tenant_id?: string
           updated_at?: string

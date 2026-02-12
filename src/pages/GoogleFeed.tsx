@@ -17,6 +17,11 @@ import { Rss, Copy, ExternalLink, Plus, Pencil, Trash2, AlertCircle, CheckCircle
 import { Checkbox } from "@/components/ui/checkbox";
 import { GoogleCategorySearch } from "@/components/GoogleCategorySearch";
 
+interface ShippingRule {
+  country: string;
+  price: number;
+}
+
 interface FeedConfig {
   tenant_id: string;
   shop_url: string;
@@ -25,6 +30,7 @@ interface FeedConfig {
   currency: string;
   shipping_country: string;
   shipping_price: number;
+  shipping_rules: ShippingRule[];
   enabled: boolean;
 }
 
@@ -85,7 +91,7 @@ const GoogleFeed = () => {
       .select('*')
       .eq('tenant_id', tenantId)
       .maybeSingle();
-    setFeedConfig(data as FeedConfig | null);
+    setFeedConfig(data ? { ...data, shipping_rules: (Array.isArray(data.shipping_rules) ? data.shipping_rules : []) } as unknown as FeedConfig : null);
   };
 
   const loadMappings = async () => {
@@ -347,23 +353,65 @@ const GoogleFeed = () => {
                         onBlur={() => feedConfig && saveFeedConfig({ currency: feedConfig.currency })}
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label>Verzendland</Label>
-                      <Input
-                        value={feedConfig?.shipping_country || 'NL'}
-                        onChange={(e) => setFeedConfig(prev => ({ ...prev!, shipping_country: e.target.value }))}
-                        onBlur={() => feedConfig && saveFeedConfig({ shipping_country: feedConfig.shipping_country })}
-                      />
+                  </div>
+
+                  {/* Shipping Rules */}
+                  <div className="space-y-3 pt-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-base">Verzendlanden</Label>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const rules = [...(feedConfig?.shipping_rules || []), { country: '', price: 0 }];
+                          setFeedConfig(prev => ({ ...prev!, shipping_rules: rules }));
+                        }}
+                      >
+                        <Plus className="h-4 w-4 mr-1" /> Land toevoegen
+                      </Button>
                     </div>
-                    <div className="space-y-2">
-                      <Label>Verzendkosten (€)</Label>
-                      <Input
-                        type="number"
-                        value={feedConfig?.shipping_price || 0}
-                        onChange={(e) => setFeedConfig(prev => ({ ...prev!, shipping_price: parseFloat(e.target.value) || 0 }))}
-                        onBlur={() => feedConfig && saveFeedConfig({ shipping_price: feedConfig.shipping_price })}
-                      />
-                    </div>
+                    {(feedConfig?.shipping_rules || []).length === 0 && (
+                      <p className="text-sm text-muted-foreground">Nog geen verzendlanden geconfigureerd. Voeg landen toe om verzendkosten in de feed op te nemen.</p>
+                    )}
+                    {(feedConfig?.shipping_rules || []).map((rule, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <Input
+                          value={rule.country}
+                          placeholder="Landcode (bijv. NL)"
+                          className="w-32"
+                          onChange={(e) => {
+                            const rules = [...(feedConfig?.shipping_rules || [])];
+                            rules[idx] = { ...rules[idx], country: e.target.value.toUpperCase() };
+                            setFeedConfig(prev => ({ ...prev!, shipping_rules: rules }));
+                          }}
+                          onBlur={() => feedConfig && saveFeedConfig({ shipping_rules: feedConfig.shipping_rules })}
+                        />
+                        <Input
+                          type="number"
+                          value={rule.price}
+                          placeholder="Prijs"
+                          className="w-32"
+                          onChange={(e) => {
+                            const rules = [...(feedConfig?.shipping_rules || [])];
+                            rules[idx] = { ...rules[idx], price: parseFloat(e.target.value) || 0 };
+                            setFeedConfig(prev => ({ ...prev!, shipping_rules: rules }));
+                          }}
+                          onBlur={() => feedConfig && saveFeedConfig({ shipping_rules: feedConfig.shipping_rules })}
+                        />
+                        <span className="text-sm text-muted-foreground">{feedConfig?.currency || 'EUR'}</span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
+                            const rules = (feedConfig?.shipping_rules || []).filter((_, i) => i !== idx);
+                            setFeedConfig(prev => ({ ...prev!, shipping_rules: rules }));
+                            saveFeedConfig({ shipping_rules: rules });
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    ))}
                   </div>
                 </CardContent>
               </Card>

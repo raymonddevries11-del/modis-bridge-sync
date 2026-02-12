@@ -164,8 +164,21 @@ serve(async (req) => {
           // Item group ID links variants together
           itemXml += `\n      <g:item_group_id>${escapeXml(product.sku)}</g:item_group_id>`;
 
-          // Shipping
-          if (feedConfig.shipping_country) {
+          // Shipping - support multiple countries
+          const shippingRules = Array.isArray(feedConfig.shipping_rules) ? feedConfig.shipping_rules : [];
+          
+          // Use shipping_rules if available, fall back to legacy single country
+          if (shippingRules.length > 0) {
+            for (const rule of shippingRules) {
+              if (rule.country) {
+                itemXml += `
+      <g:shipping>
+        <g:country>${escapeXml(rule.country)}</g:country>
+        <g:price>${(rule.price || 0).toFixed(2)} ${currency}</g:price>
+      </g:shipping>`;
+              }
+            }
+          } else if (feedConfig.shipping_country) {
             itemXml += `
       <g:shipping>
         <g:country>${escapeXml(feedConfig.shipping_country)}</g:country>
