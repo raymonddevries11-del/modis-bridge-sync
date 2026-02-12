@@ -105,28 +105,43 @@ const GoogleFeed = () => {
   };
 
   const loadArticleGroups = async () => {
-    // Fetch ALL products to count those with and without article groups
-    const { data: products } = await supabase
+    // Get total product count (avoids 1000 row limit)
+    const { count: totalCount } = await supabase
       .from('products')
-      .select('article_group')
+      .select('id', { count: 'exact', head: true })
       .eq('tenant_id', tenantId);
 
-    if (!products) return;
-
-    let withoutGroupCount = 0;
+    // Fetch all products in batches to count article groups correctly
     const groupMap = new Map<string, { id: string; description: string; count: number }>();
-    for (const p of products) {
-      const ag = p.article_group as any;
-      if (ag?.id && ag.id !== '') {
-        const existing = groupMap.get(ag.id);
-        if (existing) {
-          existing.count++;
+    let withoutGroupCount = 0;
+    let offset = 0;
+    const batchSize = 1000;
+
+    while (true) {
+      const { data: products } = await supabase
+        .from('products')
+        .select('article_group')
+        .eq('tenant_id', tenantId)
+        .range(offset, offset + batchSize - 1);
+
+      if (!products || products.length === 0) break;
+
+      for (const p of products) {
+        const ag = p.article_group as any;
+        if (ag?.id && ag.id !== '') {
+          const existing = groupMap.get(ag.id);
+          if (existing) {
+            existing.count++;
+          } else {
+            groupMap.set(ag.id, { id: ag.id, description: ag.description || ag.id, count: 1 });
+          }
         } else {
-          groupMap.set(ag.id, { id: ag.id, description: ag.description || ag.id, count: 1 });
+          withoutGroupCount++;
         }
-      } else {
-        withoutGroupCount++;
       }
+
+      if (products.length < batchSize) break;
+      offset += batchSize;
     }
 
     const groups = Array.from(groupMap.values())
@@ -136,10 +151,9 @@ const GoogleFeed = () => {
     setArticleGroups(groups);
 
     // Calculate stats including fallback
+    const total = totalCount || (groups.reduce((sum, g) => sum + g.productCount, 0) + withoutGroupCount);
     const mappedIds = new Set(mappings.map(m => m.article_group_id));
     const mapped = groups.filter(g => mappedIds.has(g.id)).reduce((sum, g) => sum + g.productCount, 0);
-    const totalWithGroup = groups.reduce((sum, g) => sum + g.productCount, 0);
-    const total = totalWithGroup + withoutGroupCount;
     const hasFallback = !!feedConfig?.fallback_google_category;
     const inFeed = mapped + (hasFallback ? withoutGroupCount : 0);
     setFeedStats({ total, mapped, unmapped: total - inFeed, withoutGroup: withoutGroupCount, inFeed });
@@ -150,9 +164,8 @@ const GoogleFeed = () => {
     if (articleGroups.length > 0 || feedStats?.withoutGroup) {
       const mappedIds = new Set(mappings.map(m => m.article_group_id));
       const mapped = articleGroups.filter(g => mappedIds.has(g.id)).reduce((sum, g) => sum + g.productCount, 0);
-      const totalWithGroup = articleGroups.reduce((sum, g) => sum + g.productCount, 0);
       const withoutGroup = feedStats?.withoutGroup || 0;
-      const total = totalWithGroup + withoutGroup;
+      const total = feedStats?.total || (articleGroups.reduce((sum, g) => sum + g.productCount, 0) + withoutGroup);
       const hasFallback = !!feedConfig?.fallback_google_category;
       const inFeed = mapped + (hasFallback ? withoutGroup : 0);
       setFeedStats({ total, mapped, unmapped: total - inFeed, withoutGroup, inFeed });
