@@ -290,58 +290,102 @@ const Products = () => {
     },
   });
 
-  const [aiProgress, setAiProgress] = useState<{ current: number; total: number } | null>(null);
+  const [aiProgress, setAiProgress] = useState<{ current: number; total: number; success: number; failed: number } | null>(null);
 
   const bulkGenerateAiContent = useMutation({
-    mutationFn: async (tag: string) => {
-      // Get all product IDs with the given tag
-      const { data: taggedProducts, error: fetchError } = await supabase
-        .from("products")
-        .select("id")
-        .eq("tenant_id", selectedTenant)
-        .contains("tags", [tag]);
-
-      if (fetchError) throw fetchError;
-      if (!taggedProducts || taggedProducts.length === 0) {
-        throw new Error(`Geen producten gevonden met tag "${tag}"`);
+    mutationFn: async (mode: "all" | "tag") => {
+      // Step 1: Get all product IDs that need AI content
+      let allProductIds: string[] = [];
+      let offset = 0;
+      
+      while (true) {
+        let query = supabase
+          .from("products")
+          .select("id")
+          .eq("tenant_id", selectedTenant);
+        
+        if (mode === "tag" && tagFilter !== "all") {
+          query = query.contains("tags", [tagFilter]);
+        }
+        
+        const { data, error } = await query.range(offset, offset + 999);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        allProductIds.push(...data.map(p => p.id));
+        if (data.length < 1000) break;
+        offset += 1000;
       }
 
-      const productIds = taggedProducts.map(p => p.id);
+      if (allProductIds.length === 0) {
+        throw new Error("Geen producten gevonden");
+      }
+
+      // Step 2: Get product IDs that already have AI content
+      const existingIds = new Set<string>();
+      let aiOffset = 0;
+      while (true) {
+        const { data } = await supabase
+          .from("product_ai_content")
+          .select("product_id")
+          .eq("tenant_id", selectedTenant)
+          .not("ai_title", "is", null)
+          .range(aiOffset, aiOffset + 999);
+        
+        if (!data || data.length === 0) break;
+        data.forEach(d => existingIds.add(d.product_id));
+        if (data.length < 1000) break;
+        aiOffset += 1000;
+      }
+
+      // Step 3: Filter to only products without AI content
+      const productIds = allProductIds.filter(id => !existingIds.has(id));
+      
+      if (productIds.length === 0) {
+        throw new Error("Alle producten hebben al AI-content");
+      }
+
+      toast.info(`${productIds.length} producten zonder AI-content gevonden. Generatie gestart...`);
+
       const batchSize = 10;
       let processed = 0;
       let successCount = 0;
       let failedCount = 0;
 
-      setAiProgress({ current: 0, total: productIds.length });
+      setAiProgress({ current: 0, total: productIds.length, success: 0, failed: 0 });
 
       for (let i = 0; i < productIds.length; i += batchSize) {
         const batch = productIds.slice(i, i + batchSize);
         
-        const { data, error } = await supabase.functions.invoke("generate-ai-content", {
-          body: { productIds: batch, tenantId: selectedTenant },
-        });
+        try {
+          const { data, error } = await supabase.functions.invoke("generate-ai-content", {
+            body: { productIds: batch, tenantId: selectedTenant },
+          });
 
-        if (error) {
-          console.error("Batch error:", error);
+          if (error) {
+            console.error("Batch error:", error);
+            failedCount += batch.length;
+          } else {
+            successCount += data.success || 0;
+            failedCount += data.failed || 0;
+          }
+        } catch (e) {
+          console.error("Batch exception:", e);
           failedCount += batch.length;
-        } else {
-          successCount += data.successCount || 0;
-          failedCount += data.failedCount || 0;
         }
 
         processed += batch.length;
-        setAiProgress({ current: processed, total: productIds.length });
+        setAiProgress({ current: processed, total: productIds.length, success: successCount, failed: failedCount });
 
-        // Small delay between batches
+        // Delay between batches to avoid rate limits
         if (i + batchSize < productIds.length) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
 
       return { successCount, failedCount, total: productIds.length };
     },
     onSuccess: (data) => {
-      toast.success(`AI content gegenereerd: ${data.successCount} succesvol, ${data.failedCount} mislukt`);
+      toast.success(`AI content gegenereerd: ${data.successCount} succesvol, ${data.failedCount} mislukt van ${data.total} producten`);
       setAiProgress(null);
       queryClient.invalidateQueries({ queryKey: ["products"] });
     },
@@ -665,29 +709,27 @@ const Products = () => {
           </Button>
 
           {/* Bulk AI generation */}
-          {tagFilter !== "all" && (
-            aiProgress ? (
-              <div className="flex items-center gap-3 bg-primary/10 rounded-md px-4 py-2 min-w-[280px]">
-                <Sparkles className="h-4 w-4 animate-pulse text-primary" />
-                <div className="flex-1">
-                  <div className="flex justify-between text-sm mb-1">
-                    <span>AI generatie...</span>
-                    <span className="font-medium">{aiProgress.current}/{aiProgress.total}</span>
-                  </div>
-                  <Progress value={(aiProgress.current / aiProgress.total) * 100} className="h-2" />
+          {aiProgress ? (
+            <div className="flex items-center gap-3 bg-primary/10 rounded-md px-4 py-2 min-w-[320px]">
+              <Sparkles className="h-4 w-4 animate-pulse text-primary" />
+              <div className="flex-1">
+                <div className="flex justify-between text-sm mb-1">
+                  <span>AI generatie...</span>
+                  <span className="font-medium">{aiProgress.current}/{aiProgress.total} ({aiProgress.success} ✓ {aiProgress.failed > 0 ? `${aiProgress.failed} ✗` : ''})</span>
                 </div>
+                <Progress value={(aiProgress.current / aiProgress.total) * 100} className="h-2" />
               </div>
-            ) : (
-              <Button
-                onClick={() => bulkGenerateAiContent.mutate(tagFilter)}
-                disabled={bulkGenerateAiContent.isPending || !selectedTenant}
-                variant="default"
-                className="bg-primary"
-              >
-                <Sparkles className="h-4 w-4 mr-2" />
-                AI Genereren ({tagFilter})
-              </Button>
-            )
+            </div>
+          ) : (
+            <Button
+              onClick={() => bulkGenerateAiContent.mutate(tagFilter !== "all" ? "tag" : "all")}
+              disabled={bulkGenerateAiContent.isPending || !selectedTenant}
+              variant="default"
+              className="bg-primary"
+            >
+              <Sparkles className="h-4 w-4 mr-2" />
+              {tagFilter !== "all" ? `AI Genereren (${tagFilter})` : "AI Genereren (alle zonder)"}
+            </Button>
           )}
 
           {resetProgress ? (
