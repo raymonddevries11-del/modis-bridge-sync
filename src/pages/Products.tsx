@@ -45,6 +45,7 @@ const Products = () => {
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
   const [stockFilter, setStockFilter] = useState<string>("all");
   const [tagFilter, setTagFilter] = useState<string>("all");
+  const [completenessFilter, setCompletenessFilter] = useState<string>("all");
   const [selectedTenant, setSelectedTenant] = useState<string>("");
   const navigate = useNavigate();
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
@@ -626,6 +627,33 @@ const Products = () => {
             </SelectContent>
           </Select>
 
+          <Select value={completenessFilter} onValueChange={setCompletenessFilter}>
+            <SelectTrigger className="w-[200px]">
+              <SelectValue placeholder="Completeness" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Alle scores</SelectItem>
+              <SelectItem value="critical">
+                <span className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-destructive" />
+                  Kritiek (0–49%)
+                </span>
+              </SelectItem>
+              <SelectItem value="warning">
+                <span className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-warning" />
+                  Waarschuwing (50–79%)
+                </span>
+              </SelectItem>
+              <SelectItem value="complete">
+                <span className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-success" />
+                  Compleet (80–100%)
+                </span>
+              </SelectItem>
+            </SelectContent>
+          </Select>
+
           <Button
             onClick={() => updatePrices.mutate()}
             disabled={updatePrices.isPending}
@@ -833,7 +861,13 @@ const Products = () => {
           </div>
         ) : products && products.length > 0 ? (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {products.map((product: any) => {
+            {products.filter((product: any) => {
+              if (completenessFilter === "all") return true;
+              const s = calculateCompleteness(product).score;
+              if (completenessFilter === "critical") return s < 50;
+              if (completenessFilter === "warning") return s >= 50 && s < 80;
+              return s >= 80;
+            }).map((product: any) => {
               const { score, checks } = calculateCompleteness(product);
               const totalStock = product.variants?.reduce((s: number, v: any) => s + (v.stock_totals?.qty ?? 0), 0) ?? 0;
               const imgCount = Array.isArray(product.images) ? product.images.length : 0;
