@@ -13,6 +13,7 @@ import Settings from "./pages/Settings";
 import Tenants from "./pages/Tenants";
 import Logs from "./pages/Logs";
 import Changelog from "./pages/Changelog";
+import GoogleFeed from "./pages/GoogleFeed";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -33,6 +34,7 @@ const App = () => (
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/logs" element={<ProtectedRoute><Logs /></ProtectedRoute>} />
           <Route path="/changelog" element={<ProtectedRoute><Changelog /></ProtectedRoute>} />
+          <Route path="/google-feed" element={<ProtectedRoute><GoogleFeed /></ProtectedRoute>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
