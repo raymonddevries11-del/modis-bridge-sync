@@ -18,6 +18,21 @@ function escapeXml(str: string): string {
 }
 
 /**
+ * Generate a WooCommerce-compatible slug from a product title.
+ * Mimics WordPress sanitize_title: lowercase, replace spaces/special chars with hyphens, trim dashes.
+ */
+function slugify(text: string): string {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove accents
+    .replace(/[^a-z0-9\s-]/g, '')  // remove special chars
+    .replace(/[\s_]+/g, '-')        // spaces/underscores to hyphens
+    .replace(/-+/g, '-')            // collapse multiple hyphens
+    .replace(/^-|-$/g, '');          // trim leading/trailing hyphens
+}
+
+/**
  * Strip internal article codes/numbers from a product title.
  * Removes patterns like "46020 40572 H", "A-902 C", "222321 996", etc.
  */
@@ -198,10 +213,11 @@ serve(async (req) => {
         // 1️⃣ Skip products with no real price (price must never be 0)
         if (regularPrice <= 0) continue;
 
-        // 2️⃣ Product URL: prefer direct PDP via url_key, fallback to search
-        const productUrl = product.url_key
-          ? `${shopUrl}/product/${product.url_key}`
-          : `${shopUrl}/?s=${product.sku}`;
+        // 2️⃣ Product URL: generate WooCommerce-compatible slug from title
+        const productSlug = slugify(product.title);
+        const productUrl = productSlug
+          ? `${shopUrl}/product/${productSlug}/`
+          : `${shopUrl}/shop/`;
 
         // Each active variant = unique product
         const variants = (product.variants as any[]) || [];
