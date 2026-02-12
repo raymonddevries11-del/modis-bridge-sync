@@ -192,7 +192,8 @@ Deno.serve(async (req) => {
             continue;
           }
 
-          const expectedSku = `${productSku}-${dbVariant.maat_id}`;
+          const maatSuffix = dbVariant.maat_id && dbVariant.maat_id.includes('-') ? dbVariant.maat_id.split('-').pop() : dbVariant.maat_id;
+          const expectedSku = `${productSku}-${maatSuffix}`;
 
           // Find matching WooCommerce variation by size_label in attributes OR current SKU format
           let matchingWooVariation = null;

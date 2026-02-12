@@ -227,7 +227,8 @@ serve(async (req) => {
 
           const stockQty = variant.stock_totals?.qty || 0;
           const stockStatus = stockQty > 0 ? 'instock' : 'outofstock';
-          const variationSku = `${product.sku}-${variant.maat_id}`;
+          const maatSuffix = variant.maat_id && variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id;
+          const variationSku = `${product.sku}-${maatSuffix}`;
           const sizeLabel = variant.size_label || variant.maat_web || '';
 
           rows.push([

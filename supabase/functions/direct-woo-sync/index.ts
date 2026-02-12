@@ -108,7 +108,8 @@ async function updateVariantStock(
   const wooVariations = await variationsResponse.json();
   
   // Find matching variation
-  const expectedFullSku = `${productSku}-${variant.maat_id}`;
+  const maatSuffix = variant.maat_id && variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id;
+  const expectedFullSku = `${productSku}-${maatSuffix}`;
   const legacyFullSku = `${productSku}-${variant.size_label}`;
   
   let matchingVariation = null;
