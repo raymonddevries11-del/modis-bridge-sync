@@ -513,7 +513,7 @@ const Validation = () => {
                                 variant="default"
                                 size="sm"
                                 className="flex-1 text-xs"
-                                onClick={() => navigate("/products")}
+                                onClick={() => navigate(`/products?validation=missing-images`)}
                               >
                                 <Image className="h-3 w-3 mr-1" />
                                 Afbeeldingen uploaden
@@ -523,7 +523,7 @@ const Validation = () => {
                               variant="ghost"
                               size="sm"
                               className="text-xs"
-                              onClick={() => navigate("/products")}
+                              onClick={() => navigate(`/products?validation=${issue.id}`)}
                             >
                               <ArrowRight className="h-3 w-3" />
                             </Button>
