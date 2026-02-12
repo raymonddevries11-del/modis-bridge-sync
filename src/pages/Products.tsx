@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { TenantSelector } from "@/components/TenantSelector";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -23,7 +23,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useState, useEffect, useRef } from "react";
-import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles } from "lucide-react";
+import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles, FilterX } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -35,7 +35,19 @@ import {
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 
+const VALIDATION_FILTERS: Record<string, { label: string; fn: (p: any) => boolean }> = {
+  "missing-images": { label: "Geen afbeeldingen", fn: (p) => { const imgs = Array.isArray(p.images) ? p.images : []; return imgs.length === 0; } },
+  "zero-price": { label: "Prijs = €0", fn: (p) => Number(p.product_prices?.regular || 0) === 0 },
+  "no-description": { label: "Geen omschrijving", fn: (p) => !p.webshop_text?.trim() },
+  "no-meta-title": { label: "Geen meta titel", fn: (p) => !p.meta_title?.trim() },
+  "no-meta-description": { label: "Geen meta description", fn: (p) => !p.meta_description?.trim() },
+  "no-brand": { label: "Geen merk", fn: (p) => !p.brands?.name },
+  "no-variants": { label: "Geen varianten", fn: (p) => !p.variants || p.variants.length === 0 },
+  "no-stock": { label: "Geen voorraad", fn: (p) => !p.variants?.some((v: any) => v.stock_totals?.qty > 0) },
+};
+
 const Products = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const stockInputRef = useRef<HTMLInputElement>(null);
@@ -46,6 +58,7 @@ const Products = () => {
   const [stockFilter, setStockFilter] = useState<string>("all");
   const [tagFilter, setTagFilter] = useState<string>("all");
   const [completenessFilter, setCompletenessFilter] = useState<string>("all");
+  const [validationFilter, setValidationFilter] = useState<string>(searchParams.get("validation") || "all");
   const [selectedTenant, setSelectedTenant] = useState<string>("");
   const navigate = useNavigate();
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
@@ -654,6 +667,27 @@ const Products = () => {
             </SelectContent>
           </Select>
 
+          <Select value={validationFilter} onValueChange={(v) => {
+            setValidationFilter(v);
+            if (v === "all") {
+              searchParams.delete("validation");
+            } else {
+              searchParams.set("validation", v);
+            }
+            setSearchParams(searchParams, { replace: true });
+          }}>
+            <SelectTrigger className="w-[220px]">
+              <FilterX className="h-4 w-4 mr-2" />
+              <SelectValue placeholder="Validation issue" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Alle producten</SelectItem>
+              {Object.entries(VALIDATION_FILTERS).map(([key, { label }]) => (
+                <SelectItem key={key} value={key}>{label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           <Button
             onClick={() => updatePrices.mutate()}
             disabled={updatePrices.isPending}
@@ -862,6 +896,12 @@ const Products = () => {
         ) : products && products.length > 0 ? (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {products.filter((product: any) => {
+              // Validation filter
+              if (validationFilter !== "all") {
+                const vf = VALIDATION_FILTERS[validationFilter];
+                if (vf && !vf.fn(product)) return false;
+              }
+              // Completeness filter
               if (completenessFilter === "all") return true;
               const s = calculateCompleteness(product).score;
               if (completenessFilter === "critical") return s < 50;
