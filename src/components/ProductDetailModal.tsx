@@ -127,7 +127,7 @@ const VariantStockCard = ({ variant, tenantId, productSku }: VariantStockCardPro
       <CardContent className="grid grid-cols-3 gap-4 text-sm">
         <div>
           <span className="text-muted-foreground">Woo SKU:</span>
-          <p className="font-mono text-xs">{productSku && variant.maat_id ? `${productSku}-${variant.maat_id}` : "N/A"}</p>
+          <p className="font-mono text-xs">{productSku && variant.maat_id ? `${productSku}-${variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id}` : "N/A"}</p>
         </div>
         <div>
           <span className="text-muted-foreground">Maat ID:</span>
