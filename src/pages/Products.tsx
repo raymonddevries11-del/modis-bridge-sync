@@ -183,6 +183,29 @@ const Products = () => {
     },
   });
 
+  // Fetch AI titles for quick comparison
+  const { data: aiTitlesMap } = useQuery({
+    queryKey: ["ai-titles", selectedTenant],
+    queryFn: async () => {
+      if (!selectedTenant) return {};
+      const map: Record<string, { title: string; status: string }> = {};
+      let offset = 0;
+      while (true) {
+        const { data } = await supabase
+          .from("product_ai_content")
+          .select("product_id, ai_title, status")
+          .eq("tenant_id", selectedTenant)
+          .range(offset, offset + 999);
+        if (!data || data.length === 0) break;
+        data.forEach((row: any) => { map[row.product_id] = { title: row.ai_title, status: row.status }; });
+        if (data.length < 1000) break;
+        offset += 1000;
+      }
+      return map;
+    },
+    enabled: !!selectedTenant,
+  });
+
   const updatePrices = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.functions.invoke("update-woo-prices");
@@ -954,10 +977,22 @@ const Products = () => {
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <CardTitle className="text-sm font-medium truncate">{product.title}</CardTitle>
+                        {(() => {
+                          const ai = aiTitlesMap?.[product.id];
+                          return ai?.title ? (
+                            <>
+                              <CardTitle className="text-sm font-medium truncate">{ai.title}</CardTitle>
+                              <p className="text-[11px] text-muted-foreground truncate line-through">{product.title}</p>
+                            </>
+                          ) : (
+                            <CardTitle className="text-sm font-medium truncate">{product.title}</CardTitle>
+                          );
+                        })()}
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-xs font-mono text-muted-foreground">{product.sku}</span>
                           {product.brands?.name && <Badge variant="outline" className="text-[10px] px-1.5 py-0">{product.brands.name}</Badge>}
+                          {aiTitlesMap?.[product.id]?.status === "approved" && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-success/15 text-success">AI ✓</Badge>}
+                          {aiTitlesMap?.[product.id]?.status === "generated" && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-warning/15 text-warning">AI</Badge>}
                         </div>
                       </div>
                       <TooltipProvider>
