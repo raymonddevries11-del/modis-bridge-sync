@@ -60,7 +60,7 @@ const GoogleFeed = () => {
   const [saving, setSaving] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editMapping, setEditMapping] = useState<Partial<CategoryMapping> | null>(null);
-  const [feedStats, setFeedStats] = useState<{ total: number; mapped: number; unmapped: number } | null>(null);
+  const [feedStats, setFeedStats] = useState<{ total: number; mapped: number; unmapped: number; withoutGroup: number; inFeed: number } | null>(null);
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [bulkSelectedGroups, setBulkSelectedGroups] = useState<Set<string>>(new Set());
   const [bulkMapping, setBulkMapping] = useState<{ google_category: string; gender: string; age_group: string; condition: string; material: string }>({
@@ -105,15 +105,15 @@ const GoogleFeed = () => {
   };
 
   const loadArticleGroups = async () => {
-    // Fetch distinct article groups from products
+    // Fetch ALL products to count those with and without article groups
     const { data: products } = await supabase
       .from('products')
       .select('article_group')
-      .eq('tenant_id', tenantId)
-      .not('article_group', 'is', null);
+      .eq('tenant_id', tenantId);
 
     if (!products) return;
 
+    let withoutGroupCount = 0;
     const groupMap = new Map<string, { id: string; description: string; count: number }>();
     for (const p of products) {
       const ag = p.article_group as any;
@@ -124,6 +124,8 @@ const GoogleFeed = () => {
         } else {
           groupMap.set(ag.id, { id: ag.id, description: ag.description || ag.id, count: 1 });
         }
+      } else {
+        withoutGroupCount++;
       }
     }
 
@@ -133,22 +135,29 @@ const GoogleFeed = () => {
     
     setArticleGroups(groups);
 
-    // Calculate stats
+    // Calculate stats including fallback
     const mappedIds = new Set(mappings.map(m => m.article_group_id));
     const mapped = groups.filter(g => mappedIds.has(g.id)).reduce((sum, g) => sum + g.productCount, 0);
-    const total = groups.reduce((sum, g) => sum + g.productCount, 0);
-    setFeedStats({ total, mapped, unmapped: total - mapped });
+    const totalWithGroup = groups.reduce((sum, g) => sum + g.productCount, 0);
+    const total = totalWithGroup + withoutGroupCount;
+    const hasFallback = !!feedConfig?.fallback_google_category;
+    const inFeed = mapped + (hasFallback ? withoutGroupCount : 0);
+    setFeedStats({ total, mapped, unmapped: total - inFeed, withoutGroup: withoutGroupCount, inFeed });
   };
 
-  // Recalculate stats when mappings change
+  // Recalculate stats when mappings or config change
   useEffect(() => {
-    if (articleGroups.length > 0) {
+    if (articleGroups.length > 0 || feedStats?.withoutGroup) {
       const mappedIds = new Set(mappings.map(m => m.article_group_id));
       const mapped = articleGroups.filter(g => mappedIds.has(g.id)).reduce((sum, g) => sum + g.productCount, 0);
-      const total = articleGroups.reduce((sum, g) => sum + g.productCount, 0);
-      setFeedStats({ total, mapped, unmapped: total - mapped });
+      const totalWithGroup = articleGroups.reduce((sum, g) => sum + g.productCount, 0);
+      const withoutGroup = feedStats?.withoutGroup || 0;
+      const total = totalWithGroup + withoutGroup;
+      const hasFallback = !!feedConfig?.fallback_google_category;
+      const inFeed = mapped + (hasFallback ? withoutGroup : 0);
+      setFeedStats({ total, mapped, unmapped: total - inFeed, withoutGroup, inFeed });
     }
-  }, [mappings, articleGroups]);
+  }, [mappings, articleGroups, feedConfig?.fallback_google_category]);
 
   const saveFeedConfig = async (config: Partial<FeedConfig>) => {
     setSaving(true);
@@ -471,7 +480,7 @@ const GoogleFeed = () => {
 
               {/* Stats */}
               {feedStats && (
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-4 gap-4">
                   <Card>
                     <CardContent className="pt-6 text-center">
                       <p className="text-3xl font-bold">{feedStats.total}</p>
@@ -480,8 +489,17 @@ const GoogleFeed = () => {
                   </Card>
                   <Card>
                     <CardContent className="pt-6 text-center">
-                      <p className="text-3xl font-bold text-green-600">{feedStats.mapped}</p>
-                      <p className="text-sm text-muted-foreground">In feed (gemapped)</p>
+                      <p className="text-3xl font-bold text-green-600">{feedStats.inFeed}</p>
+                      <p className="text-sm text-muted-foreground">In feed</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="pt-6 text-center">
+                      <p className="text-3xl font-bold text-blue-600">{feedStats.mapped}</p>
+                      <p className="text-sm text-muted-foreground">Via mapping</p>
+                      {feedStats.withoutGroup > 0 && feedConfig?.fallback_google_category && (
+                        <p className="text-xs text-muted-foreground mt-1">+ {feedStats.withoutGroup} via fallback</p>
+                      )}
                     </CardContent>
                   </Card>
                   <Card>
