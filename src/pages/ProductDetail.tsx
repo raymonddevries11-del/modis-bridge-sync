@@ -11,11 +11,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Progress } from "@/components/ui/progress";
 import { AiContentTab } from "@/components/AiContentTab";
+import { calculateCompleteness, scoreColor, scoreBg } from "@/lib/completeness";
 import { toast } from "sonner";
 import {
   ArrowLeft, Save, Image as ImageIcon, RefreshCw, AlertCircle,
-  Package, Sparkles, Rss, Send, ChevronRight,
+  Package, Sparkles, Rss, Send, ChevronRight, ChevronDown, CheckCircle2, XCircle,
 } from "lucide-react";
 
 const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; tenantId: string; productSku: string }) => {
@@ -197,6 +200,47 @@ const ProductDetail = () => {
             )}
           </div>
         </div>
+
+        {/* Completeness Score */}
+        {(() => {
+          const { score, checks } = calculateCompleteness(product);
+          const passed = checks.filter((c) => c.passed).length;
+          return (
+            <Collapsible>
+              <Card className={`${scoreBg(score)} border-0`}>
+                <CollapsibleTrigger className="w-full">
+                  <CardContent className="py-3 px-4 flex items-center gap-4">
+                    <div className={`text-2xl font-bold ${scoreColor(score)}`}>{score}%</div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium">Completeness — {passed}/{checks.length} checks</span>
+                        <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform [[data-state=open]_&]:rotate-180" />
+                      </div>
+                      <Progress value={score} className="h-1.5" />
+                    </div>
+                  </CardContent>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="px-4 pb-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+                    {checks.map((check) => (
+                      <div key={check.label} className="flex items-center gap-2 text-sm">
+                        {check.passed ? (
+                          <CheckCircle2 className="h-4 w-4 text-success flex-shrink-0" />
+                        ) : (
+                          <XCircle className="h-4 w-4 text-destructive flex-shrink-0" />
+                        )}
+                        <span className={check.passed ? "text-muted-foreground" : "font-medium"}>
+                          {check.label}
+                        </span>
+                        <span className="text-xs text-muted-foreground ml-auto">{check.weight}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
+          );
+        })()}
 
         {/* Tabs */}
         <Tabs defaultValue="info" className="space-y-4">
