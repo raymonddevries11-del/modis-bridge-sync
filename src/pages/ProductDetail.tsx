@@ -102,6 +102,20 @@ const ProductDetail = () => {
     enabled: !!id,
   });
 
+  const { data: aiContentForScore } = useQuery({
+    queryKey: ["ai-content", id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("product_ai_content")
+        .select("*")
+        .eq("product_id", id!)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!id,
+  });
+
   const [editedFields, setEditedFields] = useState<Record<string, any>>({});
   const edited = product ? { ...product, ...editedFields, product_prices: { ...product.product_prices, ...(editedFields.product_prices || {}) } } : null;
   const hasChanges = Object.keys(editedFields).length > 0;
@@ -203,7 +217,7 @@ const ProductDetail = () => {
 
         {/* Completeness Score */}
         {(() => {
-          const { score, checks } = calculateCompleteness(product);
+          const { score, checks } = calculateCompleteness(product, aiContentForScore);
           const passed = checks.filter((c) => c.passed).length;
           return (
             <Collapsible>
