@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ProductDetailModal } from "@/components/ProductDetailModal";
+import { calculateCompleteness, scoreColor, scoreBg } from "@/lib/completeness";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { Progress } from "@/components/ui/progress";
 import {
   AlertDialog,
@@ -832,65 +833,77 @@ const Products = () => {
           </div>
         ) : products && products.length > 0 ? (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {products.map((product: any) => (
-              <Card 
-                key={product.id} 
-                className="hover:shadow-md transition-shadow cursor-pointer"
-                onClick={() => navigate(`/products/${product.id}`)}
-              >
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <CardTitle className="text-base truncate">{product.title}</CardTitle>
-                      <p className="text-sm text-muted-foreground mt-1">SKU: {product.sku}</p>
+            {products.map((product: any) => {
+              const { score, checks } = calculateCompleteness(product);
+              const totalStock = product.variants?.reduce((s: number, v: any) => s + (v.stock_totals?.qty ?? 0), 0) ?? 0;
+              const imgCount = Array.isArray(product.images) ? product.images.length : 0;
+              return (
+                <Card
+                  key={product.id}
+                  className="card-interactive cursor-pointer group"
+                  onClick={() => navigate(`/products/${product.id}`)}
+                >
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start gap-3">
+                      <div className="h-12 w-12 rounded-lg border border-border bg-muted/50 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                        {imgCount > 0 ? (
+                          <img src={(product.images as string[])[0]} alt="" className="h-full w-full object-cover" onError={(e) => { (e.target as HTMLImageElement).src = "/placeholder.svg"; }} />
+                        ) : (
+                          <Image className="h-5 w-5 text-muted-foreground/40" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <CardTitle className="text-sm font-medium truncate">{product.title}</CardTitle>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-xs font-mono text-muted-foreground">{product.sku}</span>
+                          {product.brands?.name && <Badge variant="outline" className="text-[10px] px-1.5 py-0">{product.brands.name}</Badge>}
+                        </div>
+                      </div>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className={`flex items-center justify-center h-10 w-10 rounded-full text-xs font-bold ${scoreBg(score)} ${scoreColor(score)} flex-shrink-0`}>
+                              {score}%
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent side="left" className="max-w-[200px]">
+                            <p className="font-medium mb-1">Completeness</p>
+                            {checks.filter(c => !c.passed).map(c => (
+                              <p key={c.label} className="text-xs text-destructive">✕ {c.label}</p>
+                            ))}
+                            {checks.every(c => c.passed) && <p className="text-xs text-success">✓ Alles compleet</p>}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                     </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Brand:</span>
-                    <Badge variant="outline">{product.brands?.name || "N/A"}</Badge>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Supplier:</span>
-                    <Badge variant="outline">{product.suppliers?.name || "N/A"}</Badge>
-                  </div>
-                  {product.product_prices && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Price:</span>
-                      <span className="font-semibold">
-                        €{Number(product.product_prices.regular || 0).toFixed(2)}
-                      </span>
+                  </CardHeader>
+                  <CardContent className="pt-0 space-y-2">
+                    <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${score >= 80 ? "bg-success" : score >= 50 ? "bg-warning" : "bg-destructive"}`}
+                        style={{ width: `${score}%` }}
+                      />
                     </div>
-                  )}
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Variants:</span>
-                    <Badge>{product.variants?.length || 0}</Badge>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Afbeeldingen:</span>
-                    <div className="flex items-center gap-2">
-                      {product.images && product.images.length > 0 ? (
-                        <>
-                          <Image className="h-4 w-4 text-green-600" />
-                          <Badge variant="default" className="bg-green-600">
-                            {product.images.length}
-                          </Badge>
-                        </>
-                      ) : (
-                        <Badge variant="secondary" className="text-muted-foreground">
-                          Geen
-                        </Badge>
-                      )}
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>€{Number(product.product_prices?.regular || 0).toFixed(2)}</span>
+                      <span>{product.variants?.length || 0} var</span>
+                      <span>{imgCount} img</span>
+                      <span className={totalStock > 0 ? "text-success" : "text-destructive"}>{totalStock} stock</span>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground pt-2 border-t">
-                    <Calendar className="h-3 w-3" />
-                    <span>Updated: {new Date(product.updated_at).toLocaleDateString()}</span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                    {score < 100 && (
+                      <div className="flex flex-wrap gap-1 pt-1">
+                        {checks.filter(c => !c.passed).slice(0, 3).map(c => (
+                          <span key={c.label} className="badge-warning text-[10px]">{c.label}</span>
+                        ))}
+                        {checks.filter(c => !c.passed).length > 3 && (
+                          <span className="badge-neutral text-[10px]">+{checks.filter(c => !c.passed).length - 3}</span>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         ) : (
           <Card>
