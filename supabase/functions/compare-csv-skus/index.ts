@@ -29,6 +29,10 @@ function parseCSVLine(line: string): string[] {
   return fields;
 }
 
+function cleanHtml(text: string): string {
+  return text.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -42,103 +46,177 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const storagePath = body.storagePath || 'import/wc-export-old-shop.csv';
 
-    console.log('Downloading CSV from storage...');
+    // Download CSV
     const { data: fileData, error: downloadError } = await supabase.storage
       .from('order-exports')
       .download(storagePath);
+    if (downloadError || !fileData) throw new Error(`Download failed: ${downloadError?.message}`);
 
-    if (downloadError || !fileData) {
-      throw new Error(`Failed to download CSV: ${downloadError?.message}`);
-    }
-
-    const csvText = await fileData.text();
-    // Remove BOM
-    const cleanText = csvText.replace(/^\uFEFF/, '');
-    const lines = cleanText.split('\n');
-
-    console.log(`CSV has ${lines.length} lines`);
-
+    const csvText = (await fileData.text()).replace(/^\uFEFF/, '');
+    const lines = csvText.split('\n');
     const headers = parseCSVLine(lines[0]);
-    const typeIdx = headers.findIndex(h => h.trim() === 'Type');
-    const skuIdx = headers.findIndex(h => h.trim() === 'SKU');
-    const nameIdx = headers.findIndex(h => h.trim() === 'Naam');
-    const publishedIdx = headers.findIndex(h => h.trim() === 'Gepubliceerd');
-    const priceIdx = headers.findIndex(h => h.trim() === 'Reguliere prijs');
-    const salePriceIdx = headers.findIndex(h => h.trim() === 'Actieprijs');
-    const categoriesIdx = headers.findIndex(h => h.trim() === 'Categorieën');
-    const imagesIdx = headers.findIndex(h => h.trim() === 'Afbeeldingen');
-    const brandIdx = headers.findIndex(h => h.trim().toLowerCase() === 'meta: merknaam');
-    const descIdx = headers.findIndex(h => h.trim() === 'Beschrijving');
 
-    console.log(`Column indices: type=${typeIdx}, sku=${skuIdx}, name=${nameIdx}`);
+    const col = (name: string) => headers.findIndex(h => h.trim() === name);
+    const typeIdx = col('Type');
+    const skuIdx = col('SKU');
+    const nameIdx = col('Naam');
+    const descIdx = col('Beschrijving');
+    const shortDescIdx = col('Korte beschrijving');
+    const priceIdx = col('Reguliere prijs');
+    const salePriceIdx = col('Actieprijs');
+    const categoriesIdx = col('Categorieën');
+    const imagesIdx = col('Afbeeldingen');
+    // Brand is in meta field
+    const brandIdx = headers.findIndex(h => h.trim() === 'Meta: merknaam');
 
-    // Extract parent product SKUs (variable and simple types only)
-    const csvParents: { sku: string; name: string; type: string; published: string; price: string; categories: string; hasImages: boolean; brand: string }[] = [];
-
+    // Parse CSV parents
+    const csvMap = new Map<string, any>();
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
-      const fields = parseCSVLine(line);
-      const type = fields[typeIdx]?.trim();
-      const sku = fields[skuIdx]?.trim();
-
+      const f = parseCSVLine(line);
+      const type = f[typeIdx]?.trim();
+      const sku = f[skuIdx]?.trim();
       if ((type === 'variable' || type === 'simple') && sku) {
-        csvParents.push({
-          sku,
-          name: fields[nameIdx]?.trim() || '',
-          type,
-          published: fields[publishedIdx]?.trim() || '0',
-          price: fields[priceIdx]?.trim() || '',
-          categories: fields[categoriesIdx]?.trim() || '',
-          hasImages: !!(fields[imagesIdx]?.trim()),
-          brand: brandIdx >= 0 ? (fields[brandIdx]?.trim() || '') : '',
+        csvMap.set(sku, {
+          name: f[nameIdx]?.trim() || '',
+          description: f[descIdx]?.trim() || '',
+          shortDescription: f[shortDescIdx]?.trim() || '',
+          price: f[priceIdx]?.trim() || '',
+          salePrice: f[salePriceIdx]?.trim() || '',
+          categories: f[categoriesIdx]?.trim() || '',
+          images: f[imagesIdx]?.trim() || '',
+          brand: brandIdx >= 0 ? (f[brandIdx]?.trim() || '') : '',
         });
       }
     }
 
-    console.log(`Found ${csvParents.length} parent products in CSV`);
+    console.log(`Parsed ${csvMap.size} CSV parents`);
 
-    // Get all DB SKUs
-    const dbSkus = new Set<string>();
+    // Get DB products with related data
+    const enrichments = {
+      description_available: [] as any[],  // CSV has desc, DB doesn't
+      images_available: [] as any[],       // CSV has images, DB doesn't
+      categories_available: [] as any[],   // CSV has categories, DB doesn't
+      brand_available: [] as any[],        // CSV has brand, DB doesn't
+      price_available: [] as any[],        // CSV has price, DB doesn't
+    };
+
+    // Fetch DB products in batches
     let offset = 0;
+    let totalChecked = 0;
     while (true) {
-      const { data } = await supabase
+      const { data: products } = await supabase
         .from('products')
-        .select('sku')
-        .range(offset, offset + 999);
-      if (!data || data.length === 0) break;
-      data.forEach((p: any) => dbSkus.add(p.sku));
-      if (data.length < 1000) break;
-      offset += 1000;
+        .select('sku, title, webshop_text, images, categories, brand_id, brands(name), product_prices(regular, list)')
+        .range(offset, offset + 499);
+
+      if (!products || products.length === 0) break;
+
+      for (const p of products) {
+        const csv = csvMap.get(p.sku);
+        if (!csv) continue;
+        totalChecked++;
+
+        const dbDesc = p.webshop_text?.trim() || '';
+        const csvDesc = cleanHtml(csv.description || csv.shortDescription || '');
+        const dbImages = Array.isArray(p.images) ? p.images : [];
+        const csvImages = csv.images ? csv.images.split(',').map((i: string) => i.trim()).filter(Boolean) : [];
+        const dbCats = Array.isArray(p.categories) ? p.categories : [];
+        const csvCats = csv.categories ? csv.categories.split(',').map((c: string) => c.trim()).filter(Boolean) : [];
+        const dbBrand = (p as any).brands?.name || '';
+        const csvBrand = csv.brand || '';
+        const dbPrice = (p as any).product_prices?.[0]?.regular || (p as any).product_prices?.regular || null;
+
+        // Check: CSV has description, DB doesn't
+        if (!dbDesc && csvDesc.length > 10) {
+          enrichments.description_available.push({
+            sku: p.sku,
+            title: p.title,
+            csv_description: csvDesc.substring(0, 200),
+          });
+        }
+
+        // Check: CSV has images, DB doesn't
+        if (dbImages.length === 0 && csvImages.length > 0) {
+          enrichments.images_available.push({
+            sku: p.sku,
+            title: p.title,
+            csv_image_count: csvImages.length,
+            csv_images: csvImages.slice(0, 3),
+          });
+        }
+
+        // Check: CSV has categories, DB doesn't
+        if (dbCats.length === 0 && csvCats.length > 0) {
+          enrichments.categories_available.push({
+            sku: p.sku,
+            title: p.title,
+            csv_categories: csv.categories,
+          });
+        }
+
+        // Check: CSV has brand, DB doesn't
+        if (!dbBrand && csvBrand) {
+          enrichments.brand_available.push({
+            sku: p.sku,
+            title: p.title,
+            csv_brand: csvBrand,
+          });
+        }
+
+        // Check: CSV has price, DB doesn't
+        if (!dbPrice && csv.price) {
+          enrichments.price_available.push({
+            sku: p.sku,
+            title: p.title,
+            csv_price: csv.price,
+            csv_sale_price: csv.salePrice,
+          });
+        }
+      }
+
+      if (products.length < 500) break;
+      offset += 500;
     }
 
-    console.log(`Found ${dbSkus.size} products in database`);
-
-    // Find missing
-    const missingInDb = csvParents.filter(p => !dbSkus.has(p.sku));
-    const existingInDb = csvParents.filter(p => dbSkus.has(p.sku));
-
-    // Also find DB products not in CSV
-    const csvSkuSet = new Set(csvParents.map(p => p.sku));
-    // Query DB products not in CSV (sample)
-    const onlyInDb: string[] = [];
-    for (const sku of dbSkus) {
-      if (!csvSkuSet.has(sku)) onlyInDb.push(sku);
-    }
-
-    console.log(`Missing in DB: ${missingInDb.length}`);
-    console.log(`Only in DB (not in CSV): ${onlyInDb.length}`);
-
-    return new Response(JSON.stringify({
+    const summary = {
       success: true,
-      csv_parent_products: csvParents.length,
-      db_products: dbSkus.size,
-      missing_in_db: missingInDb.length,
-      existing_in_both: existingInDb.length,
-      only_in_db: onlyInDb.length,
-      missing_products: missingInDb,
-      only_in_db_skus: onlyInDb.slice(0, 50),
-    }), {
+      products_compared: totalChecked,
+      enrichment_opportunities: {
+        description: {
+          count: enrichments.description_available.length,
+          examples: enrichments.description_available.slice(0, 10),
+        },
+        images: {
+          count: enrichments.images_available.length,
+          examples: enrichments.images_available.slice(0, 10),
+        },
+        categories: {
+          count: enrichments.categories_available.length,
+          examples: enrichments.categories_available.slice(0, 10),
+        },
+        brand: {
+          count: enrichments.brand_available.length,
+          examples: enrichments.brand_available.slice(0, 10),
+        },
+        price: {
+          count: enrichments.price_available.length,
+          examples: enrichments.price_available.slice(0, 10),
+        },
+      },
+    };
+
+    console.log('Comparison summary:', JSON.stringify({
+      compared: totalChecked,
+      desc: enrichments.description_available.length,
+      img: enrichments.images_available.length,
+      cat: enrichments.categories_available.length,
+      brand: enrichments.brand_available.length,
+      price: enrichments.price_available.length,
+    }));
+
+    return new Response(JSON.stringify(summary), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
