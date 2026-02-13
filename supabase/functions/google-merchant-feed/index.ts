@@ -253,7 +253,7 @@ serve(async (req) => {
           brand_id, brands!products_brand_id_fkey(name),
           product_prices(regular, list, currency),
           variants!variants_product_id_fkey(
-            id, maat_id, size_label, maat_web, ean, active,
+            id, maat_id, size_label, maat_web, ean, active, size_type,
             stock_totals(qty)
           )
         `)
@@ -368,11 +368,11 @@ serve(async (req) => {
             itemXml += `\n      <g:identifier_exists>false</g:identifier_exists>`;
           }
 
-          // Size + size system (EU) + size type (regular)
+          // Size + size system (EU) + size type from variant
           if (sizeLabel) {
             itemXml += `\n      <g:size>${escapeXml(sizeLabel)}</g:size>`;
             itemXml += `\n      <g:size_system>EU</g:size_system>`;
-            itemXml += `\n      <g:size_type>regular</g:size_type>`;
+            itemXml += `\n      <g:size_type>${escapeXml(variant.size_type || 'regular')}</g:size_type>`;
           }
 
           // Color: Google format with max 3 values separated by "/"

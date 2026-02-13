@@ -926,6 +926,7 @@ export type Database = {
           maat_web: string | null
           product_id: string
           size_label: string
+          size_type: string
           updated_at: string
         }
         Insert: {
@@ -938,6 +939,7 @@ export type Database = {
           maat_web?: string | null
           product_id: string
           size_label: string
+          size_type?: string
           updated_at?: string
         }
         Update: {
@@ -950,6 +952,7 @@ export type Database = {
           maat_web?: string | null
           product_id?: string
           size_label?: string
+          size_type?: string
           updated_at?: string
         }
         Relationships: [
