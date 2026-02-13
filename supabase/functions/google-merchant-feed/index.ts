@@ -297,12 +297,16 @@ serve(async (req) => {
             itemXml += `\n      <g:size>${escapeXml(sizeLabel)}</g:size>`;
           }
 
-          // Color: prefer color.webshop > color.label > color.name > color.article > attributes.Kleur
-          // Fallback to "Meerkleur" for apparel/clothing categories (Google requires color for clothing)
-          const rawColor = color?.webshop || color?.label || color?.name || color?.article
-            || (product.attributes as any)?.Kleur || null;
-          const isClothingCategory = effectiveCategory && /\b(Apparel|Kleding|Shoes|Schoenen|Footwear)\b/i.test(effectiveCategory);
-          const colorValue = (rawColor && rawColor !== 'NVT') ? rawColor : (isClothingCategory ? 'Meerkleur' : null);
+          // Color: enriched validation with multiple sources and clothing fallback
+          const invalidColors = ['nvt', 'n.v.t.', 'n/a', 'none', 'geen', '-', ''];
+          const rawColor = (
+            color?.webshop || color?.label || color?.name || color?.article
+            || (product.attributes as any)?.Kleur || ''
+          ).trim();
+          const isClothingCategory = effectiveCategory && /\b(Apparel|Kleding|Shoes|Schoenen|Footwear|Clothing|Accessories)\b/i.test(effectiveCategory);
+          const colorValue = (rawColor && !invalidColors.includes(rawColor.toLowerCase()))
+            ? rawColor
+            : (isClothingCategory ? 'Meerkleur' : null);
           if (colorValue) {
             itemXml += `\n      <g:color>${escapeXml(colorValue)}</g:color>`;
           }
