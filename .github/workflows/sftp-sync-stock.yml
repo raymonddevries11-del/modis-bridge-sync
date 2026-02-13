@@ -109,18 +109,23 @@ jobs:
                   await sftp.mkdir(dir, true).catch(() => {});
                 }
                 
-                // List voorraad files only
+                // List voorraad files (XML and CSV)
                 const files = await sftp.list(basePath);
-                const voorraadFiles = files.filter(f => 
+                const voorraadXmlFiles = files.filter(f => 
                   f.name.toLowerCase().endsWith('.xml') &&
                   f.type === '-' &&
                   f.name.toLowerCase().includes('voorraad')
                 );
+                const voorraadCsvFiles = files.filter(f =>
+                  f.name.toLowerCase().endsWith('.csv') &&
+                  f.type === '-' &&
+                  f.name.toLowerCase().startsWith('voorraad-')
+                );
                 
-                console.log(`Found ${voorraadFiles.length} voorraad files`);
+                console.log(`Found ${voorraadXmlFiles.length} voorraad XML files, ${voorraadCsvFiles.length} voorraad CSV files`);
                 
-                // Process voorraad files
-                for (const file of voorraadFiles) {
+                // Process voorraad XML files (existing logic)
+                for (const file of voorraadXmlFiles) {
                   const fileName = file.name;
                   const readyFilePath = `${basePath}/${fileName}`;
                   const processingFilePath = `${processingPath}/${fileName}`;
@@ -128,9 +133,8 @@ jobs:
                   const errorFilePath = `${errorPath}/${fileName}`;
                   
                   try {
-                    console.log(`Processing: ${fileName}`);
+                    console.log(`Processing XML: ${fileName}`);
                     
-                    // Move to processing
                     try {
                       await sftp.rename(readyFilePath, processingFilePath);
                     } catch (moveError) {
@@ -161,7 +165,6 @@ jobs:
                       throw new Error(`Edge function failed: ${response.status}`);
                     }
                     
-                    // Log to changelog
                     await fetch(
                       `${process.env.SUPABASE_URL}/rest/v1/changelog`,
                       {
@@ -181,13 +184,11 @@ jobs:
                       }
                     );
                     
-                    // Move to archive - with explicit error handling
                     try {
                       await sftp.rename(processingFilePath, archiveFilePath);
                       console.log(`✓ Archived: ${fileName}`);
                     } catch (archiveError) {
                       console.error(`Failed to archive ${fileName}: ${archiveError.message}`);
-                      // Try to move to error folder instead
                       try {
                         await sftp.rename(processingFilePath, errorFilePath);
                         console.log(`✗ Moved to error folder: ${fileName}`);
@@ -198,18 +199,89 @@ jobs:
                     
                   } catch (error) {
                     console.error(`Error processing ${fileName}:`, error.message);
-                    // Try to move from processing to error
                     try {
                       await sftp.rename(processingFilePath, errorFilePath);
                       console.log(`✗ Moved to error folder after processing failure: ${fileName}`);
                     } catch (e) {
                       console.error(`Failed to move to error folder: ${e.message}`);
-                      // If file is still in original location, try to move it to error from there
                       try {
                         await sftp.rename(readyFilePath, errorFilePath);
                         console.log(`✗ Moved to error folder from original location: ${fileName}`);
                       } catch (e2) {
                         console.error(`Could not move file anywhere: ${e2.message}`);
+                      }
+                    }
+                  }
+                }
+                
+                // Process voorraad CSV files
+                for (const file of voorraadCsvFiles) {
+                  const fileName = file.name;
+                  const readyFilePath = `${basePath}/${fileName}`;
+                  const processingFilePath = `${processingPath}/${fileName}`;
+                  const archiveFilePath = `${archivePath}/${fileName}`;
+                  const errorFilePath = `${errorPath}/${fileName}`;
+                  
+                  try {
+                    console.log(`Processing CSV: ${fileName}`);
+                    
+                    try {
+                      await sftp.rename(readyFilePath, processingFilePath);
+                    } catch (moveError) {
+                      console.error(`Failed to move CSV to processing: ${moveError.message}`);
+                      throw moveError;
+                    }
+                    
+                    const csvContent = await sftp.get(processingFilePath);
+                    const csvString = csvContent.toString('utf-8');
+                    
+                    const response = await fetch(
+                      `${process.env.SUPABASE_URL}/functions/v1/process-stock-csv`,
+                      {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+                        },
+                        body: JSON.stringify({
+                          fileName: fileName,
+                          csvContent: csvString,
+                          tenantId: tenant.id,
+                        }),
+                      }
+                    );
+                    
+                    if (!response.ok) {
+                      const errorText = await response.text();
+                      throw new Error(`Edge function failed: ${response.status} - ${errorText}`);
+                    }
+                    
+                    const result = await response.json();
+                    console.log(`✓ CSV processed: ${result.updatedVariants} variants, ${result.updatedPrices} prices`);
+                    
+                    try {
+                      await sftp.rename(processingFilePath, archiveFilePath);
+                      console.log(`✓ Archived CSV: ${fileName}`);
+                    } catch (archiveError) {
+                      console.error(`Failed to archive CSV ${fileName}: ${archiveError.message}`);
+                      try {
+                        await sftp.rename(processingFilePath, errorFilePath);
+                      } catch (errorMoveError) {
+                        console.error(`Failed to move CSV to error folder: ${errorMoveError.message}`);
+                      }
+                    }
+                    
+                  } catch (error) {
+                    console.error(`Error processing CSV ${fileName}:`, error.message);
+                    try {
+                      await sftp.rename(processingFilePath, errorFilePath);
+                      console.log(`✗ Moved CSV to error folder: ${fileName}`);
+                    } catch (e) {
+                      console.error(`Failed to move CSV to error folder: ${e.message}`);
+                      try {
+                        await sftp.rename(readyFilePath, errorFilePath);
+                      } catch (e2) {
+                        console.error(`Could not move CSV file anywhere: ${e2.message}`);
                       }
                     }
                   }

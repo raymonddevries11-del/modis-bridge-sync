@@ -122,3 +122,6 @@ verify_jwt = false
 
 [functions.google-taxonomy]
 verify_jwt = false
+
+[functions.process-stock-csv]
+verify_jwt = false
