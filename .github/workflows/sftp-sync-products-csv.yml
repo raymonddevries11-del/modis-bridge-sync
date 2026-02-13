@@ -203,7 +203,14 @@ jobs:
                     console.log(`✓ Import complete for ${fileName}: ${JSON.stringify(totalStats)}`);
 
                     // Log to changelog
-                    await fetch(
+                    const changelogBody = {
+                      tenant_id: tenant.id,
+                      event_type: 'PRODUCT_CSV_IMPORT',
+                      description: `Product CSV ${fileName} geïmporteerd: ${totalStats.productsInserted} nieuw, ${totalStats.productsUpdated} bijgewerkt, ${totalStats.variantsInserted} varianten nieuw, ${totalStats.variantsUpdated} varianten bijgewerkt`,
+                      metadata: { filename: fileName, ...totalStats }
+                    };
+                    console.log(`Posting changelog: ${JSON.stringify(changelogBody)}`);
+                    const changelogResponse = await fetch(
                       `${process.env.SUPABASE_URL}/rest/v1/changelog`,
                       {
                         method: 'POST',
@@ -213,14 +220,15 @@ jobs:
                           'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
                           'Prefer': 'return=minimal'
                         },
-                        body: JSON.stringify({
-                          tenant_id: tenant.id,
-                          event_type: 'PRODUCT_CSV_IMPORT',
-                          description: `Product CSV ${fileName} geïmporteerd: ${totalStats.productsInserted} nieuw, ${totalStats.productsUpdated} bijgewerkt, ${totalStats.variantsInserted} varianten nieuw, ${totalStats.variantsUpdated} varianten bijgewerkt`,
-                          metadata: { filename: fileName, ...totalStats }
-                        })
+                        body: JSON.stringify(changelogBody)
                       }
                     );
+                    if (!changelogResponse.ok) {
+                      const changelogError = await changelogResponse.text();
+                      console.error(`✗ Changelog POST failed: ${changelogResponse.status} ${changelogError}`);
+                    } else {
+                      console.log(`✓ Changelog entry created for ${fileName}`);
+                    }
 
                     // Archive
                     try {
