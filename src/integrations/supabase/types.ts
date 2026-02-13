@@ -642,6 +642,7 @@ export type Database = {
           cost_price: number | null
           created_at: string
           discount_percentage: number | null
+          field_sources: Json
           id: string
           images: Json | null
           internal_description: string | null
@@ -674,6 +675,7 @@ export type Database = {
           cost_price?: number | null
           created_at?: string
           discount_percentage?: number | null
+          field_sources?: Json
           id?: string
           images?: Json | null
           internal_description?: string | null
@@ -706,6 +708,7 @@ export type Database = {
           cost_price?: number | null
           created_at?: string
           discount_percentage?: number | null
+          field_sources?: Json
           id?: string
           images?: Json | null
           internal_description?: string | null

@@ -196,14 +196,14 @@ Deno.serve(async (req) => {
 
     console.log(`[import-modis-csv] Chunk ${offset}-${offset + chunkParents.length}: ${chunkParents.length} parents, ${chunkVariations.length} variations`);
 
-    // Pre-fetch existing products by SKU (including locked_fields)
+    // Pre-fetch existing products by SKU (including locked_fields and field_sources)
     const skuList = chunkParents.map(p => p.sku);
-    const existingProducts = new Map<string, { id: string; locked_fields: string[] }>();
+    const existingProducts = new Map<string, { id: string; locked_fields: string[]; field_sources: Record<string, string> }>();
     for (let i = 0; i < skuList.length; i += 200) {
       const batch = skuList.slice(i, i + 200);
       const { data } = await supabase
-        .from('products').select('id, sku, locked_fields').eq('tenant_id', tenantId).in('sku', batch);
-      data?.forEach((p: any) => existingProducts.set(p.sku, { id: p.id, locked_fields: p.locked_fields || [] }));
+        .from('products').select('id, sku, locked_fields, field_sources').eq('tenant_id', tenantId).in('sku', batch);
+      data?.forEach((p: any) => existingProducts.set(p.sku, { id: p.id, locked_fields: p.locked_fields || [], field_sources: p.field_sources || {} }));
     }
 
     // Pre-fetch existing variants
@@ -241,9 +241,7 @@ Deno.serve(async (req) => {
 
     for (const p of chunkParents) {
       const color = (p.colorArticle || p.colorWebshop) ? { article: p.colorArticle, webshop: p.colorWebshop } : null;
-      const fullRecord: Record<string, any> = {
-        tenant_id: tenantId,
-        sku: p.sku,
+      const importFields: Record<string, any> = {
         title: p.title,
         webshop_text: p.shortDescription || null,
         categories: p.categories,
@@ -256,18 +254,28 @@ Deno.serve(async (req) => {
       const existing = existingProducts.get(p.sku);
       if (existing) {
         if (mode === 'upsert') {
-          // Filter out locked fields
           const locked = existing.locked_fields || [];
-          if (locked.length > 0) {
-            for (const field of locked) {
-              delete fullRecord[field];
+          const fieldSources: Record<string, string> = { ...existing.field_sources };
+          const filteredRecord: Record<string, any> = { tenant_id: tenantId, sku: p.sku };
+          for (const [field, value] of Object.entries(importFields)) {
+            if (!locked.includes(field)) {
+              filteredRecord[field] = value;
+              fieldSources[field] = 'woocommerce-csv';
             }
+          }
+          filteredRecord.field_sources = fieldSources;
+          if (locked.length > 0) {
             console.log(`[import-modis-csv] Product ${p.sku}: skipping locked fields: ${locked.join(', ')}`);
           }
-          toUpdate.push({ id: existing.id, data: fullRecord });
+          toUpdate.push({ id: existing.id, data: filteredRecord });
         }
       } else {
-        toInsert.push(fullRecord);
+        // New product — set all sources
+        const fieldSources: Record<string, string> = {};
+        for (const field of Object.keys(importFields)) {
+          fieldSources[field] = 'woocommerce-csv';
+        }
+        toInsert.push({ tenant_id: tenantId, sku: p.sku, ...importFields, field_sources: fieldSources });
       }
     }
 
