@@ -196,14 +196,14 @@ serve(async (req) => {
         // 4. Check if product exists to detect new/changed products
         const { data: existingProduct } = await supabase
           .from('products')
-          .select('id, title, images, attributes, categories, locked_fields')
+          .select('id, title, images, attributes, categories, locked_fields, field_sources')
           .eq('sku', sku)
           .maybeSingle();
 
         // Get locked fields for this product
         const lockedFields: string[] = (existingProduct?.locked_fields as string[]) || [];
 
-        // 5. Build product record, skipping locked fields
+        // 5. Build product record, skipping locked fields and tracking sources
         const productRecord: any = {
           sku: sku,
           tenant_id: tenantId,
@@ -218,11 +218,16 @@ serve(async (req) => {
           plan_period: planPeriod, article_group: articleGroup,
           outlet_sale: outletSale, is_promotion: isPromotion, webshop_date: webshopDate,
         };
+        // Merge existing field_sources with new ones
+        const existingSources = (existingProduct as any)?.field_sources || {};
+        const fieldSources: Record<string, string> = { ...existingSources };
         for (const [field, value] of Object.entries(fieldMap)) {
           if (!lockedFields.includes(field)) {
             productRecord[field] = value;
+            fieldSources[field] = 'modis';
           }
         }
+        productRecord.field_sources = fieldSources;
 
         if (lockedFields.length > 0) {
           console.log(`Product ${sku}: skipping locked fields: ${lockedFields.join(', ')}`);

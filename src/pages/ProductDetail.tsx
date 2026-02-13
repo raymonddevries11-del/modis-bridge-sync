@@ -147,34 +147,52 @@ const CreateVariantsFromAttributes = ({ product }: { product: any }) => {
     </Button>
   );
 };
-// Lockable field wrapper
-const LockableField = ({ fieldName, lockedFields, onToggleLock, children }: {
+// Source badge config
+const sourceConfig: Record<string, { label: string; className: string }> = {
+  modis: { label: 'Modis', className: 'bg-blue-500/10 text-blue-600 border-blue-200' },
+  'woocommerce-csv': { label: 'WooCommerce', className: 'bg-purple-500/10 text-purple-600 border-purple-200' },
+  manual: { label: 'Handmatig', className: 'bg-emerald-500/10 text-emerald-600 border-emerald-200' },
+};
+
+const SourceBadge = ({ source }: { source?: string }) => {
+  if (!source) return null;
+  const config = sourceConfig[source] || { label: source, className: 'bg-muted text-muted-foreground border-border' };
+  return <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${config.className}`}>{config.label}</span>;
+};
+
+// Lockable field wrapper with source indicator
+const LockableField = ({ fieldName, lockedFields, fieldSources, onToggleLock, children }: {
   fieldName: string;
   lockedFields: string[];
+  fieldSources: Record<string, string>;
   onToggleLock: (field: string) => void;
   children: React.ReactNode;
 }) => {
   const isLocked = lockedFields.includes(fieldName);
+  const source = fieldSources[fieldName];
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-1.5">
         <div className="flex-1">{children}</div>
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={() => onToggleLock(fieldName)}
-                className={`mt-5 p-1 rounded-md transition-colors ${isLocked ? 'text-amber-500 hover:text-amber-600 bg-amber-500/10' : 'text-muted-foreground/30 hover:text-muted-foreground/60'}`}
-              >
-                {isLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              {isLocked ? 'Vergrendeld — wordt niet overschreven bij import. Klik om te ontgrendelen.' : 'Ontgrendeld — kan overschreven worden bij import. Klik om te vergrendelen.'}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <div className="flex items-center gap-1 mt-5">
+          <SourceBadge source={source} />
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => onToggleLock(fieldName)}
+                  className={`p-1 rounded-md transition-colors ${isLocked ? 'text-amber-500 hover:text-amber-600 bg-amber-500/10' : 'text-muted-foreground/30 hover:text-muted-foreground/60'}`}
+                >
+                  {isLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {isLocked ? 'Vergrendeld — wordt niet overschreven bij import. Klik om te ontgrendelen.' : 'Ontgrendeld — kan overschreven worden bij import. Klik om te vergrendelen.'}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       </div>
     </div>
   );
@@ -243,6 +261,7 @@ const ProductDetail = () => {
 
   // Locked fields logic
   const currentLockedFields: string[] = Array.isArray((product as any)?.locked_fields) ? (product as any).locked_fields : [];
+  const fieldSources: Record<string, string> = (product as any)?.field_sources || {};
   const effectiveLockedFields = (() => {
     const fields = new Set(currentLockedFields);
     for (const [field, locked] of Object.entries(pendingLockChanges)) {
@@ -259,19 +278,22 @@ const ProductDetail = () => {
   const updateMutation = useMutation({
     mutationFn: async () => {
       if (!product || !edited) return;
-      // Auto-lock any manually edited fields
+      // Auto-lock any manually edited fields and update sources
       const newLockedFields = new Set(effectiveLockedFields);
+      const newFieldSources: Record<string, string> = { ...fieldSources };
       for (const field of Object.keys(editedFields)) {
         if (field !== 'product_prices' && field !== 'product_type') {
           newLockedFields.add(field);
+          newFieldSources[field] = 'manual';
         }
       }
       const updateFields: any = {
         title: edited.title, sku: edited.sku, tax_code: edited.tax_code, url_key: edited.url_key,
         locked_fields: Array.from(newLockedFields),
+        field_sources: newFieldSources,
       };
       if (editedFields.product_type !== undefined) updateFields.product_type = editedFields.product_type;
-      if (editedFields.brand_id !== undefined) { updateFields.brand_id = editedFields.brand_id; newLockedFields.add('brand_id'); updateFields.locked_fields = Array.from(newLockedFields); }
+      if (editedFields.brand_id !== undefined) { updateFields.brand_id = editedFields.brand_id; newLockedFields.add('brand_id'); newFieldSources['brand_id'] = 'manual'; updateFields.locked_fields = Array.from(newLockedFields); updateFields.field_sources = newFieldSources; }
       const { error: pErr } = await supabase.from("products").update(updateFields).eq("id", product.id);
       if (pErr) throw pErr;
       if (editedFields.product_prices) {
@@ -449,7 +471,7 @@ const ProductDetail = () => {
                 </div>
               </CardHeader>
               <CardContent className="grid grid-cols-2 gap-4">
-                <LockableField fieldName="title" lockedFields={effectiveLockedFields} onToggleLock={toggleLock}>
+                <LockableField fieldName="title" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
                   <Label className="text-xs text-muted-foreground">Titel</Label><Input value={edited?.title || ""} onChange={(e) => setField("title", e.target.value)} />
                 </LockableField>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">SKU</Label><Input value={edited?.sku || ""} onChange={(e) => setField("sku", e.target.value)} /></div>
@@ -511,8 +533,12 @@ const ProductDetail = () => {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Tax Code</Label><Input value={edited?.tax_code || ""} onChange={(e) => setField("tax_code", e.target.value)} /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">URL Key</Label><Input value={edited?.url_key || ""} onChange={(e) => setField("url_key", e.target.value)} /></div>
+                <LockableField fieldName="tax_code" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
+                  <Label className="text-xs text-muted-foreground">Tax Code</Label><Input value={edited?.tax_code || ""} onChange={(e) => setField("tax_code", e.target.value)} />
+                </LockableField>
+                <LockableField fieldName="url_key" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
+                  <Label className="text-xs text-muted-foreground">URL Key</Label><Input value={edited?.url_key || ""} onChange={(e) => setField("url_key", e.target.value)} />
+                </LockableField>
               </CardContent>
             </Card>
             <Card className="card-elevated">
@@ -550,17 +576,35 @@ const ProductDetail = () => {
             <Card className="card-elevated">
               <CardHeader><CardTitle className="text-base">Product Beschrijvingen</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Interne Omschrijving</Label><Input value={product.internal_description || ""} disabled /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Beschrijving (NL)</Label><Textarea value={product.webshop_text || ""} disabled rows={5} /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Beschrijving (EN)</Label><Textarea value={product.webshop_text_en || ""} disabled rows={5} /></div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Interne Omschrijving</Label><SourceBadge source={fieldSources['internal_description']} /></div>
+                  <Input value={product.internal_description || ""} disabled />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Beschrijving (NL)</Label><SourceBadge source={fieldSources['webshop_text']} /></div>
+                  <Textarea value={product.webshop_text || ""} disabled rows={5} />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Beschrijving (EN)</Label><SourceBadge source={fieldSources['webshop_text_en']} /></div>
+                  <Textarea value={product.webshop_text_en || ""} disabled rows={5} />
+                </div>
               </CardContent>
             </Card>
             <Card className="card-elevated">
               <CardHeader><CardTitle className="text-base">SEO</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Meta Title</Label><Input value={product.meta_title || ""} disabled /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Meta Keywords</Label><Input value={product.meta_keywords || ""} disabled /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Meta Description</Label><Textarea value={product.meta_description || ""} disabled rows={3} /></div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Meta Title</Label><SourceBadge source={fieldSources['meta_title']} /></div>
+                  <Input value={product.meta_title || ""} disabled />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Meta Keywords</Label><SourceBadge source={fieldSources['meta_keywords']} /></div>
+                  <Input value={product.meta_keywords || ""} disabled />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Meta Description</Label><SourceBadge source={fieldSources['meta_description']} /></div>
+                  <Textarea value={product.meta_description || ""} disabled rows={3} />
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
