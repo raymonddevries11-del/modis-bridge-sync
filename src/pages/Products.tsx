@@ -557,6 +557,44 @@ const Products = () => {
   const [resetJobId, setResetJobId] = useState<string | null>(null);
   const [resetProgress, setResetProgress] = useState<{ current: number; total: number; updated: number } | null>(null);
 
+  const [bulkVariantProgress, setBulkVariantProgress] = useState<{ totalVariants: number; totalProducts: number; batches: number } | null>(null);
+
+  const bulkCreateVariants = useMutation({
+    mutationFn: async () => {
+      let totalVariants = 0;
+      let totalProducts = 0;
+      let offset = 0;
+      let batches = 0;
+
+      while (true) {
+        const { data, error } = await supabase.functions.invoke("bulk-create-variants", {
+          body: { tenantId: selectedTenant, offset },
+        });
+        if (error) throw error;
+
+        totalVariants += data.variantsCreated || 0;
+        totalProducts += data.productsProcessed || 0;
+        batches++;
+        setBulkVariantProgress({ totalVariants, totalProducts, batches });
+
+        if (data.complete || !data.hasMore) break;
+        offset = data.nextOffset;
+      }
+
+      return { totalVariants, totalProducts };
+    },
+    onSuccess: (data) => {
+      toast.success(`${data.totalVariants} varianten aangemaakt voor ${data.totalProducts} producten`);
+      setBulkVariantProgress(null);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["validation-ids"] });
+    },
+    onError: (error: any) => {
+      toast.error(`Bulk varianten aanmaken mislukt: ${error.message}`);
+      setBulkVariantProgress(null);
+    },
+  });
+
   const resetWooStock = useMutation({
     mutationFn: async (jobId?: string) => {
       const { data, error } = await supabase.functions.invoke("reset-woo-stock", {
@@ -947,6 +985,13 @@ const Products = () => {
                 <Tag className="h-4 w-4 mr-2" />
                 Tag Producten (CSV)
               </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => bulkCreateVariants.mutate()}
+                disabled={bulkCreateVariants.isPending || !selectedTenant}
+              >
+                <Package className="h-4 w-4 mr-2" />
+                Bulk Varianten Aanmaken
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="text-destructive focus:text-destructive"
@@ -984,7 +1029,20 @@ const Products = () => {
             </div>
           )}
 
-          {/* Hidden AlertDialog for reset stock */}
+          {/* Bulk variant creation progress */}
+          {bulkVariantProgress && (
+            <div className="flex items-center gap-3 bg-primary/10 rounded-md px-3 py-1.5 min-w-[280px]">
+              <Package className="h-4 w-4 animate-pulse text-primary" />
+              <div className="flex-1">
+                <div className="flex justify-between text-xs mb-1">
+                  <span>Varianten aanmaken...</span>
+                  <span className="font-medium">Batch {bulkVariantProgress.batches}</span>
+                </div>
+                <p className="text-xs text-muted-foreground">{bulkVariantProgress.totalVariants} varianten voor {bulkVariantProgress.totalProducts} producten</p>
+              </div>
+            </div>
+          )}
+
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <button id="reset-stock-trigger" className="hidden" />
