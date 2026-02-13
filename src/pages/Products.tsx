@@ -1289,7 +1289,17 @@ const Products = () => {
               </Button>
             )}
             {selectedProductIds.size > 0 && (
-              <span className="text-xs text-muted-foreground">({selectedProductIds.size} geselecteerd)</span>
+              <>
+                <span className="text-xs text-muted-foreground">({selectedProductIds.size} geselecteerd)</span>
+                <Button
+                  size="sm"
+                  variant="link"
+                  className="h-auto p-0 text-xs text-destructive"
+                  onClick={() => setSelectedProductIds(new Set())}
+                >
+                  Deselecteer alles
+                </Button>
+              </>
             )}
           </div>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
