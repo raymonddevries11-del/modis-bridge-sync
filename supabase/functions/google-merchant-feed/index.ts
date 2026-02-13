@@ -297,9 +297,11 @@ serve(async (req) => {
             itemXml += `\n      <g:size>${escapeXml(sizeLabel)}</g:size>`;
           }
 
-          // Color
-          if (color?.label || color?.name) {
-            itemXml += `\n      <g:color>${escapeXml(color.label || color.name)}</g:color>`;
+          // Color: prefer color.webshop > color.label > color.name > color.article > attributes.Kleur
+          const colorValue = color?.webshop || color?.label || color?.name || color?.article
+            || (product.attributes as any)?.Kleur || null;
+          if (colorValue && colorValue !== 'NVT') {
+            itemXml += `\n      <g:color>${escapeXml(colorValue)}</g:color>`;
           }
 
           // Gender & age group
