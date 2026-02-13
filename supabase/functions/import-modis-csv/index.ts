@@ -351,12 +351,10 @@ Deno.serve(async (req) => {
     for (let i = 0; i < varInsert.length; i += BATCH) {
       const batch = varInsert.slice(i, i + BATCH);
       const { data: inserted, error } = await supabase
-        .from('variants').insert(batch).select('id, maat_id');
-      if (error) { console.error('Insert variants:', error.message); continue; }
+        .from('variants').upsert(batch, { onConflict: 'product_id,maat_id' }).select('id, maat_id, product_id');
+      if (error) { console.error('Upsert variants:', error.message); continue; }
       inserted?.forEach((v: any) => {
-        // Find the product_id for this variant to build composite key
-        const rec = varInsert.find(vi => vi.maat_id === v.maat_id && vi.product_id);
-        if (rec) skuToVariantId.set(`${rec.product_id}:${v.maat_id}`, v.id);
+        skuToVariantId.set(`${v.product_id}:${v.maat_id}`, v.id);
       });
       stats.variantsInserted += inserted?.length || 0;
     }
