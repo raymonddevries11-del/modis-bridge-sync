@@ -11,7 +11,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Tag, Layers, X, Plus, Minus, Pencil, AlertTriangle } from "lucide-react";
+import { Tag, Layers, X, Plus, Minus, Pencil, AlertTriangle, Sparkles, Check } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
@@ -21,7 +21,7 @@ interface Props {
   onClearSelection: () => void;
 }
 
-type ActionType = "add_category" | "remove_category" | "set_attribute" | "add_tag" | "remove_tag";
+type ActionType = "add_category" | "remove_category" | "set_attribute" | "add_tag" | "remove_tag" | "approve_ai";
 
 export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
   const queryClient = useQueryClient();
@@ -100,6 +100,29 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
     if (!dialogAction) return;
     setLoading(true);
     try {
+      // Special handling for approve_ai — direct DB update
+      if (dialogAction === "approve_ai") {
+        const BATCH = 200;
+        let totalApproved = 0;
+        for (let i = 0; i < selectedIds.length; i += BATCH) {
+          const batch = selectedIds.slice(i, i + BATCH);
+          const { data, error } = await supabase
+            .from("product_ai_content")
+            .update({ status: "approved" as const, approved_at: new Date().toISOString() })
+            .in("product_id", batch)
+            .eq("status", "generated")
+            .select("id");
+          if (error) throw error;
+          totalApproved += data?.length || 0;
+        }
+        toast.success(`${totalApproved} AI-content items goedgekeurd`);
+        queryClient.invalidateQueries({ queryKey: ["products"] });
+        queryClient.invalidateQueries({ queryKey: ["ai-content"] });
+        setDialogAction(null);
+        onClearSelection();
+        return;
+      }
+
       let payload: Record<string, string> = {};
       switch (dialogAction) {
         case "add_category":
@@ -170,6 +193,9 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
         <Button size="sm" variant="outline" onClick={() => openDialog("remove_tag")}>
           <Minus className="h-3.5 w-3.5 mr-1" /> Tag
         </Button>
+        <Button size="sm" variant="outline" onClick={() => openDialog("approve_ai")} className="border-emerald-300 text-emerald-600 hover:bg-emerald-50">
+          <Check className="h-3.5 w-3.5 mr-1" /> AI Goedkeuren
+        </Button>
 
         <Button size="sm" variant="ghost" onClick={onClearSelection} className="ml-2">
           <X className="h-4 w-4" />
@@ -186,6 +212,7 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
               {dialogAction === "set_attribute" && "Attribuut instellen"}
               {dialogAction === "add_tag" && "Tag toevoegen"}
               {dialogAction === "remove_tag" && "Tag verwijderen"}
+              {dialogAction === "approve_ai" && "AI Content goedkeuren"}
             </DialogTitle>
             <DialogDescription>
               Pas toe op {selectedIds.length} geselecteerde producten.
@@ -269,6 +296,12 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
                   autoFocus
                 />
               </div>
+            )}
+
+            {dialogAction === "approve_ai" && (
+              <p className="text-sm text-muted-foreground">
+                Alle AI-content met status <strong>"generated"</strong> voor de {selectedIds.length} geselecteerde producten wordt goedgekeurd. Alleen gegenereerde content wordt aangepast — producten zonder AI-content worden overgeslagen.
+              </p>
             )}
           </div>
 
