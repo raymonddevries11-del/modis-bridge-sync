@@ -66,6 +66,78 @@ function parseSemicolonCSV(text: string): string[][] {
   return result;
 }
 
+function parseAllRows(rows: string[][], headers: string[]) {
+  const col = (name: string) => headers.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
+  const typeIdx = col('Type');
+  const skuIdx = col('SKU');
+  const nameIdx = col('name');
+  const shortDescIdx = col('Short description');
+  const salePriceIdx = col('Sale price');
+  const regularPriceIdx = col('Regular price');
+  const categoriesIdx = col('Categories');
+  const brandsIdx = col('Brands');
+  const imagesIdx = col('Images');
+  const stockIdx = col('Stock');
+  const parentIdx = col('Parent');
+  const eanIdx = headers.findIndex(h => h.includes('_ywbc_barcode'));
+  const colorArticleIdx = col('Color-article');
+  const colorWebshopIdx = col('Color-webshop');
+  const maatAlfaIdx = col('Maat-alfa');
+
+  const parents: ParentProduct[] = [];
+  const variations: VariationRow[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const type = row[typeIdx]?.trim();
+    const sku = row[skuIdx]?.trim();
+    if (!sku) continue;
+
+    if (type === 'variable') {
+      const attributes: Record<string, string> = {};
+      for (let a = 1; a <= 20; a++) {
+        const ni = headers.findIndex(h => h === `Attribute ${a} name`);
+        const vi = headers.findIndex(h => h === `Attribute ${a} value(s)`);
+        if (ni >= 0 && vi >= 0) {
+          const n = row[ni]?.trim();
+          const v = row[vi]?.trim();
+          if (n && v) attributes[n] = v;
+        }
+      }
+
+      const cats = row[categoriesIdx]?.trim() || '';
+      const imgs = row[imagesIdx]?.trim() || '';
+
+      parents.push({
+        sku,
+        title: row[nameIdx]?.trim() || sku,
+        shortDescription: row[shortDescIdx]?.trim() || '',
+        regularPrice: parsePrice(row[regularPriceIdx] || ''),
+        salePrice: parsePrice(row[salePriceIdx] || ''),
+        categories: cats ? cats.split('>').map(c => c.trim()).filter(Boolean) : [],
+        brand: row[brandsIdx]?.trim() || '',
+        images: imgs ? imgs.split(';').map(i => i.trim()).filter(Boolean) : [],
+        attributes,
+        colorArticle: colorArticleIdx >= 0 ? (row[colorArticleIdx]?.trim() || '') : '',
+        colorWebshop: colorWebshopIdx >= 0 ? (row[colorWebshopIdx]?.trim() || '') : '',
+      });
+    } else if (type === 'variation') {
+      const maat = maatAlfaIdx >= 0 ? (row[maatAlfaIdx]?.trim() || '') : '';
+      variations.push({
+        sku,
+        parentSku: row[parentIdx]?.trim() || '',
+        sizeLabel: maat || sku,
+        stock: parseInt(row[stockIdx] || '0') || 0,
+        ean: eanIdx >= 0 ? (row[eanIdx]?.trim() || '') : '',
+        regularPrice: parsePrice(row[regularPriceIdx] || ''),
+        salePrice: parsePrice(row[salePriceIdx] || ''),
+      });
+    }
+  }
+
+  return { parents, variations };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -79,9 +151,11 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const tenantSlug = body.tenant || 'kosterschoenmode';
     const storagePath = body.storagePath || 'import/products-test.csv';
-    const mode = body.mode || 'upsert'; // 'upsert' (update+insert) or 'insert_only'
+    const mode = body.mode || 'upsert';
+    const offset = body.offset || 0;
+    const chunkSize = body.chunkSize || 200; // parents per invocation
 
-    console.log(`[import-modis-csv] Starting. tenant=${tenantSlug}, path=${storagePath}, mode=${mode}`);
+    console.log(`[import-modis-csv] Starting. tenant=${tenantSlug}, path=${storagePath}, mode=${mode}, offset=${offset}, chunk=${chunkSize}`);
 
     // Get tenant
     const { data: tenant } = await supabase
@@ -89,7 +163,7 @@ Deno.serve(async (req) => {
     if (!tenant) throw new Error('Tenant not found');
     const tenantId = tenant.id;
 
-    // Download CSV
+    // Download and parse CSV
     const { data: fileData, error: downloadError } = await supabase.storage
       .from('order-exports').download(storagePath);
     if (downloadError || !fileData) throw new Error(`Download failed: ${downloadError?.message}`);
@@ -99,103 +173,47 @@ Deno.serve(async (req) => {
     if (rows.length < 2) throw new Error('CSV has no data rows');
 
     const headers = rows[0];
-    console.log(`[import-modis-csv] Parsed ${rows.length - 1} data rows, ${headers.length} columns`);
+    const { parents: allParents, variations: allVariations } = parseAllRows(rows, headers);
 
-    // Column index helpers
-    const col = (name: string) => headers.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
-    const typeIdx = col('Type');
-    const skuIdx = col('SKU');
-    const nameIdx = col('name');
-    const shortDescIdx = col('Short description');
-    const salePriceIdx = col('Sale price');
-    const regularPriceIdx = col('Regular price');
-    const categoriesIdx = col('Categories');
-    const brandsIdx = col('Brands');
-    const imagesIdx = col('Images');
-    const stockIdx = col('Stock');
-    const parentIdx = col('Parent');
-    const eanIdx = headers.findIndex(h => h.includes('_ywbc_barcode'));
-    const colorArticleIdx = col('Color-article');
-    const colorWebshopIdx = col('Color-webshop');
-    const maatAlfaIdx = col('Maat-alfa');
+    console.log(`[import-modis-csv] Total parsed: ${allParents.length} parents, ${allVariations.length} variations`);
 
-    // Parse all rows
-    const parents: ParentProduct[] = [];
-    const variations: VariationRow[] = [];
-
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      const type = row[typeIdx]?.trim();
-      const sku = row[skuIdx]?.trim();
-      if (!sku) continue;
-
-      if (type === 'variable') {
-        // Collect named attributes
-        const attributes: Record<string, string> = {};
-        for (let a = 1; a <= 20; a++) {
-          const ni = headers.findIndex(h => h === `Attribute ${a} name`);
-          const vi = headers.findIndex(h => h === `Attribute ${a} value(s)`);
-          if (ni >= 0 && vi >= 0) {
-            const n = row[ni]?.trim();
-            const v = row[vi]?.trim();
-            if (n && v) attributes[n] = v;
-          }
-        }
-
-        const cats = row[categoriesIdx]?.trim() || '';
-        const imgs = row[imagesIdx]?.trim() || '';
-
-        parents.push({
-          sku,
-          title: row[nameIdx]?.trim() || sku,
-          shortDescription: row[shortDescIdx]?.trim() || '',
-          regularPrice: parsePrice(row[regularPriceIdx] || ''),
-          salePrice: parsePrice(row[salePriceIdx] || ''),
-          categories: cats ? cats.split('>').map(c => c.trim()).filter(Boolean) : [],
-          brand: row[brandsIdx]?.trim() || '',
-          images: imgs ? imgs.split(';').map(i => i.trim()).filter(Boolean) : [],
-          attributes,
-          colorArticle: colorArticleIdx >= 0 ? (row[colorArticleIdx]?.trim() || '') : '',
-          colorWebshop: colorWebshopIdx >= 0 ? (row[colorWebshopIdx]?.trim() || '') : '',
-        });
-      } else if (type === 'variation') {
-        const maat = maatAlfaIdx >= 0 ? (row[maatAlfaIdx]?.trim() || '') : '';
-        variations.push({
-          sku,
-          parentSku: row[parentIdx]?.trim() || '',
-          sizeLabel: maat || sku,
-          stock: parseInt(row[stockIdx] || '0') || 0,
-          ean: eanIdx >= 0 ? (row[eanIdx]?.trim() || '') : '',
-          regularPrice: parsePrice(row[regularPriceIdx] || ''),
-          salePrice: parsePrice(row[salePriceIdx] || ''),
-        });
-      }
+    // Slice parents for this chunk
+    const chunkParents = allParents.slice(offset, offset + chunkSize);
+    if (chunkParents.length === 0) {
+      return new Response(JSON.stringify({
+        success: true, complete: true, message: 'No more parents to process',
+        totalParents: allParents.length, offset,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    console.log(`[import-modis-csv] Found ${parents.length} parents, ${variations.length} variations`);
+    // Get variations belonging to this chunk's parents
+    const chunkParentSkus = new Set(chunkParents.map(p => p.sku));
+    const chunkVariations = allVariations.filter(v => chunkParentSkus.has(v.parentSku));
 
-    // Pre-fetch existing products by SKU for this tenant
-    const allSkus = parents.map(p => p.sku);
-    const existingProducts = new Map<string, { id: string; [key: string]: any }>();
-    for (let i = 0; i < allSkus.length; i += 200) {
-      const batch = allSkus.slice(i, i + 200);
+    console.log(`[import-modis-csv] Chunk ${offset}-${offset + chunkParents.length}: ${chunkParents.length} parents, ${chunkVariations.length} variations`);
+
+    // Pre-fetch existing products by SKU
+    const skuList = chunkParents.map(p => p.sku);
+    const existingProducts = new Map<string, { id: string }>();
+    for (let i = 0; i < skuList.length; i += 200) {
+      const batch = skuList.slice(i, i + 200);
       const { data } = await supabase
         .from('products').select('id, sku').eq('tenant_id', tenantId).in('sku', batch);
       data?.forEach((p: any) => existingProducts.set(p.sku, p));
     }
 
-    // Pre-fetch existing variants by maat_id
-    const allVarSkus = variations.map(v => v.sku);
+    // Pre-fetch existing variants
+    const varSkus = chunkVariations.map(v => v.sku);
     const existingVariants = new Map<string, { id: string; product_id: string }>();
-    for (let i = 0; i < allVarSkus.length; i += 200) {
-      const batch = allVarSkus.slice(i, i + 200);
+    for (let i = 0; i < varSkus.length; i += 200) {
+      const batch = varSkus.slice(i, i + 200);
       const { data } = await supabase
         .from('variants').select('id, maat_id, product_id').in('maat_id', batch);
       data?.forEach((v: any) => existingVariants.set(v.maat_id, v));
     }
 
     // Get/create brands
-    const uniqueBrands = [...new Set(parents.map(p => p.brand).filter(Boolean))];
+    const uniqueBrands = [...new Set(chunkParents.map(p => p.brand).filter(Boolean))];
     const brandMap = new Map<string, string>();
     if (uniqueBrands.length > 0) {
       const { data: existingBrands } = await supabase.from('brands').select('id, name');
@@ -205,24 +223,21 @@ Deno.serve(async (req) => {
         const { data: created } = await supabase
           .from('brands').insert(missing.map(name => ({ name }))).select('id, name');
         created?.forEach((b: any) => brandMap.set(b.name, b.id));
-        console.log(`[import-modis-csv] Created ${missing.length} brands`);
       }
     }
 
     const stats = { productsInserted: 0, productsUpdated: 0, variantsInserted: 0, variantsUpdated: 0, pricesUpserted: 0, stockUpserted: 0 };
     const BATCH = 50;
     const skuToProductId = new Map<string, string>();
-
-    // Copy existing product IDs
     existingProducts.forEach((p, sku) => skuToProductId.set(sku, p.id));
 
     // PHASE 1: Upsert products
     const toInsert: any[] = [];
     const toUpdate: { id: string; data: any }[] = [];
 
-    for (const p of parents) {
+    for (const p of chunkParents) {
       const color = (p.colorArticle || p.colorWebshop) ? { article: p.colorArticle, webshop: p.colorWebshop } : null;
-      const record = {
+      const record: any = {
         tenant_id: tenantId,
         sku: p.sku,
         title: p.title,
@@ -244,7 +259,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Insert new products
     for (let i = 0; i < toInsert.length; i += BATCH) {
       const batch = toInsert.slice(i, i + BATCH);
       const { data: inserted, error } = await supabase
@@ -254,7 +268,6 @@ Deno.serve(async (req) => {
       stats.productsInserted += inserted?.length || 0;
     }
 
-    // Update existing products
     for (const item of toUpdate) {
       const { tenant_id: _t, sku: _s, ...updateData } = item.data;
       const { error } = await supabase.from('products').update(updateData).eq('id', item.id);
@@ -262,18 +275,16 @@ Deno.serve(async (req) => {
       stats.productsUpdated++;
     }
 
-    console.log(`[import-modis-csv] Products: ${stats.productsInserted} inserted, ${stats.productsUpdated} updated`);
-
     // PHASE 2: Upsert prices
-    for (let i = 0; i < parents.length; i += BATCH) {
-      const batch = parents.slice(i, i + BATCH);
+    for (let i = 0; i < chunkParents.length; i += BATCH) {
+      const batch = chunkParents.slice(i, i + BATCH);
       const records = batch.map(p => {
         const productId = skuToProductId.get(p.sku);
         if (!productId) return null;
         let regular = p.regularPrice;
         let sale = p.salePrice;
         if (!regular && !sale) {
-          const firstVar = variations.find(v => v.parentSku === p.sku);
+          const firstVar = chunkVariations.find(v => v.parentSku === p.sku);
           if (firstVar) { regular = firstVar.regularPrice; sale = firstVar.salePrice; }
         }
         return { product_id: productId, regular, list: sale, currency: 'EUR' };
@@ -291,7 +302,7 @@ Deno.serve(async (req) => {
     const varInsert: any[] = [];
     const varUpdate: { id: string; data: any }[] = [];
 
-    for (const v of variations) {
+    for (const v of chunkVariations) {
       const productId = skuToProductId.get(v.parentSku);
       if (!productId) continue;
 
@@ -330,11 +341,9 @@ Deno.serve(async (req) => {
       if (!error) stats.variantsUpdated++;
     }
 
-    console.log(`[import-modis-csv] Variants: ${stats.variantsInserted} inserted, ${stats.variantsUpdated} updated`);
-
     // PHASE 4: Upsert stock
     const stockRecords: any[] = [];
-    for (const v of variations) {
+    for (const v of chunkVariations) {
       const variantId = skuToVariantId.get(v.sku);
       if (!variantId) continue;
       stockRecords.push({ variant_id: variantId, qty: v.stock });
@@ -348,16 +357,22 @@ Deno.serve(async (req) => {
       else stats.stockUpserted += batch.length;
     }
 
+    const nextOffset = offset + chunkParents.length;
+    const hasMore = nextOffset < allParents.length;
+
     const summary = {
       success: true,
+      complete: !hasMore,
+      hasMore,
+      nextOffset: hasMore ? nextOffset : null,
       mode,
-      csvParents: parents.length,
-      csvVariations: variations.length,
-      existingProductsFound: existingProducts.size,
+      totalParents: allParents.length,
+      totalVariations: allVariations.length,
+      chunkProcessed: chunkParents.length,
       ...stats,
     };
 
-    console.log('[import-modis-csv] Complete:', JSON.stringify(summary));
+    console.log('[import-modis-csv] Chunk complete:', JSON.stringify(summary));
 
     return new Response(JSON.stringify(summary), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
