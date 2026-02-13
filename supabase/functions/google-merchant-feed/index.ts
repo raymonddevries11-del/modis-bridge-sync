@@ -166,6 +166,7 @@ serve(async (req) => {
     console.log(`Loaded ${aiContentMap.size} approved AI content entries`);
 
     const allItems: string[] = [];
+    const colorIssues: { sku: string; title: string; reason: string }[] = [];
     let offset = 0;
     const batchSize = 500;
 
@@ -307,6 +308,16 @@ serve(async (req) => {
           const colorValue = (rawColor && !invalidColors.includes(rawColor.toLowerCase()))
             ? rawColor
             : (isClothingCategory ? 'Meerkleur' : null);
+          
+          // Track color issues for changelog
+          if (!rawColor || invalidColors.includes(rawColor.toLowerCase())) {
+            colorIssues.push({
+              sku: product.sku,
+              title: product.title,
+              reason: !rawColor ? 'missing' : `invalid (${rawColor})`,
+            });
+          }
+          
           if (colorValue) {
             itemXml += `\n      <g:color>${escapeXml(colorValue)}</g:color>`;
           }
@@ -377,6 +388,22 @@ serve(async (req) => {
 
       if (products.length < batchSize) break;
       offset += batchSize;
+    }
+
+    // Log color issues to changelog (deduplicated by SKU, max 50 samples)
+    if (colorIssues.length > 0) {
+      const uniqueBysku = [...new Map(colorIssues.map(i => [i.sku, i])).values()];
+      console.log(`Found ${uniqueBysku.length} products with color issues`);
+      await supabase.from('changelog').insert({
+        tenant_id: tenantId,
+        event_type: 'FEED_COLOR_ISSUES',
+        description: `${uniqueBysku.length} producten met ontbrekende of ongeldige kleur in Google Shopping feed`,
+        metadata: {
+          total_issues: uniqueBysku.length,
+          samples: uniqueBysku.slice(0, 50).map(i => ({ sku: i.sku, title: i.title, reason: i.reason })),
+          feed_generated_at: new Date().toISOString(),
+        },
+      });
     }
 
     // Build RSS 2.0 feed
