@@ -131,3 +131,6 @@ verify_jwt = false
 
 [functions.bulk-update-attribute-values]
 verify_jwt = false
+
+[functions.bulk-update-categories]
+verify_jwt = false
