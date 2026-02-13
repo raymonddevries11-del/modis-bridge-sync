@@ -208,22 +208,30 @@ serve(async (req) => {
     const fallbackCategory = feedConfig.fallback_google_category || null;
 
     // Pre-fetch AI content for all products (bulk lookup)
-    const aiContentMap = new Map<string, { title: string; description: string; meta_description: string }>();
+    const aiContentMap = new Map<string, { title: string; description: string; meta_description: string; features: string[] }>();
     let aiOffset = 0;
     while (true) {
       const { data: aiContent } = await supabase
         .from('product_ai_content')
-        .select('product_id, ai_title, ai_long_description, ai_short_description, ai_meta_description, status')
+        .select('product_id, ai_title, ai_long_description, ai_short_description, ai_meta_description, ai_features, status')
         .eq('tenant_id', tenantId)
         .eq('status', 'approved')
         .range(aiOffset, aiOffset + 999);
       
       if (!aiContent || aiContent.length === 0) break;
       for (const ac of aiContent) {
+        // Parse ai_features: can be JSON array or string array
+        let features: string[] = [];
+        if (Array.isArray(ac.ai_features)) {
+          features = ac.ai_features
+            .map((f: any) => String(f).trim().slice(0, 150))
+            .filter((f: string) => f.length > 0);
+        }
         aiContentMap.set(ac.product_id, {
           title: ac.ai_title || '',
           description: ac.ai_long_description || ac.ai_short_description || '',
           meta_description: ac.ai_meta_description || '',
+          features: features.slice(0, 5), // max 5 highlights to control memory
         });
       }
       if (aiContent.length < 1000) break;
@@ -292,6 +300,7 @@ serve(async (req) => {
 
         // Each active variant = unique product
         const variants = (product.variants as any[]) || [];
+        let isFirstVariant = true;
         for (const variant of variants) {
           if (!variant.active) continue;
 
@@ -415,6 +424,15 @@ serve(async (req) => {
 
           // 4️⃣ Item group ID links variants together
           itemXml += `\n      <g:item_group_id>${escapeXml(product.sku)}</g:item_group_id>`;
+
+          // Product highlights from AI features (only on first variant to save memory)
+          // Min 2, max 5, each max 150 chars
+          if (isFirstVariant && aiData?.features && aiData.features.length >= 2) {
+            for (const highlight of aiData.features) {
+              itemXml += `\n      <g:product_highlight>${escapeXml(highlight)}</g:product_highlight>`;
+            }
+          }
+          isFirstVariant = false;
 
           // Exclude from personalized advertising if description contains health/comfort terms
           const descLower = (description || '').toLowerCase();
