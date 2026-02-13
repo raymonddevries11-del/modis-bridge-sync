@@ -196,39 +196,41 @@ serve(async (req) => {
         // 4. Check if product exists to detect new/changed products
         const { data: existingProduct } = await supabase
           .from('products')
-          .select('id, title, images, attributes, categories')
+          .select('id, title, images, attributes, categories, locked_fields')
           .eq('sku', sku)
           .maybeSingle();
 
-        // 5. Upsert Product
+        // Get locked fields for this product
+        const lockedFields: string[] = (existingProduct?.locked_fields as string[]) || [];
+
+        // 5. Build product record, skipping locked fields
+        const productRecord: any = {
+          sku: sku,
+          tenant_id: tenantId,
+        };
+        const fieldMap: Record<string, any> = {
+          title, tax_code: taxCode, images, color, attributes, categories,
+          url_key: urlKey, brand_id: brandId, supplier_id: supplierId,
+          cost_price: costPrice, discount_percentage: discountPercentage,
+          internal_description: internalDescription, webshop_text: webshopText,
+          webshop_text_en: webshopTextEn, meta_title: metaTitle,
+          meta_keywords: metaKeywords, meta_description: metaDescription,
+          plan_period: planPeriod, article_group: articleGroup,
+          outlet_sale: outletSale, is_promotion: isPromotion, webshop_date: webshopDate,
+        };
+        for (const [field, value] of Object.entries(fieldMap)) {
+          if (!lockedFields.includes(field)) {
+            productRecord[field] = value;
+          }
+        }
+
+        if (lockedFields.length > 0) {
+          console.log(`Product ${sku}: skipping locked fields: ${lockedFields.join(', ')}`);
+        }
+
         const { data: product, error: productError } = await supabase
           .from('products')
-          .upsert({
-            sku: sku,
-            title: title,
-            tax_code: taxCode,
-            images: images,
-            color: color,
-            attributes: attributes,
-            categories: categories,
-            url_key: urlKey,
-            brand_id: brandId,
-            supplier_id: supplierId,
-            tenant_id: tenantId,
-            cost_price: costPrice,
-            discount_percentage: discountPercentage,
-            internal_description: internalDescription,
-            webshop_text: webshopText,
-            webshop_text_en: webshopTextEn,
-            meta_title: metaTitle,
-            meta_keywords: metaKeywords,
-            meta_description: metaDescription,
-            plan_period: planPeriod,
-            article_group: articleGroup,
-            outlet_sale: outletSale,
-            is_promotion: isPromotion,
-            webshop_date: webshopDate,
-          }, { onConflict: 'sku' })
+          .upsert(productRecord, { onConflict: 'sku' })
           .select()
           .single();
 

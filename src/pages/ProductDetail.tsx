@@ -23,8 +23,9 @@ import { toast } from "sonner";
 import {
   ArrowLeft, Save, Image as ImageIcon, RefreshCw, AlertCircle, AlertTriangle,
   Package, Sparkles, Rss, Send, ChevronRight, ChevronDown, CheckCircle2, XCircle,
-  Plus,
+  Plus, Lock, Unlock,
 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; tenantId: string; productSku: string }) => {
   const queryClient = useQueryClient();
@@ -146,6 +147,39 @@ const CreateVariantsFromAttributes = ({ product }: { product: any }) => {
     </Button>
   );
 };
+// Lockable field wrapper
+const LockableField = ({ fieldName, lockedFields, onToggleLock, children }: {
+  fieldName: string;
+  lockedFields: string[];
+  onToggleLock: (field: string) => void;
+  children: React.ReactNode;
+}) => {
+  const isLocked = lockedFields.includes(fieldName);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <div className="flex-1">{children}</div>
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => onToggleLock(fieldName)}
+                className={`mt-5 p-1 rounded-md transition-colors ${isLocked ? 'text-amber-500 hover:text-amber-600 bg-amber-500/10' : 'text-muted-foreground/30 hover:text-muted-foreground/60'}`}
+              >
+                {isLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {isLocked ? 'Vergrendeld — wordt niet overschreven bij import. Klik om te ontgrendelen.' : 'Ontgrendeld — kan overschreven worden bij import. Klik om te vergrendelen.'}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+    </div>
+  );
+};
+
 const wooFieldMapping = [
   { label: "Title", dbField: "title", wooField: "name" },
   { label: "SKU", dbField: "sku", wooField: "sku" },
@@ -201,17 +235,43 @@ const ProductDetail = () => {
   const [brandSearch, setBrandSearch] = useState("");
 
   const [editedFields, setEditedFields] = useState<Record<string, any>>({});
+  const [pendingLockChanges, setPendingLockChanges] = useState<Record<string, boolean>>({});
   const edited = product ? { ...product, ...editedFields, product_prices: { ...product.product_prices, ...(editedFields.product_prices || {}) } } : null;
-  const hasChanges = Object.keys(editedFields).length > 0;
+  const hasChanges = Object.keys(editedFields).length > 0 || Object.keys(pendingLockChanges).length > 0;
   const setField = (field: string, value: any) => setEditedFields((prev) => ({ ...prev, [field]: value }));
   const setPriceField = (field: string, value: any) => setEditedFields((prev) => ({ ...prev, product_prices: { ...(prev.product_prices || {}), [field]: value } }));
+
+  // Locked fields logic
+  const currentLockedFields: string[] = Array.isArray((product as any)?.locked_fields) ? (product as any).locked_fields : [];
+  const effectiveLockedFields = (() => {
+    const fields = new Set(currentLockedFields);
+    for (const [field, locked] of Object.entries(pendingLockChanges)) {
+      if (locked) fields.add(field);
+      else fields.delete(field);
+    }
+    return Array.from(fields);
+  })();
+  const toggleLock = (field: string) => {
+    const isCurrentlyLocked = effectiveLockedFields.includes(field);
+    setPendingLockChanges((prev) => ({ ...prev, [field]: !isCurrentlyLocked }));
+  };
 
   const updateMutation = useMutation({
     mutationFn: async () => {
       if (!product || !edited) return;
-      const updateFields: any = { title: edited.title, sku: edited.sku, tax_code: edited.tax_code, url_key: edited.url_key };
+      // Auto-lock any manually edited fields
+      const newLockedFields = new Set(effectiveLockedFields);
+      for (const field of Object.keys(editedFields)) {
+        if (field !== 'product_prices' && field !== 'product_type') {
+          newLockedFields.add(field);
+        }
+      }
+      const updateFields: any = {
+        title: edited.title, sku: edited.sku, tax_code: edited.tax_code, url_key: edited.url_key,
+        locked_fields: Array.from(newLockedFields),
+      };
       if (editedFields.product_type !== undefined) updateFields.product_type = editedFields.product_type;
-      if (editedFields.brand_id !== undefined) updateFields.brand_id = editedFields.brand_id;
+      if (editedFields.brand_id !== undefined) { updateFields.brand_id = editedFields.brand_id; newLockedFields.add('brand_id'); updateFields.locked_fields = Array.from(newLockedFields); }
       const { error: pErr } = await supabase.from("products").update(updateFields).eq("id", product.id);
       if (pErr) throw pErr;
       if (editedFields.product_prices) {
@@ -219,7 +279,18 @@ const ProductDetail = () => {
         if (prErr) throw prErr;
       }
     },
-    onSuccess: () => { toast.success("Product opgeslagen"); setEditedFields({}); queryClient.invalidateQueries({ queryKey: ["product-detail", id] }); queryClient.invalidateQueries({ queryKey: ["products"] }); },
+    onSuccess: () => { toast.success("Product opgeslagen"); setEditedFields({}); setPendingLockChanges({}); queryClient.invalidateQueries({ queryKey: ["product-detail", id] }); queryClient.invalidateQueries({ queryKey: ["products"] }); },
+    onError: (e: any) => toast.error(`Opslaan mislukt: ${e.message}`),
+  });
+
+  // Save lock changes only (without field edits)
+  const saveLocksMutation = useMutation({
+    mutationFn: async () => {
+      if (!product) return;
+      const { error } = await supabase.from("products").update({ locked_fields: effectiveLockedFields } as any).eq("id", product.id);
+      if (error) throw error;
+    },
+    onSuccess: () => { toast.success("Veldvergrendelingen opgeslagen"); setPendingLockChanges({}); queryClient.invalidateQueries({ queryKey: ["product-detail", id] }); },
     onError: (e: any) => toast.error(`Opslaan mislukt: ${e.message}`),
   });
 
@@ -296,8 +367,14 @@ const ProductDetail = () => {
           <div className="flex items-center gap-2 flex-shrink-0">
             <Button variant="outline" size="sm" onClick={() => navigate("/products")}><ArrowLeft className="h-4 w-4 mr-1" /> Terug</Button>
             {hasChanges && (
-              <Button size="sm" onClick={() => updateMutation.mutate()} disabled={updateMutation.isPending}>
-                <Save className="h-4 w-4 mr-1" /> {updateMutation.isPending ? "Opslaan..." : "Opslaan"}
+              <Button size="sm" onClick={() => {
+                if (Object.keys(editedFields).length > 0) {
+                  updateMutation.mutate();
+                } else {
+                  saveLocksMutation.mutate();
+                }
+              }} disabled={updateMutation.isPending || saveLocksMutation.isPending}>
+                <Save className="h-4 w-4 mr-1" /> {(updateMutation.isPending || saveLocksMutation.isPending) ? "Opslaan..." : "Opslaan"}
               </Button>
             )}
           </div>
@@ -361,9 +438,20 @@ const ProductDetail = () => {
           {/* INFO */}
           <TabsContent value="info" className="space-y-6">
             <Card className="card-elevated">
-              <CardHeader><CardTitle className="text-base">Productgegevens</CardTitle></CardHeader>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">Productgegevens</CardTitle>
+                  {effectiveLockedFields.length > 0 && (
+                    <Badge variant="outline" className="text-[11px] gap-1 text-amber-600 border-amber-300">
+                      <Lock className="h-3 w-3" /> {effectiveLockedFields.length} vergrendeld
+                    </Badge>
+                  )}
+                </div>
+              </CardHeader>
               <CardContent className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Titel</Label><Input value={edited?.title || ""} onChange={(e) => setField("title", e.target.value)} /></div>
+                <LockableField fieldName="title" lockedFields={effectiveLockedFields} onToggleLock={toggleLock}>
+                  <Label className="text-xs text-muted-foreground">Titel</Label><Input value={edited?.title || ""} onChange={(e) => setField("title", e.target.value)} />
+                </LockableField>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">SKU</Label><Input value={edited?.sku || ""} onChange={(e) => setField("sku", e.target.value)} /></div>
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Merk</Label>

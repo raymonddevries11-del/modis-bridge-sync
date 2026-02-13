@@ -646,6 +646,7 @@ export type Database = {
           images: Json | null
           internal_description: string | null
           is_promotion: boolean | null
+          locked_fields: string[]
           meta_description: string | null
           meta_keywords: string | null
           meta_title: string | null
@@ -677,6 +678,7 @@ export type Database = {
           images?: Json | null
           internal_description?: string | null
           is_promotion?: boolean | null
+          locked_fields?: string[]
           meta_description?: string | null
           meta_keywords?: string | null
           meta_title?: string | null
@@ -708,6 +710,7 @@ export type Database = {
           images?: Json | null
           internal_description?: string | null
           is_promotion?: boolean | null
+          locked_fields?: string[]
           meta_description?: string | null
           meta_keywords?: string | null
           meta_title?: string | null
