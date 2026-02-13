@@ -196,14 +196,14 @@ Deno.serve(async (req) => {
 
     console.log(`[import-modis-csv] Chunk ${offset}-${offset + chunkParents.length}: ${chunkParents.length} parents, ${chunkVariations.length} variations`);
 
-    // Pre-fetch existing products by SKU
+    // Pre-fetch existing products by SKU (including locked_fields)
     const skuList = chunkParents.map(p => p.sku);
-    const existingProducts = new Map<string, { id: string }>();
+    const existingProducts = new Map<string, { id: string; locked_fields: string[] }>();
     for (let i = 0; i < skuList.length; i += 200) {
       const batch = skuList.slice(i, i + 200);
       const { data } = await supabase
-        .from('products').select('id, sku').eq('tenant_id', tenantId).in('sku', batch);
-      data?.forEach((p: any) => existingProducts.set(p.sku, p));
+        .from('products').select('id, sku, locked_fields').eq('tenant_id', tenantId).in('sku', batch);
+      data?.forEach((p: any) => existingProducts.set(p.sku, { id: p.id, locked_fields: p.locked_fields || [] }));
     }
 
     // Pre-fetch existing variants
@@ -241,7 +241,7 @@ Deno.serve(async (req) => {
 
     for (const p of chunkParents) {
       const color = (p.colorArticle || p.colorWebshop) ? { article: p.colorArticle, webshop: p.colorWebshop } : null;
-      const record: any = {
+      const fullRecord: Record<string, any> = {
         tenant_id: tenantId,
         sku: p.sku,
         title: p.title,
@@ -256,10 +256,18 @@ Deno.serve(async (req) => {
       const existing = existingProducts.get(p.sku);
       if (existing) {
         if (mode === 'upsert') {
-          toUpdate.push({ id: existing.id, data: record });
+          // Filter out locked fields
+          const locked = existing.locked_fields || [];
+          if (locked.length > 0) {
+            for (const field of locked) {
+              delete fullRecord[field];
+            }
+            console.log(`[import-modis-csv] Product ${p.sku}: skipping locked fields: ${locked.join(', ')}`);
+          }
+          toUpdate.push({ id: existing.id, data: fullRecord });
         }
       } else {
-        toInsert.push(record);
+        toInsert.push(fullRecord);
       }
     }
 
