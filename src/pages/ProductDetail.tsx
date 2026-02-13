@@ -27,6 +27,8 @@ import {
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
+const SIZE_TYPE_OPTIONS = ['regular', 'petite', 'plus', 'tall', 'big', 'maternity'] as const;
+
 const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; tenantId: string; productSku: string }) => {
   const queryClient = useQueryClient();
   const currentStock = variant.stock_totals?.qty ?? 0;
@@ -41,6 +43,15 @@ const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; ten
       if (jobError) throw jobError;
     },
     onSuccess: () => { toast.success(`Voorraad bijgewerkt naar ${stockValue}`); queryClient.invalidateQueries({ queryKey: ["product-detail"] }); setIsEditing(false); },
+    onError: (error: any) => toast.error(`Update mislukt: ${error.message}`),
+  });
+
+  const updateSizeTypeMutation = useMutation({
+    mutationFn: async (newSizeType: string) => {
+      const { error } = await supabase.from("variants").update({ size_type: newSizeType }).eq("id", variant.id);
+      if (error) throw error;
+    },
+    onSuccess: () => { toast.success("Size type bijgewerkt"); queryClient.invalidateQueries({ queryKey: ["product-detail"] }); },
     onError: (error: any) => toast.error(`Update mislukt: ${error.message}`),
   });
 
@@ -68,6 +79,16 @@ const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; ten
         <Badge variant={variant.active ? "secondary" : "outline"} className="text-[11px]">
           {variant.active ? "Actief" : "Inactief"}
         </Badge>
+        <Select value={variant.size_type || 'regular'} onValueChange={(val) => updateSizeTypeMutation.mutate(val)}>
+          <SelectTrigger className="h-7 w-[100px] text-[11px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SIZE_TYPE_OPTIONS.map((opt) => (
+              <SelectItem key={opt} value={opt} className="text-xs">{opt}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       <div className="flex items-center gap-2">
         {isEditing ? (
@@ -640,7 +661,7 @@ const ProductDetail = () => {
                 {product.variants && product.variants.length > 0 ? (
                   <div>
                     <div className="flex items-center justify-between py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground border-b border-border">
-                      <div className="flex items-center gap-4"><span className="w-20">Maat</span><span className="w-32">EAN</span><span>Status</span></div>
+                      <div className="flex items-center gap-4"><span className="w-20">Maat</span><span className="w-32">EAN</span><span>Status</span><span className="w-[100px]">Size Type</span></div>
                       <span className="w-24 text-right">Voorraad</span>
                     </div>
                     {product.variants.map((v: any) => <VariantStockCard key={v.id} variant={v} tenantId={product.tenant_id} productSku={product.sku} />)}
