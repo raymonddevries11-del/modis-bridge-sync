@@ -6,6 +6,7 @@ import {
   Settings,
   Activity,
   Building2,
+  Database,
   LogOut,
   Rss,
   Send,
@@ -41,6 +42,7 @@ const navGroups: NavGroup[] = [
       { name: "Products", href: "/products", icon: Package },
       { name: "Orders", href: "/orders", icon: ShoppingCart },
       { name: "Validation", href: "/validation", icon: ClipboardCheck },
+      { name: "Catalog Data", href: "/catalog-data", icon: Database },
     ],
   },
   {
