@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,9 +11,11 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ChevronDown, ChevronRight, Search, Plus, Pencil, Trash2, X, Package, ExternalLink, GripVertical } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, Plus, Pencil, Trash2, X, Package, ExternalLink, Replace } from "lucide-react";
 import { toast } from "sonner";
 import { type AttributeDefinition, useAttributeDefinitions } from "@/hooks/useAttributeDefinitions";
+import { supabase } from "@/integrations/supabase/client";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface AttrUsage {
   name: string;
@@ -29,18 +30,26 @@ interface Props {
 
 export const AttributeManager = ({ usage, isLoading }: Props) => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { definitions, upsert, remove, isUpsertPending, isDeletePending } = useAttributeDefinitions();
 
   const [search, setSearch] = useState("");
   const [openAttrs, setOpenAttrs] = useState<Set<string>>(new Set());
 
-  // Dialog state
+  // Dialog state for attribute edit/create
   const [editDef, setEditDef] = useState<AttributeDefinition | null>(null);
   const [isNewDialog, setIsNewDialog] = useState(false);
   const [dialogName, setDialogName] = useState("");
   const [dialogValues, setDialogValues] = useState<string[]>([]);
   const [newValue, setNewValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AttributeDefinition | null>(null);
+
+  // Bulk action state
+  const [bulkAction, setBulkAction] = useState<"rename" | "delete" | null>(null);
+  const [bulkAttrName, setBulkAttrName] = useState("");
+  const [bulkOldValue, setBulkOldValue] = useState("");
+  const [bulkNewValue, setBulkNewValue] = useState("");
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   const toggleAttr = (name: string) => {
     setOpenAttrs((prev) => {
@@ -110,6 +119,94 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
     toast.success(`"${deleteTarget.name}" verwijderd`);
     setDeleteTarget(null);
   };
+
+  const openBulkRename = (attrName: string, value: string) => {
+    setBulkAction("rename");
+    setBulkAttrName(attrName);
+    setBulkOldValue(value);
+    setBulkNewValue(value);
+  };
+
+  const openBulkDelete = (attrName: string, value: string) => {
+    setBulkAction("delete");
+    setBulkAttrName(attrName);
+    setBulkOldValue(value);
+    setBulkNewValue("");
+  };
+
+  const handleBulkAction = async () => {
+    if (!bulkAction || !bulkAttrName || !bulkOldValue) return;
+    if (bulkAction === "rename" && (!bulkNewValue.trim() || bulkNewValue.trim() === bulkOldValue)) {
+      toast.error("Nieuwe waarde moet anders zijn dan de huidige");
+      return;
+    }
+
+    setBulkLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const resp = await supabase.functions.invoke("bulk-update-attribute-values", {
+        body: {
+          action: bulkAction,
+          attributeName: bulkAttrName,
+          oldValue: bulkOldValue,
+          newValue: bulkAction === "rename" ? bulkNewValue.trim() : undefined,
+        },
+      });
+
+      if (resp.error) throw resp.error;
+      const result = resp.data;
+
+      toast.success(
+        bulkAction === "rename"
+          ? `"${bulkOldValue}" hernoemd naar "${bulkNewValue.trim()}" bij ${result.productsUpdated} producten`
+          : `"${bulkOldValue}" verwijderd bij ${result.productsUpdated} producten`
+      );
+
+      // Refresh data
+      queryClient.invalidateQueries({ queryKey: ["catalog-attributes"] });
+      queryClient.invalidateQueries({ queryKey: ["attribute-definitions"] });
+      setBulkAction(null);
+    } catch (err: any) {
+      toast.error(`Fout: ${err.message}`);
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const renderValueBadge = (attrName: string, val: string, variant: "secondary" | "outline", isUndefined = false) => (
+    <div key={val} className="group/val inline-flex items-center gap-0.5">
+      <Badge
+        variant={variant}
+        className={`text-xs font-normal cursor-pointer hover:bg-primary/10 transition-colors ${
+          isUndefined ? "border-amber-300 text-amber-700" : ""
+        }`}
+        onClick={() => navigate(`/products?attr=${encodeURIComponent(attrName)}&attrVal=${encodeURIComponent(val)}`)}
+      >
+        {val}
+        {isUndefined && <span className="ml-1 text-[9px]">⚠</span>}
+      </Badge>
+      <div className="hidden group-hover/val:inline-flex items-center gap-0.5 ml-0.5">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-5 w-5 p-0 text-muted-foreground hover:text-primary"
+          title="Hernoemen bij alle producten"
+          onClick={(e) => { e.stopPropagation(); openBulkRename(attrName, val); }}
+        >
+          <Replace className="h-3 w-3" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
+          title="Verwijderen bij alle producten"
+          onClick={(e) => { e.stopPropagation(); openBulkDelete(attrName, val); }}
+        >
+          <Trash2 className="h-3 w-3" />
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-4">
@@ -188,20 +285,12 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
               </CollapsibleTrigger>
               <CollapsibleContent>
                 <div className="ml-7 mt-1 mb-2 px-4 py-3 bg-muted/30 rounded-lg border border-border/50">
+                  <p className="text-[10px] text-muted-foreground mb-2 italic">Hover over een waarde voor bulk-acties (hernoemen / verwijderen bij alle producten)</p>
                   {attr.definedValues.length > 0 && (
                     <div className="mb-2">
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Gedefinieerde waarden</span>
                       <div className="flex flex-wrap gap-1.5 mt-1">
-                        {attr.definedValues.map((val) => (
-                          <Badge
-                            key={val}
-                            variant="secondary"
-                            className="text-xs font-normal cursor-pointer hover:bg-primary/10 transition-colors"
-                            onClick={() => navigate(`/products?attr=${encodeURIComponent(attr.name)}&attrVal=${encodeURIComponent(val)}`)}
-                          >
-                            {val}
-                          </Badge>
-                        ))}
+                        {attr.definedValues.map((val) => renderValueBadge(attr.name, val, "secondary"))}
                       </div>
                     </div>
                   )}
@@ -211,23 +300,14 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
                       <div className="flex flex-wrap gap-1.5 mt-1">
                         {Array.from(attr.usedValues)
                           .sort((a, b) => a.localeCompare(b, "nl"))
-                          .map((val) => (
-                            <Badge
-                              key={val}
-                              variant="outline"
-                              className={`text-xs font-normal cursor-pointer hover:bg-primary/10 transition-colors ${
-                                attr.definedValues.length > 0 && !attr.definedValues.includes(val)
-                                  ? "border-amber-300 text-amber-700"
-                                  : ""
-                              }`}
-                              onClick={() => navigate(`/products?attr=${encodeURIComponent(attr.name)}&attrVal=${encodeURIComponent(val)}`)}
-                            >
-                              {val}
-                              {attr.definedValues.length > 0 && !attr.definedValues.includes(val) && (
-                                <span className="ml-1 text-[9px]">⚠</span>
-                              )}
-                            </Badge>
-                          ))}
+                          .map((val) =>
+                            renderValueBadge(
+                              attr.name,
+                              val,
+                              "outline",
+                              attr.definedValues.length > 0 && !attr.definedValues.includes(val)
+                            )
+                          )}
                       </div>
                     </div>
                   )}
@@ -289,7 +369,7 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
         </DialogContent>
       </Dialog>
 
-      {/* Delete confirmation */}
+      {/* Delete attribute confirmation */}
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -302,6 +382,58 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
             <AlertDialogCancel>Annuleren</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} disabled={isDeletePending}>
               {isDeletePending ? "Verwijderen..." : "Verwijderen"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Bulk Rename Dialog */}
+      <Dialog open={bulkAction === "rename"} onOpenChange={(open) => { if (!open) setBulkAction(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Waarde hernoemen bij alle producten</DialogTitle>
+            <DialogDescription>
+              Hernoem de waarde "{bulkOldValue}" van attribuut "{bulkAttrName}" bij alle producten die deze waarde hebben.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Huidige waarde</label>
+              <Input value={bulkOldValue} disabled className="bg-muted/50" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Nieuwe waarde</label>
+              <Input
+                value={bulkNewValue}
+                onChange={(e) => setBulkNewValue(e.target.value)}
+                placeholder="Nieuwe waarde..."
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkAction(null)}>Annuleren</Button>
+            <Button onClick={handleBulkAction} disabled={bulkLoading || !bulkNewValue.trim() || bulkNewValue.trim() === bulkOldValue}>
+              {bulkLoading ? "Bezig..." : "Hernoemen"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Delete Confirmation */}
+      <AlertDialog open={bulkAction === "delete"} onOpenChange={(open) => { if (!open) setBulkAction(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Waarde verwijderen bij alle producten?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Weet je zeker dat je de waarde "{bulkOldValue}" van attribuut "{bulkAttrName}" wilt verwijderen bij alle producten?
+              Dit kan niet ongedaan worden gemaakt.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuleren</AlertDialogCancel>
+            <AlertDialogAction onClick={handleBulkAction} disabled={bulkLoading}>
+              {bulkLoading ? "Bezig..." : "Verwijderen bij alle producten"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
