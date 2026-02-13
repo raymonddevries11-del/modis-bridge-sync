@@ -16,6 +16,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Progress } from "@/components/ui/progress";
 import { AiContentTab } from "@/components/AiContentTab";
+import { ProductAttributesTab } from "@/components/ProductAttributesTab";
 import { calculateCompleteness, scoreColor, scoreBg } from "@/lib/completeness";
 import { toast } from "sonner";
 import {
@@ -340,6 +341,7 @@ const ProductDetail = () => {
             <TabsTrigger value="info">Info</TabsTrigger>
             <TabsTrigger value="content">Content & SEO</TabsTrigger>
             <TabsTrigger value="ai" className="flex items-center gap-1"><Sparkles className="h-3 w-3" /> AI</TabsTrigger>
+            <TabsTrigger value="attributes">Attributen</TabsTrigger>
             <TabsTrigger value="variants">Varianten ({variantCount})</TabsTrigger>
             <TabsTrigger value="images">Afbeeldingen ({imageCount})</TabsTrigger>
             <TabsTrigger value="channels">Channel Preview</TabsTrigger>
@@ -455,6 +457,11 @@ const ProductDetail = () => {
 
           {/* AI */}
           <TabsContent value="ai"><AiContentTab product={product} /></TabsContent>
+
+          {/* ATTRIBUTES & CATEGORIES */}
+          <TabsContent value="attributes">
+            <ProductAttributesTab product={product} />
+          </TabsContent>
 
           {/* VARIANTS */}
           <TabsContent value="variants">
