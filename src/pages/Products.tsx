@@ -144,11 +144,76 @@ const Products = () => {
     setCurrentPage(1);
   }, [searchTerm, brandFilter, supplierFilter, stockFilter, tagFilter, completenessFilter, validationFilter, selectedTenant]);
 
+  // Pre-fetch matching product IDs when validation/stock/completeness filters are active
+  const { data: validationMatchIds } = useQuery({
+    queryKey: ["validation-ids", selectedTenant, searchTerm, brandFilter, supplierFilter, tagFilter, stockFilter, completenessFilter, validationFilter],
+    queryFn: async () => {
+      if (!selectedTenant) return null;
+      // Only run when we have client-side filters active
+      const needsClientFilter = validationFilter !== "all" || stockFilter !== "all" || completenessFilter !== "all";
+      if (!needsClientFilter) return null;
+
+      const allProducts: any[] = [];
+      let offset = 0;
+      while (true) {
+        let query = supabase
+          .from("products")
+          .select(`id, sku, title, images, webshop_text, meta_title, meta_description, brand_id,
+            brands(id, name),
+            product_prices(regular),
+            variants(id, size_label, stock_totals(qty))
+          `)
+          .eq("tenant_id", selectedTenant);
+
+        if (searchTerm) query = query.or(`sku.ilike.%${searchTerm}%,title.ilike.%${searchTerm}%`);
+        if (brandFilter !== "all") query = query.eq("brand_id", brandFilter);
+        if (supplierFilter !== "all") query = query.eq("supplier_id", supplierFilter);
+        if (tagFilter !== "all") query = query.contains("tags", [tagFilter]);
+
+        const { data } = await query.range(offset, offset + 999);
+        if (!data || data.length === 0) break;
+        allProducts.push(...data);
+        if (data.length < 1000) break;
+        offset += 1000;
+      }
+
+      // Apply client-side filters
+      let filtered = allProducts;
+
+      if (validationFilter !== "all") {
+        const vf = VALIDATION_FILTERS[validationFilter];
+        if (vf) filtered = filtered.filter(vf.fn);
+      }
+      if (stockFilter === "in_stock") {
+        filtered = filtered.filter((p: any) => p.variants?.some((v: any) => v.stock_totals?.qty > 0));
+      }
+      if (stockFilter === "out_of_stock") {
+        filtered = filtered.filter((p: any) => !p.variants?.some((v: any) => v.stock_totals?.qty > 0));
+      }
+      if (completenessFilter !== "all") {
+        filtered = filtered.filter((p: any) => {
+          const score = calculateCompleteness(p).score;
+          if (completenessFilter === "high") return score >= 80;
+          if (completenessFilter === "medium") return score >= 50 && score < 80;
+          if (completenessFilter === "low") return score < 50;
+          return true;
+        });
+      }
+
+      return filtered.map((p: any) => p.id as string);
+    },
+    enabled: !!selectedTenant && (validationFilter !== "all" || stockFilter !== "all" || completenessFilter !== "all"),
+  });
+
+  const hasClientFilter = validationFilter !== "all" || stockFilter !== "all" || completenessFilter !== "all";
+
   // Get total count for pagination
   const { data: totalCount } = useQuery({
-    queryKey: ["products-count", searchTerm, brandFilter, supplierFilter, tagFilter, selectedTenant],
+    queryKey: ["products-count", searchTerm, brandFilter, supplierFilter, tagFilter, selectedTenant, validationMatchIds],
     queryFn: async () => {
       if (!selectedTenant) return 0;
+      if (hasClientFilter && validationMatchIds) return validationMatchIds.length;
+
       let query = supabase
         .from("products")
         .select("*", { count: "exact", head: true })
@@ -176,12 +241,33 @@ const Products = () => {
   const totalPages = Math.ceil((totalCount || 0) / PAGE_SIZE);
 
   const { data: products, isLoading } = useQuery({
-    queryKey: ["products", searchTerm, brandFilter, supplierFilter, stockFilter, tagFilter, selectedTenant, currentPage],
+    queryKey: ["products", searchTerm, brandFilter, supplierFilter, stockFilter, tagFilter, selectedTenant, currentPage, validationMatchIds],
     queryFn: async () => {
       if (!selectedTenant) return [];
       
       const from = (currentPage - 1) * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
+
+      // When client-side filters are active, use pre-fetched IDs
+      if (hasClientFilter && validationMatchIds) {
+        if (validationMatchIds.length === 0) return [];
+        const pageIds = validationMatchIds.slice(from, to + 1);
+        if (pageIds.length === 0) return [];
+
+        const { data } = await supabase
+          .from("products")
+          .select(`
+            *,
+            brands(id, name),
+            suppliers(id, name),
+            product_prices(*),
+            variants(*, stock_totals(*))
+          `)
+          .in("id", pageIds)
+          .order("updated_at", { ascending: false });
+
+        return data || [];
+      }
 
       let query = supabase
         .from("products")
@@ -209,26 +295,9 @@ const Products = () => {
       }
 
       const { data } = await query.range(from, to);
-      
-      // Client-side filter for stock (applied after pagination)
-      if (stockFilter === "in_stock" && data) {
-        return data.filter((product: any) => 
-          product.variants?.some((variant: any) => 
-            variant.stock_totals?.qty > 0
-          )
-        );
-      }
-      if (stockFilter === "out_of_stock" && data) {
-        return data.filter((product: any) => 
-          !product.variants?.some((variant: any) => 
-            variant.stock_totals?.qty > 0
-          )
-        );
-      }
-      
       return data || [];
     },
-    enabled: !!selectedTenant,
+    enabled: !!selectedTenant && (!hasClientFilter || validationMatchIds !== undefined),
   });
 
   // Fetch AI titles for quick comparison
@@ -993,19 +1062,7 @@ const Products = () => {
           </div>
         ) : products && products.length > 0 ? (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {products.filter((product: any) => {
-              // Validation filter
-              if (validationFilter !== "all") {
-                const vf = VALIDATION_FILTERS[validationFilter];
-                if (vf && !vf.fn(product)) return false;
-              }
-              // Completeness filter
-              if (completenessFilter === "all") return true;
-              const s = calculateCompleteness(product).score;
-              if (completenessFilter === "critical") return s < 50;
-              if (completenessFilter === "warning") return s >= 50 && s < 80;
-              return s >= 80;
-            }).map((product: any) => {
+            {products.map((product: any) => {
               const { score, checks } = calculateCompleteness(product);
               const totalStock = product.variants?.reduce((s: number, v: any) => s + (v.stock_totals?.qty ?? 0), 0) ?? 0;
               const imgCount = Array.isArray(product.images) ? product.images.length : 0;
