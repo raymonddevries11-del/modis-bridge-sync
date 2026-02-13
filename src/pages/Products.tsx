@@ -360,6 +360,44 @@ const Products = () => {
     }
   }, [products, selectedProductIds]);
 
+  const [selectingAll, setSelectingAll] = useState(false);
+
+  const selectAllFiltered = useCallback(async () => {
+    if (!selectedTenant) return;
+    setSelectingAll(true);
+    try {
+      if (hasClientFilter && validationMatchIds) {
+        setSelectedProductIds(new Set(validationMatchIds));
+        setSelectingAll(false);
+        return;
+      }
+      const allIds: string[] = [];
+      let offset = 0;
+      while (true) {
+        let query = supabase
+          .from("products")
+          .select("id")
+          .eq("tenant_id", selectedTenant)
+          .order("updated_at", { ascending: false })
+          .range(offset, offset + 999);
+        if (searchTerm) query = query.or(`sku.ilike.%${searchTerm}%,title.ilike.%${searchTerm}%`);
+        if (brandFilter !== "all") query = query.eq("brand_id", brandFilter);
+        if (supplierFilter !== "all") query = query.eq("supplier_id", supplierFilter);
+        if (tagFilter !== "all") query = query.contains("tags", [tagFilter]);
+        const { data } = await query;
+        if (!data || data.length === 0) break;
+        for (const row of data) allIds.push(row.id);
+        if (data.length < 1000) break;
+        offset += 1000;
+      }
+      setSelectedProductIds(new Set(allIds));
+    } catch {
+      toast.error("Kon niet alle producten selecteren");
+    } finally {
+      setSelectingAll(false);
+    }
+  }, [selectedTenant, searchTerm, brandFilter, supplierFilter, tagFilter, hasClientFilter, validationMatchIds]);
+
   // Fetch AI titles for quick comparison
   const { data: aiTitlesMap } = useQuery({
     queryKey: ["ai-titles", selectedTenant],
@@ -1238,8 +1276,21 @@ const Products = () => {
             />
             <label htmlFor="select-all" className="text-xs text-muted-foreground cursor-pointer select-none">
               Selecteer alle {products.length} op deze pagina
-              {selectedProductIds.size > 0 && ` (${selectedProductIds.size} totaal geselecteerd)`}
             </label>
+            {totalCount != null && totalCount > products.length && (
+              <Button
+                size="sm"
+                variant="link"
+                className="h-auto p-0 text-xs"
+                onClick={selectAllFiltered}
+                disabled={selectingAll || selectedProductIds.size === totalCount}
+              >
+                {selectingAll ? "Laden..." : selectedProductIds.size === totalCount ? `Alle ${totalCount} geselecteerd` : `Selecteer alle ${totalCount} resultaten`}
+              </Button>
+            )}
+            {selectedProductIds.size > 0 && (
+              <span className="text-xs text-muted-foreground">({selectedProductIds.size} geselecteerd)</span>
+            )}
           </div>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {products.map((product: any) => {
