@@ -256,6 +256,32 @@ jobs:
               await sftp.end();
               console.log('\n✓ Product CSV sync complete');
 
+              // Verify changelog entries were created
+              console.log('\n=== Changelog Verification ===');
+              const verifyResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/changelog?event_type=eq.PRODUCT_CSV_IMPORT&order=created_at.desc&limit=5`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                  }
+                }
+              );
+
+              if (verifyResponse.ok) {
+                const entries = await verifyResponse.json();
+                if (entries.length === 0) {
+                  console.log('⚠ No PRODUCT_CSV_IMPORT changelog entries found!');
+                } else {
+                  console.log(`✓ Found ${entries.length} recent PRODUCT_CSV_IMPORT entries:`);
+                  for (const entry of entries) {
+                    console.log(`  - ${entry.created_at}: ${entry.description}`);
+                  }
+                }
+              } else {
+                console.error(`✗ Changelog verification failed: ${verifyResponse.status}`);
+              }
+
             } catch (error) {
               console.error('Fatal error:', error);
               await sftp.end().catch(() => {});
