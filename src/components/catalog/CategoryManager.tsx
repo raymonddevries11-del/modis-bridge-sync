@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
@@ -10,7 +13,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Search, Package, ExternalLink, Pencil, Trash2 } from "lucide-react";
+import { Search, Package, ExternalLink, Pencil, Trash2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
@@ -38,6 +41,26 @@ export const CategoryManager = ({ categories, isLoading }: Props) => {
   // Delete state
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+
+  // Add category state
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [addCategoryName, setAddCategoryName] = useState("");
+  const [addFilterType, setAddFilterType] = useState<string>("all");
+  const [addFilterValue, setAddFilterValue] = useState("");
+  const [addLoading, setAddLoading] = useState(false);
+
+  // Fetch brands for filter
+  const { data: brands } = useQuery({
+    queryKey: ["brands-list"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("brands")
+        .select("id, name")
+        .order("name");
+      if (error) throw error;
+      return data;
+    },
+  });
 
   const filtered = categories?.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase())
@@ -84,16 +107,68 @@ export const CategoryManager = ({ categories, isLoading }: Props) => {
     }
   };
 
+  const openAddDialog = () => {
+    setAddCategoryName("");
+    setAddFilterType("all");
+    setAddFilterValue("");
+    setShowAddDialog(true);
+  };
+
+  const handleAddCategory = async () => {
+    if (!addCategoryName.trim()) return;
+    if ((addFilterType === "category" || addFilterType === "brand" || addFilterType === "search") && !addFilterValue.trim()) {
+      toast.error("Vul een filterwaarde in");
+      return;
+    }
+    setAddLoading(true);
+    try {
+      const resp = await supabase.functions.invoke("bulk-add-category", {
+        body: {
+          categoryName: addCategoryName.trim(),
+          filterType: addFilterType,
+          filterValue: addFilterType === "all" ? undefined : addFilterValue.trim(),
+        },
+      });
+      if (resp.error) throw resp.error;
+      const { productsUpdated, productsSkipped } = resp.data;
+      toast.success(
+        `"${addCategoryName.trim()}" toegevoegd aan ${productsUpdated} producten` +
+        (productsSkipped > 0 ? ` (${productsSkipped} hadden deze al)` : "")
+      );
+      queryClient.invalidateQueries({ queryKey: ["catalog-categories"] });
+      setShowAddDialog(false);
+    } catch (err: any) {
+      toast.error(`Fout: ${err.message}`);
+    } finally {
+      setAddLoading(false);
+    }
+  };
+
+  const filterDescription = () => {
+    switch (addFilterType) {
+      case "all": return "Alle producten in de catalogus";
+      case "category": return `Producten met categorie "${addFilterValue}"`;
+      case "brand": return `Producten van merk "${brands?.find(b => b.id === addFilterValue)?.name ?? addFilterValue}"`;
+      case "search": return `Producten die "${addFilterValue}" bevatten in titel of SKU`;
+      default: return "";
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Zoek categorie..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-9"
-        />
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Zoek categorie..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <Button size="sm" onClick={openAddDialog}>
+          <Plus className="h-4 w-4 mr-1" /> Categorie toewijzen
+        </Button>
       </div>
 
       {isLoading ? (
@@ -148,6 +223,113 @@ export const CategoryManager = ({ categories, isLoading }: Props) => {
           )}
         </div>
       )}
+
+      {/* Add Category Dialog */}
+      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Categorie toewijzen aan producten</DialogTitle>
+            <DialogDescription>
+              Voeg een categorie toe aan meerdere producten tegelijk op basis van een filter.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Categorienaam</Label>
+              <Input
+                value={addCategoryName}
+                onChange={(e) => setAddCategoryName(e.target.value)}
+                placeholder="Bijv. Nieuwe Collectie..."
+                autoFocus
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Toewijzen aan</Label>
+              <Select value={addFilterType} onValueChange={(v) => { setAddFilterType(v); setAddFilterValue(""); }}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle producten</SelectItem>
+                  <SelectItem value="category">Producten met bestaande categorie</SelectItem>
+                  <SelectItem value="brand">Producten van een merk</SelectItem>
+                  <SelectItem value="search">Zoek op titel / SKU</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {addFilterType === "category" && (
+              <div className="space-y-1">
+                <Label className="text-sm font-medium">Bestaande categorie</Label>
+                <Select value={addFilterValue} onValueChange={setAddFilterValue}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Kies categorie..." />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-60">
+                    {categories?.map((cat) => (
+                      <SelectItem key={cat.name} value={cat.name}>
+                        {cat.name} ({cat.count})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {addFilterType === "brand" && (
+              <div className="space-y-1">
+                <Label className="text-sm font-medium">Merk</Label>
+                <Select value={addFilterValue} onValueChange={setAddFilterValue}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Kies merk..." />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-60">
+                    {brands?.map((brand) => (
+                      <SelectItem key={brand.id} value={brand.id}>
+                        {brand.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {addFilterType === "search" && (
+              <div className="space-y-1">
+                <Label className="text-sm font-medium">Zoekterm</Label>
+                <Input
+                  value={addFilterValue}
+                  onChange={(e) => setAddFilterValue(e.target.value)}
+                  placeholder="Zoek op titel of SKU..."
+                />
+              </div>
+            )}
+
+            {addCategoryName.trim() && (
+              <div className="p-3 rounded-lg bg-muted/50 border border-border/60">
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">"{addCategoryName.trim()}"</span> wordt toegevoegd aan:{" "}
+                  {filterDescription()}
+                </p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddDialog(false)}>Annuleren</Button>
+            <Button
+              onClick={handleAddCategory}
+              disabled={
+                addLoading ||
+                !addCategoryName.trim() ||
+                ((addFilterType === "category" || addFilterType === "brand" || addFilterType === "search") && !addFilterValue.trim())
+              }
+            >
+              {addLoading ? "Bezig..." : "Toewijzen"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Rename Dialog */}
       <Dialog open={!!renameTarget} onOpenChange={(open) => { if (!open) setRenameTarget(null); }}>
