@@ -113,8 +113,8 @@ jobs:
                 const files = await sftp.list(basePath);
                 const productCsvFiles = files.filter(f =>
                   f.type === '-' &&
-                  f.name.toLowerCase().startsWith('products-') &&
-                  f.name.toLowerCase().endsWith('.csv')
+                  f.name.toLowerCase().endsWith('.csv') &&
+                  (f.name.toLowerCase().startsWith('products-') || f.name.toLowerCase().startsWith('product-totaal'))
                 );
 
                 console.log(`Found ${productCsvFiles.length} product-totaal CSV files`);
