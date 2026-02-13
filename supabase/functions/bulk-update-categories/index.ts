@@ -17,7 +17,7 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    const { action, oldValue, newValue } = await req.json();
+    const { action, oldValue, newValue, filterType, filterValue } = await req.json();
 
     if (!action || !oldValue) {
       return new Response(JSON.stringify({ error: "action and oldValue required" }), {
@@ -33,17 +33,25 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Fetch all products that have this category
+    // Fetch products – optionally filtered
     let offset = 0;
     const BATCH = 1000;
     let productsUpdated = 0;
 
     while (true) {
-      const { data: products, error } = await supabase
+      let query = supabase
         .from("products")
-        .select("id, categories")
-        .not("categories", "is", null)
-        .range(offset, offset + BATCH - 1);
+        .select("id, categories, title, sku, brand_id")
+        .not("categories", "is", null);
+
+      // Apply optional filters for selective delete
+      if (filterType === "brand" && filterValue) {
+        query = query.eq("brand_id", filterValue);
+      } else if (filterType === "search" && filterValue) {
+        query = query.or(`title.ilike.%${filterValue}%,sku.ilike.%${filterValue}%`);
+      }
+
+      const { data: products, error } = await query.range(offset, offset + BATCH - 1);
 
       if (error) throw error;
       if (!products || products.length === 0) break;
