@@ -7,8 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Activity, Clock, CheckCircle2, AlertCircle, Trash2, RefreshCw, Filter, FileSpreadsheet, Package, TrendingUp, TrendingDown } from "lucide-react";
+import { Activity, Clock, CheckCircle2, AlertCircle, Trash2, RefreshCw, Filter, FileSpreadsheet, Package, TrendingUp, TrendingDown, RotateCcw, Lightbulb } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { nl } from "date-fns/locale";
 import { useState } from "react";
 
@@ -270,22 +271,72 @@ function ChangelogTab() {
         </div>
       ) : (
         <div className="space-y-2">
-          {entries.map((entry) => (
-            <div key={entry.id} className="flex items-start gap-3 px-4 py-3 rounded-lg border border-border bg-card">
+          {entries.map((entry) => {
+            const meta = entry.metadata as Record<string, any> | null;
+            const isImport = entry.event_type === 'PRODUCT_CSV_IMPORT' || entry.event_type === 'STOCK_CSV_IMPORT';
+            const hasErrors = meta && ((meta.error_count || 0) > 0 || (meta.errors?.length || 0) > 0);
+            const hasSkipped = meta && (meta.skipped_rows || 0) > 0;
+            const zeroResults = isImport && meta && (
+              entry.event_type === 'PRODUCT_CSV_IMPORT'
+                ? (meta.productsInserted || 0) === 0 && (meta.productsUpdated || 0) === 0 && (meta.variantsInserted || 0) === 0 && (meta.variantsUpdated || 0) === 0
+                : (meta.updated_variants || 0) === 0 && (meta.updated_prices || 0) === 0
+            );
+            const needsAttention = hasErrors || (isImport && zeroResults);
+
+            const suggestedStep = hasErrors
+              ? "Controleer het CSV-bestand op fouten en probeer opnieuw te uploaden."
+              : zeroResults && hasSkipped
+              ? `${meta?.skipped_rows} rijen overgeslagen — controleer of SKU's overeenkomen met de database.`
+              : zeroResults
+              ? "Geen wijzigingen gedetecteerd. Controleer of het bestand actuele data bevat."
+              : hasSkipped
+              ? `${meta?.skipped_rows} rijen overgeslagen — sommige SKU's zijn niet gevonden.`
+              : null;
+
+            return (
+            <div key={entry.id} className={`flex items-start gap-3 px-4 py-3 rounded-lg border bg-card ${needsAttention ? 'border-destructive/40' : 'border-border'}`}>
               <div className="mt-0.5">
-                <div className={`h-2 w-2 rounded-full ${entry.event_type === 'PRODUCT_CSV_IMPORT' ? 'bg-primary' : 'bg-muted-foreground'}`} />
+                <div className={`h-2 w-2 rounded-full ${needsAttention ? 'bg-destructive' : entry.event_type === 'PRODUCT_CSV_IMPORT' ? 'bg-primary' : 'bg-muted-foreground'}`} />
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm">{entry.description}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  <Badge variant={entry.event_type === 'PRODUCT_CSV_IMPORT' ? 'default' : 'secondary'} className="text-[11px]">{entry.event_type}</Badge>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  <Badge variant={needsAttention ? 'destructive' : entry.event_type === 'PRODUCT_CSV_IMPORT' ? 'default' : 'secondary'} className="text-[11px]">{entry.event_type}</Badge>
+                  {needsAttention && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge variant="outline" className="text-[11px] gap-1 border-destructive/40 text-destructive cursor-help">
+                            <RotateCcw className="h-3 w-3" />
+                            Retry nodig
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          <p className="text-xs">{suggestedStep}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
+                  {hasSkipped && !needsAttention && (
+                    <Badge variant="outline" className="text-[11px] gap-1 text-muted-foreground">
+                      {meta?.skipped_rows} overgeslagen
+                    </Badge>
+                  )}
                   <span className="text-xs text-muted-foreground">
                     {format(new Date(entry.created_at), "dd MMM yyyy HH:mm")}
                   </span>
                 </div>
+                {suggestedStep && needsAttention && (
+                  <div className="flex items-start gap-1.5 mt-2 text-xs text-destructive bg-destructive/5 rounded-md px-2.5 py-1.5">
+                    <Lightbulb className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <span>{suggestedStep}</span>
+                  </div>
+                )}
               </div>
             </div>
-          ))}
+            );
+          })}
+
         </div>
       )}
     </div>
