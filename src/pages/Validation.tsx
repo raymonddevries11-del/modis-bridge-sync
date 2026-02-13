@@ -42,6 +42,7 @@ interface ValidationIssue {
   count: number;
   total: number;
   productIds: string[];
+  variantDetail?: { total: number; missing: number };
 }
 
 const Validation = () => {
@@ -193,6 +194,8 @@ const Validation = () => {
     const noAttributes: string[] = [];
     const noCategories: string[] = [];
     const missingEan: string[] = [];
+    let totalVariants = 0;
+    let variantsMissingEan = 0;
 
     for (const p of products) {
       const imgs = Array.isArray(p.images) ? p.images : [];
@@ -222,8 +225,10 @@ const Validation = () => {
 
       // Check if any variant is missing EAN
       if (variants.length > 0) {
-        const allHaveEan = variants.every((v: any) => v.ean && v.ean !== "0" && v.ean !== "");
-        if (!allHaveEan) missingEan.push(p.id);
+        totalVariants += variants.length;
+        const missingInProduct = variants.filter((v: any) => !v.ean || v.ean === "0" || v.ean === "");
+        variantsMissingEan += missingInProduct.length;
+        if (missingInProduct.length > 0) missingEan.push(p.id);
       }
 
       const groupId = (p as any).article_group?.id;
@@ -328,12 +333,13 @@ const Validation = () => {
       {
         id: "missing-ean",
         label: "Ontbrekende EAN",
-        description: "Varianten zonder EAN code — vereist voor Google Shopping.",
+        description: `${variantsMissingEan} van ${totalVariants} varianten zonder EAN code.`,
         icon: Barcode,
         severity: "warning",
         count: missingEan.length,
         total,
         productIds: missingEan,
+        variantDetail: { total: totalVariants, missing: variantsMissingEan },
       },
       {
         id: "no-stock",
@@ -510,6 +516,11 @@ const Validation = () => {
                               {issue.count}
                             </span>
                             <span className="text-sm text-muted-foreground ml-1">/ {issue.total}</span>
+                            {issue.variantDetail && issue.variantDetail.missing > 0 && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {issue.variantDetail.missing} van {issue.variantDetail.total} varianten
+                              </p>
+                            )}
                           </div>
                           <Badge variant={issue.count > 0 ? config.badge : "outline"} className="text-xs">
                             {issue.count > 0 ? `${pct}% getroffen` : "✓ OK"}
