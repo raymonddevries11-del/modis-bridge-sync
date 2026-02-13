@@ -133,53 +133,65 @@ const Products = () => {
     queryFn: async () => {
       if (!selectedTenant) return [];
       
-      let query = supabase
-        .from("products")
-        .select(`
-          *,
-          brands(id, name),
-          suppliers(id, name),
-          product_prices(*),
-          variants(*, stock_totals(*))
-        `)
-        .eq("tenant_id", selectedTenant)
-        .order("updated_at", { ascending: false });
+      const buildQuery = (offset: number) => {
+        let query = supabase
+          .from("products")
+          .select(`
+            *,
+            brands(id, name),
+            suppliers(id, name),
+            product_prices(*),
+            variants(*, stock_totals(*))
+          `)
+          .eq("tenant_id", selectedTenant)
+          .order("updated_at", { ascending: false });
 
-      if (searchTerm) {
-        query = query.or(`sku.ilike.%${searchTerm}%,title.ilike.%${searchTerm}%`);
+        if (searchTerm) {
+          query = query.or(`sku.ilike.%${searchTerm}%,title.ilike.%${searchTerm}%`);
+        }
+
+        if (brandFilter !== "all") {
+          query = query.eq("brand_id", brandFilter);
+        }
+
+        if (supplierFilter !== "all") {
+          query = query.eq("supplier_id", supplierFilter);
+        }
+
+        if (tagFilter !== "all") {
+          query = query.contains("tags", [tagFilter]);
+        }
+
+        return query.range(offset, offset + 999);
+      };
+
+      const allProducts: any[] = [];
+      let offset = 0;
+      while (true) {
+        const { data } = await buildQuery(offset);
+        if (!data || data.length === 0) break;
+        allProducts.push(...data);
+        if (data.length < 1000) break;
+        offset += 1000;
       }
-
-      if (brandFilter !== "all") {
-        query = query.eq("brand_id", brandFilter);
-      }
-
-      if (supplierFilter !== "all") {
-        query = query.eq("supplier_id", supplierFilter);
-      }
-
-      if (tagFilter !== "all") {
-        query = query.contains("tags", [tagFilter]);
-      }
-
-      const { data } = await query.limit(500);
       
       // Client-side filter for stock
-      if (stockFilter === "in_stock" && data) {
-        return data.filter((product: any) => 
+      if (stockFilter === "in_stock") {
+        return allProducts.filter((product: any) => 
           product.variants?.some((variant: any) => 
             variant.stock_totals?.qty > 0
           )
         );
       }
-      if (stockFilter === "out_of_stock" && data) {
-        return data.filter((product: any) => 
+      if (stockFilter === "out_of_stock") {
+        return allProducts.filter((product: any) => 
           !product.variants?.some((variant: any) => 
             variant.stock_totals?.qty > 0
           )
         );
       }
       
-      return data || [];
+      return allProducts;
     },
   });
 
