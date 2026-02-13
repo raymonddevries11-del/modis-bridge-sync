@@ -13,6 +13,15 @@ import { calculateCompleteness, scoreColor, scoreBg } from "@/lib/completeness";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { Progress } from "@/components/ui/progress";
 import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+  PaginationEllipsis,
+} from "@/components/ui/pagination";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -61,6 +70,8 @@ const Products = () => {
   const [completenessFilter, setCompletenessFilter] = useState<string>("all");
   const [validationFilter, setValidationFilter] = useState<string>(searchParams.get("validation") || "all");
   const [selectedTenant, setSelectedTenant] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 50;
   const navigate = useNavigate();
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [tagName, setTagName] = useState("2025-assortiment");
@@ -128,71 +139,96 @@ const Products = () => {
     enabled: !!selectedTenant,
   });
 
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, brandFilter, supplierFilter, stockFilter, tagFilter, completenessFilter, validationFilter, selectedTenant]);
+
+  // Get total count for pagination
+  const { data: totalCount } = useQuery({
+    queryKey: ["products-count", searchTerm, brandFilter, supplierFilter, tagFilter, selectedTenant],
+    queryFn: async () => {
+      if (!selectedTenant) return 0;
+      let query = supabase
+        .from("products")
+        .select("*", { count: "exact", head: true })
+        .eq("tenant_id", selectedTenant);
+
+      if (searchTerm) {
+        query = query.or(`sku.ilike.%${searchTerm}%,title.ilike.%${searchTerm}%`);
+      }
+      if (brandFilter !== "all") {
+        query = query.eq("brand_id", brandFilter);
+      }
+      if (supplierFilter !== "all") {
+        query = query.eq("supplier_id", supplierFilter);
+      }
+      if (tagFilter !== "all") {
+        query = query.contains("tags", [tagFilter]);
+      }
+
+      const { count } = await query;
+      return count || 0;
+    },
+    enabled: !!selectedTenant,
+  });
+
+  const totalPages = Math.ceil((totalCount || 0) / PAGE_SIZE);
+
   const { data: products, isLoading } = useQuery({
-    queryKey: ["products", searchTerm, brandFilter, supplierFilter, stockFilter, tagFilter, selectedTenant],
+    queryKey: ["products", searchTerm, brandFilter, supplierFilter, stockFilter, tagFilter, selectedTenant, currentPage],
     queryFn: async () => {
       if (!selectedTenant) return [];
       
-      const buildQuery = (offset: number) => {
-        let query = supabase
-          .from("products")
-          .select(`
-            *,
-            brands(id, name),
-            suppliers(id, name),
-            product_prices(*),
-            variants(*, stock_totals(*))
-          `)
-          .eq("tenant_id", selectedTenant)
-          .order("updated_at", { ascending: false });
+      const from = (currentPage - 1) * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
 
-        if (searchTerm) {
-          query = query.or(`sku.ilike.%${searchTerm}%,title.ilike.%${searchTerm}%`);
-        }
+      let query = supabase
+        .from("products")
+        .select(`
+          *,
+          brands(id, name),
+          suppliers(id, name),
+          product_prices(*),
+          variants(*, stock_totals(*))
+        `)
+        .eq("tenant_id", selectedTenant)
+        .order("updated_at", { ascending: false });
 
-        if (brandFilter !== "all") {
-          query = query.eq("brand_id", brandFilter);
-        }
-
-        if (supplierFilter !== "all") {
-          query = query.eq("supplier_id", supplierFilter);
-        }
-
-        if (tagFilter !== "all") {
-          query = query.contains("tags", [tagFilter]);
-        }
-
-        return query.range(offset, offset + 999);
-      };
-
-      const allProducts: any[] = [];
-      let offset = 0;
-      while (true) {
-        const { data } = await buildQuery(offset);
-        if (!data || data.length === 0) break;
-        allProducts.push(...data);
-        if (data.length < 1000) break;
-        offset += 1000;
+      if (searchTerm) {
+        query = query.or(`sku.ilike.%${searchTerm}%,title.ilike.%${searchTerm}%`);
       }
+      if (brandFilter !== "all") {
+        query = query.eq("brand_id", brandFilter);
+      }
+      if (supplierFilter !== "all") {
+        query = query.eq("supplier_id", supplierFilter);
+      }
+      if (tagFilter !== "all") {
+        query = query.contains("tags", [tagFilter]);
+      }
+
+      const { data } = await query.range(from, to);
       
-      // Client-side filter for stock
-      if (stockFilter === "in_stock") {
-        return allProducts.filter((product: any) => 
+      // Client-side filter for stock (applied after pagination)
+      if (stockFilter === "in_stock" && data) {
+        return data.filter((product: any) => 
           product.variants?.some((variant: any) => 
             variant.stock_totals?.qty > 0
           )
         );
       }
-      if (stockFilter === "out_of_stock") {
-        return allProducts.filter((product: any) => 
+      if (stockFilter === "out_of_stock" && data) {
+        return data.filter((product: any) => 
           !product.variants?.some((variant: any) => 
             variant.stock_totals?.qty > 0
           )
         );
       }
       
-      return allProducts;
+      return data || [];
     },
+    enabled: !!selectedTenant,
   });
 
   // Fetch AI titles for quick comparison
@@ -601,7 +637,7 @@ const Products = () => {
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Products</h1>
             <p className="text-muted-foreground">
-              Browse and manage your product catalog {products && `(${products.length} items)`}
+              Browse and manage your product catalog {totalCount != null && `(${totalCount} items${totalPages > 1 ? `, pagina ${currentPage}/${totalPages}` : ""})`}
             </p>
           </div>
         </div>
@@ -1061,6 +1097,68 @@ const Products = () => {
               </p>
             </CardContent>
           </Card>
+        )}
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <Pagination>
+            <PaginationContent>
+              <PaginationItem>
+                <PaginationPrevious
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                />
+              </PaginationItem>
+
+              {/* First page */}
+              {currentPage > 3 && (
+                <>
+                  <PaginationItem>
+                    <PaginationLink onClick={() => setCurrentPage(1)} className="cursor-pointer">1</PaginationLink>
+                  </PaginationItem>
+                  {currentPage > 4 && (
+                    <PaginationItem><PaginationEllipsis /></PaginationItem>
+                  )}
+                </>
+              )}
+
+              {/* Pages around current */}
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                const page = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i;
+                if (page < 1 || page > totalPages) return null;
+                return (
+                  <PaginationItem key={page}>
+                    <PaginationLink
+                      isActive={page === currentPage}
+                      onClick={() => setCurrentPage(page)}
+                      className="cursor-pointer"
+                    >
+                      {page}
+                    </PaginationLink>
+                  </PaginationItem>
+                );
+              })}
+
+              {/* Last page */}
+              {currentPage < totalPages - 2 && (
+                <>
+                  {currentPage < totalPages - 3 && (
+                    <PaginationItem><PaginationEllipsis /></PaginationItem>
+                  )}
+                  <PaginationItem>
+                    <PaginationLink onClick={() => setCurrentPage(totalPages)} className="cursor-pointer">{totalPages}</PaginationLink>
+                  </PaginationItem>
+                </>
+              )}
+
+              <PaginationItem>
+                <PaginationNext
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
         )}
 
       </div>
