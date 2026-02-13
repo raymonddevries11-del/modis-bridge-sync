@@ -33,7 +33,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useState, useEffect, useRef } from "react";
-import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles, FilterX, X, MoreVertical, ChevronDown } from "lucide-react";
+import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles, FilterX, X, MoreVertical, ChevronDown, Layers } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -72,6 +72,9 @@ const Products = () => {
   const [tagFilter, setTagFilter] = useState<string>("all");
   const [completenessFilter, setCompletenessFilter] = useState<string>("all");
   const [validationFilter, setValidationFilter] = useState<string>(searchParams.get("validation") || "all");
+  const [attrFilter, setAttrFilter] = useState<string>(searchParams.get("attr") || "");
+  const [attrValFilter, setAttrValFilter] = useState<string>(searchParams.get("attrVal") || "");
+  const [categoryFilter, setCategoryFilter] = useState<string>(searchParams.get("category") || "");
   const [selectedTenant, setSelectedTenant] = useState<string>("");
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 50;
@@ -145,15 +148,15 @@ const Products = () => {
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, brandFilter, supplierFilter, stockFilter, tagFilter, completenessFilter, validationFilter, selectedTenant]);
+  }, [searchTerm, brandFilter, supplierFilter, stockFilter, tagFilter, completenessFilter, validationFilter, attrFilter, attrValFilter, categoryFilter, selectedTenant]);
 
   // Pre-fetch matching product IDs when validation/stock/completeness filters are active
   const { data: validationMatchIds } = useQuery({
-    queryKey: ["validation-ids", selectedTenant, searchTerm, brandFilter, supplierFilter, tagFilter, stockFilter, completenessFilter, validationFilter],
+    queryKey: ["validation-ids", selectedTenant, searchTerm, brandFilter, supplierFilter, tagFilter, stockFilter, completenessFilter, validationFilter, attrFilter, attrValFilter, categoryFilter],
     queryFn: async () => {
       if (!selectedTenant) return null;
       // Only run when we have client-side filters active
-      const needsClientFilter = validationFilter !== "all" || stockFilter !== "all" || completenessFilter !== "all";
+      const needsClientFilter = validationFilter !== "all" || stockFilter !== "all" || completenessFilter !== "all" || !!attrFilter || !!categoryFilter;
       if (!needsClientFilter) return null;
 
       const allProducts: any[] = [];
@@ -161,7 +164,7 @@ const Products = () => {
       while (true) {
         let query = supabase
           .from("products")
-          .select(`id, sku, title, images, webshop_text, meta_title, meta_description, brand_id,
+          .select(`id, sku, title, images, webshop_text, meta_title, meta_description, brand_id, attributes, categories,
             brands(id, name),
             product_prices(regular),
             variants(id, size_label, stock_totals(qty))
@@ -202,13 +205,35 @@ const Products = () => {
           return true;
         });
       }
+      if (attrFilter) {
+        filtered = filtered.filter((p: any) => {
+          const attrs = p.attributes as Record<string, any> | null;
+          if (!attrs) return false;
+          if (!attrs[attrFilter]) return false;
+          if (attrValFilter) {
+            const val = String(attrs[attrFilter]);
+            return val.split(",").map((v: string) => v.trim()).includes(attrValFilter);
+          }
+          return true;
+        });
+      }
+      if (categoryFilter) {
+        filtered = filtered.filter((p: any) => {
+          const cats = p.categories as any[];
+          if (!Array.isArray(cats)) return false;
+          return cats.some((c: any) => {
+            const label = typeof c === "string" ? c : (c?.name || "");
+            return label === categoryFilter || label.includes(categoryFilter);
+          });
+        });
+      }
 
       return filtered.map((p: any) => p.id as string);
     },
-    enabled: !!selectedTenant && (validationFilter !== "all" || stockFilter !== "all" || completenessFilter !== "all"),
+    enabled: !!selectedTenant && (validationFilter !== "all" || stockFilter !== "all" || completenessFilter !== "all" || !!attrFilter || !!categoryFilter),
   });
 
-  const hasClientFilter = validationFilter !== "all" || stockFilter !== "all" || completenessFilter !== "all";
+  const hasClientFilter = validationFilter !== "all" || stockFilter !== "all" || completenessFilter !== "all" || !!attrFilter || !!categoryFilter;
 
   // Get total count for pagination
   const { data: totalCount } = useQuery({
@@ -776,6 +801,8 @@ const Products = () => {
                   tagFilter !== "all",
                   completenessFilter !== "all",
                   validationFilter !== "all",
+                  !!attrFilter,
+                  !!categoryFilter,
                 ].filter(Boolean).length;
                 return activeCount > 0 ? (
                   <Button
@@ -789,7 +816,13 @@ const Products = () => {
                       setTagFilter("all");
                       setCompletenessFilter("all");
                       setValidationFilter("all");
+                      setAttrFilter("");
+                      setAttrValFilter("");
+                      setCategoryFilter("");
                       searchParams.delete("validation");
+                      searchParams.delete("attr");
+                      searchParams.delete("attrVal");
+                      searchParams.delete("category");
                       setSearchParams(searchParams, { replace: true });
                     }}
                   >
@@ -900,6 +933,47 @@ const Products = () => {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Active catalog data filters */}
+            {(attrFilter || categoryFilter) && (
+              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/50">
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider mr-1">Catalogus filter</span>
+                {attrFilter && (
+                  <Badge variant="secondary" className="text-xs gap-1">
+                    <Layers className="h-3 w-3" />
+                    {attrFilter}{attrValFilter ? `: ${attrValFilter}` : ""}
+                    <button
+                      onClick={() => {
+                        setAttrFilter("");
+                        setAttrValFilter("");
+                        searchParams.delete("attr");
+                        searchParams.delete("attrVal");
+                        setSearchParams(searchParams, { replace: true });
+                      }}
+                      className="ml-1 hover:text-destructive"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                )}
+                {categoryFilter && (
+                  <Badge variant="secondary" className="text-xs gap-1">
+                    <Tag className="h-3 w-3" />
+                    {categoryFilter}
+                    <button
+                      onClick={() => {
+                        setCategoryFilter("");
+                        searchParams.delete("category");
+                        setSearchParams(searchParams, { replace: true });
+                      }}
+                      className="ml-1 hover:text-destructive"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 
