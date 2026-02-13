@@ -407,9 +407,10 @@ serve(async (req) => {
             }
           }
 
-          // Material
-          if (effectiveMaterial) {
-            itemXml += `\n      <g:material>${escapeXml(effectiveMaterial)}</g:material>`;
+          // Material: from category mapping, fallback to product attributes
+          const materialValue = effectiveMaterial || (product.attributes as any)?.Materiaal || null;
+          if (materialValue && !['overige', 'nvt', 'n.v.t.', '-'].includes(materialValue.toLowerCase())) {
+            itemXml += `\n      <g:material>${escapeXml(materialValue)}</g:material>`;
           }
 
           // 4️⃣ Item group ID links variants together
