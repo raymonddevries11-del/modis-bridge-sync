@@ -9,10 +9,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
-  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Search, Package, ExternalLink, Pencil, Trash2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -41,6 +37,8 @@ export const CategoryManager = ({ categories, isLoading }: Props) => {
   // Delete state
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteFilterType, setDeleteFilterType] = useState<string>("all");
+  const [deleteFilterValue, setDeleteFilterValue] = useState("");
 
   // Add category state
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -89,15 +87,25 @@ export const CategoryManager = ({ categories, isLoading }: Props) => {
     }
   };
 
+  const openDeleteDialog = (name: string) => {
+    setDeleteTarget(name);
+    setDeleteFilterType("all");
+    setDeleteFilterValue("");
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     setDeleteLoading(true);
     try {
-      const resp = await supabase.functions.invoke("bulk-update-categories", {
-        body: { action: "delete", oldValue: deleteTarget },
-      });
+      const body: any = { action: "delete", oldValue: deleteTarget };
+      if (deleteFilterType !== "all") {
+        body.filterType = deleteFilterType;
+        body.filterValue = deleteFilterValue.trim();
+      }
+      const resp = await supabase.functions.invoke("bulk-update-categories", { body });
       if (resp.error) throw resp.error;
-      toast.success(`"${deleteTarget}" verwijderd bij ${resp.data.productsUpdated} producten`);
+      const scope = deleteFilterType === "all" ? "alle" : "gefilterde";
+      toast.success(`"${deleteTarget}" verwijderd bij ${resp.data.productsUpdated} ${scope} producten`);
       queryClient.invalidateQueries({ queryKey: ["catalog-categories"] });
       setDeleteTarget(null);
     } catch (err: any) {
@@ -206,7 +214,7 @@ export const CategoryManager = ({ categories, isLoading }: Props) => {
                     size="sm"
                     className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
                     title="Verwijderen"
-                    onClick={() => setDeleteTarget(cat.name)}
+                    onClick={() => openDeleteDialog(cat.name)}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -367,24 +375,83 @@ export const CategoryManager = ({ categories, isLoading }: Props) => {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation */}
-      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Categorie verwijderen?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Weet je zeker dat je "{deleteTarget}" wilt verwijderen bij alle producten?
-              Dit kan niet ongedaan worden gemaakt.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Annuleren</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} disabled={deleteLoading}>
-              {deleteLoading ? "Bezig..." : "Verwijderen bij alle producten"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Delete Confirmation with Filters */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Categorie verwijderen</DialogTitle>
+            <DialogDescription>
+              Verwijder "{deleteTarget}" bij producten. Kies optioneel een filter om het alleen bij specifieke producten te doen.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Verwijderen bij</Label>
+              <Select value={deleteFilterType} onValueChange={(v) => { setDeleteFilterType(v); setDeleteFilterValue(""); }}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle producten met deze categorie</SelectItem>
+                  <SelectItem value="brand">Producten van een merk</SelectItem>
+                  <SelectItem value="search">Zoek op titel / SKU</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {deleteFilterType === "brand" && (
+              <div className="space-y-1">
+                <Label className="text-sm font-medium">Merk</Label>
+                <Select value={deleteFilterValue} onValueChange={setDeleteFilterValue}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Kies merk..." />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-60">
+                    {brands?.map((brand) => (
+                      <SelectItem key={brand.id} value={brand.id}>
+                        {brand.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {deleteFilterType === "search" && (
+              <div className="space-y-1">
+                <Label className="text-sm font-medium">Zoekterm</Label>
+                <Input
+                  value={deleteFilterValue}
+                  onChange={(e) => setDeleteFilterValue(e.target.value)}
+                  placeholder="Zoek op titel of SKU..."
+                />
+              </div>
+            )}
+
+            <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium text-destructive">"{deleteTarget}"</span> wordt verwijderd bij:{" "}
+                {deleteFilterType === "all" && "alle producten die deze categorie hebben"}
+                {deleteFilterType === "brand" && `producten van merk "${brands?.find(b => b.id === deleteFilterValue)?.name ?? "..."}"`}
+                {deleteFilterType === "search" && `producten die "${deleteFilterValue}" bevatten in titel of SKU`}
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Annuleren</Button>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={
+                deleteLoading ||
+                ((deleteFilterType === "brand" || deleteFilterType === "search") && !deleteFilterValue.trim())
+              }
+            >
+              {deleteLoading ? "Bezig..." : "Verwijderen"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
