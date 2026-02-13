@@ -146,7 +146,8 @@ const Validation = () => {
             id, sku, title, images, webshop_text, meta_title, meta_description, brand_id, tags, product_type, attributes, categories,
             brands(id, name),
             product_prices(*),
-            variants(id, size_label, ean, stock_totals(*))
+            variants(id, size_label, ean, stock_totals(*)),
+            product_ai_content(ai_meta_title, ai_meta_description, ai_short_description, ai_long_description, status)
           `)
           .eq("tenant_id", selectedTenant)
           .range(offset, offset + batchSize - 1);
@@ -204,9 +205,13 @@ const Validation = () => {
       const price = Number(p.product_prices?.regular || 0);
       if (price === 0) zeroPrice.push(p.id);
 
-      if (!p.webshop_text?.trim()) noDescription.push(p.id);
-      if (!p.meta_title?.trim()) noMetaTitle.push(p.id);
-      if (!p.meta_description?.trim()) noMetaDescription.push(p.id);
+      // Check AI content availability (approved AI content counts as filled)
+      const ai = p.product_ai_content;
+      const hasApprovedAi = ai && ai.status === 'approved';
+
+      if (!p.webshop_text?.trim() && !(hasApprovedAi && ai.ai_long_description?.trim())) noDescription.push(p.id);
+      if (!p.meta_title?.trim() && !(hasApprovedAi && ai.ai_meta_title?.trim())) noMetaTitle.push(p.id);
+      if (!p.meta_description?.trim() && !(hasApprovedAi && ai.ai_meta_description?.trim())) noMetaDescription.push(p.id);
       if (!p.brands?.name) noBrand.push(p.id);
 
       const attrs = p.attributes as Record<string, any> | null;
