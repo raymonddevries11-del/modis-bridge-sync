@@ -54,6 +54,9 @@ const VALIDATION_FILTERS: Record<string, { label: string; fn: (p: any) => boolea
   "no-brand": { label: "Geen merk", fn: (p) => !p.brands?.name },
   "no-variants": { label: "Geen varianten", fn: (p) => p.product_type !== "simple" && (!p.variants || p.variants.length === 0) },
   "no-stock": { label: "Geen voorraad", fn: (p) => !p.variants?.some((v: any) => v.stock_totals?.qty > 0) },
+  "no-attributes": { label: "Weinig attributen", fn: (p) => { const a = p.attributes as Record<string, any> | null; return !a || Object.keys(a).length < 3; } },
+  "no-categories": { label: "Geen categorieën", fn: (p) => !Array.isArray(p.categories) || p.categories.length === 0 },
+  "missing-ean": { label: "Ontbrekende EAN", fn: (p) => p.variants?.length > 0 && !p.variants.every((v: any) => v.ean && v.ean !== "0" && v.ean !== "") },
 };
 
 const Products = () => {

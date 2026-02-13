@@ -27,6 +27,9 @@ import {
   BarChart3,
   Sparkles,
   Wand2,
+  Settings2,
+  FolderOpen,
+  Barcode,
 } from "lucide-react";
 import { calculateCompleteness } from "@/lib/completeness";
 
@@ -139,10 +142,10 @@ const Validation = () => {
         const { data, error } = await supabase
           .from("products")
           .select(`
-            id, sku, title, images, webshop_text, meta_title, meta_description, brand_id, tags, product_type,
+            id, sku, title, images, webshop_text, meta_title, meta_description, brand_id, tags, product_type, attributes, categories,
             brands(id, name),
             product_prices(*),
-            variants(id, size_label, stock_totals(*))
+            variants(id, size_label, ean, stock_totals(*))
           `)
           .eq("tenant_id", selectedTenant)
           .range(offset, offset + batchSize - 1);
@@ -187,6 +190,9 @@ const Validation = () => {
     const noVariants: string[] = [];
     const noStock: string[] = [];
     const unmappedCategory: string[] = [];
+    const noAttributes: string[] = [];
+    const noCategories: string[] = [];
+    const missingEan: string[] = [];
 
     for (const p of products) {
       const imgs = Array.isArray(p.images) ? p.images : [];
@@ -200,11 +206,25 @@ const Validation = () => {
       if (!p.meta_description?.trim()) noMetaDescription.push(p.id);
       if (!p.brands?.name) noBrand.push(p.id);
 
-      const variants = p.variants || [];
-      if (variants.length === 0 && (p as any).product_type !== "simple") noVariants.push(p.id);
+      const attrs = p.attributes as Record<string, any> | null;
+      const attrCount = attrs ? Object.keys(attrs).length : 0;
+      if (attrCount < 3) noAttributes.push(p.id);
 
-      const hasStock = variants.some((v: any) => v.stock_totals?.qty > 0);
+      const cats = Array.isArray(p.categories) ? p.categories : [];
+      if (cats.length === 0) noCategories.push(p.id);
+
+      const variants = p.variants || [];
+      const isSimple = (p as any).product_type === "simple";
+      if (variants.length === 0 && !isSimple) noVariants.push(p.id);
+
+      const hasStock = isSimple || variants.some((v: any) => v.stock_totals?.qty > 0);
       if (!hasStock) noStock.push(p.id);
+
+      // Check if any variant is missing EAN
+      if (variants.length > 0) {
+        const allHaveEan = variants.every((v: any) => v.ean && v.ean !== "0" && v.ean !== "");
+        if (!allHaveEan) missingEan.push(p.id);
+      }
 
       const groupId = (p as any).article_group?.id;
       if (groupId && !mappedGroupIds.has(groupId)) {
@@ -276,6 +296,26 @@ const Validation = () => {
         productIds: noBrand,
       },
       {
+        id: "no-attributes",
+        label: "Weinig attributen",
+        description: "Producten met minder dan 3 attributen missen belangrijke specificaties.",
+        icon: Settings2,
+        severity: "warning",
+        count: noAttributes.length,
+        total,
+        productIds: noAttributes,
+      },
+      {
+        id: "no-categories",
+        label: "Geen categorieën",
+        description: "Producten zonder categorieën zijn moeilijk vindbaar.",
+        icon: FolderOpen,
+        severity: "warning",
+        count: noCategories.length,
+        total,
+        productIds: noCategories,
+      },
+      {
         id: "no-variants",
         label: "Geen varianten",
         description: "Producten zonder varianten kunnen niet besteld worden.",
@@ -284,6 +324,16 @@ const Validation = () => {
         count: noVariants.length,
         total,
         productIds: noVariants,
+      },
+      {
+        id: "missing-ean",
+        label: "Ontbrekende EAN",
+        description: "Varianten zonder EAN code — vereist voor Google Shopping.",
+        icon: Barcode,
+        severity: "warning",
+        count: missingEan.length,
+        total,
+        productIds: missingEan,
       },
       {
         id: "no-stock",
