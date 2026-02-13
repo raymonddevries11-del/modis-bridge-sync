@@ -289,14 +289,25 @@ serve(async (req) => {
           const ean = maat.querySelector('ean-barcode')?.textContent || null;
           const active = maat.querySelector('maat-actief')?.textContent === '1';
           const allowBackorder = maat.querySelector('GIERMAN backorder-toestaan')?.textContent !== 'no';
+          
+          // Extract size_type from XML (maat-type element or attribute), default to 'regular'
+          const validSizeTypes = ['regular', 'petite', 'plus', 'tall', 'big', 'maternity'];
+          const rawSizeType = (maat.querySelector('maat-type')?.textContent || maat.getAttribute('type') || '').trim().toLowerCase();
+          const sizeType = validSizeTypes.includes(rawSizeType) ? rawSizeType : 'regular';
 
           // Check if variant exists to detect changes
           const { data: existingVariant } = await supabase
             .from('variants')
-            .select('id, ean, active, allow_backorder')
+            .select('id, ean, active, allow_backorder, size_type')
             .eq('product_id', product.id)
             .eq('maat_id', maatId)
             .maybeSingle();
+
+          // Only update size_type from XML if it's explicitly set (not default fallback)
+          // This preserves manually set size_type values from the UI
+          const effectiveSizeType = rawSizeType && validSizeTypes.includes(rawSizeType)
+            ? rawSizeType
+            : (existingVariant?.size_type || 'regular');
 
           // Upsert Variant
           const { data: variant, error: variantError } = await supabase
@@ -309,6 +320,7 @@ serve(async (req) => {
               ean: ean,
               active: active,
               allow_backorder: allowBackorder,
+              size_type: effectiveSizeType,
             }, { onConflict: 'product_id,maat_id' })
             .select()
             .single();
@@ -320,11 +332,12 @@ serve(async (req) => {
 
           existingVariantIds.push(variant.id);
 
-          // Track if variant attributes changed (EAN, active status)
+          // Track if variant attributes changed (EAN, active status, size_type)
           if (!existingVariant || 
               existingVariant.ean !== ean || 
               existingVariant.active !== active ||
-              existingVariant.allow_backorder !== allowBackorder) {
+              existingVariant.allow_backorder !== allowBackorder ||
+              existingVariant.size_type !== effectiveSizeType) {
             changedVariantIds.add(variant.id);
           }
 
