@@ -22,6 +22,7 @@ interface ParentProduct {
 interface VariationRow {
   sku: string;
   parentSku: string;
+  shortMaatId: string;
   sizeLabel: string;
   stock: number;
   ean: string;
@@ -123,10 +124,13 @@ function parseAllRows(rows: string[][], headers: string[]) {
       });
     } else if (type === 'variation') {
       const maat = maatAlfaIdx >= 0 ? (row[maatAlfaIdx]?.trim() || '') : '';
+      // Extract short maat_id from full variation SKU (e.g. "109609003000-011390" -> "011390")
+      const shortMaatId = sku.includes('-') ? sku.split('-').pop()! : sku;
       variations.push({
         sku,
         parentSku: row[parentIdx]?.trim() || '',
-        sizeLabel: maat || sku,
+        shortMaatId,
+        sizeLabel: maat || shortMaatId,
         stock: parseInt(row[stockIdx] || '0') || 0,
         ean: eanIdx >= 0 ? (row[eanIdx]?.trim() || '') : '',
         regularPrice: parsePrice(row[regularPriceIdx] || ''),
@@ -203,13 +207,13 @@ Deno.serve(async (req) => {
     }
 
     // Pre-fetch existing variants
-    const varSkus = chunkVariations.map(v => v.sku);
+    const varSkus = chunkVariations.map(v => v.shortMaatId);
     const existingVariants = new Map<string, { id: string; product_id: string }>();
     for (let i = 0; i < varSkus.length; i += 200) {
       const batch = varSkus.slice(i, i + 200);
       const { data } = await supabase
         .from('variants').select('id, maat_id, product_id').in('maat_id', batch);
-      data?.forEach((v: any) => existingVariants.set(v.maat_id, v));
+      data?.forEach((v: any) => existingVariants.set(`${v.product_id}:${v.maat_id}`, v));
     }
 
     // Get/create brands
@@ -306,10 +310,11 @@ Deno.serve(async (req) => {
       const productId = skuToProductId.get(v.parentSku);
       if (!productId) continue;
 
-      const existing = existingVariants.get(v.sku);
+      const compositeKey = `${productId}:${v.shortMaatId}`;
+      const existing = existingVariants.get(compositeKey);
       const record = {
         product_id: productId,
-        maat_id: v.sku,
+        maat_id: v.shortMaatId,
         size_label: v.sizeLabel,
         ean: v.ean || null,
         active: true,
@@ -325,14 +330,18 @@ Deno.serve(async (req) => {
     }
 
     const skuToVariantId = new Map<string, string>();
-    existingVariants.forEach((v, sku) => skuToVariantId.set(sku, v.id));
+    existingVariants.forEach((v, compositeKey) => skuToVariantId.set(compositeKey, v.id));
 
     for (let i = 0; i < varInsert.length; i += BATCH) {
       const batch = varInsert.slice(i, i + BATCH);
       const { data: inserted, error } = await supabase
         .from('variants').insert(batch).select('id, maat_id');
       if (error) { console.error('Insert variants:', error.message); continue; }
-      inserted?.forEach((v: any) => skuToVariantId.set(v.maat_id, v.id));
+      inserted?.forEach((v: any) => {
+        // Find the product_id for this variant to build composite key
+        const rec = varInsert.find(vi => vi.maat_id === v.maat_id && vi.product_id);
+        if (rec) skuToVariantId.set(`${rec.product_id}:${v.maat_id}`, v.id);
+      });
       stats.variantsInserted += inserted?.length || 0;
     }
 
@@ -344,7 +353,10 @@ Deno.serve(async (req) => {
     // PHASE 4: Upsert stock
     const stockRecords: any[] = [];
     for (const v of chunkVariations) {
-      const variantId = skuToVariantId.get(v.sku);
+      const productId = skuToProductId.get(v.parentSku);
+      if (!productId) continue;
+      const compositeKey = `${productId}:${v.shortMaatId}`;
+      const variantId = skuToVariantId.get(compositeKey);
       if (!variantId) continue;
       stockRecords.push({ variant_id: variantId, qty: v.stock });
     }
