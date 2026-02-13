@@ -134,3 +134,6 @@ verify_jwt = false
 
 [functions.bulk-update-categories]
 verify_jwt = false
+
+[functions.bulk-add-category]
+verify_jwt = false
