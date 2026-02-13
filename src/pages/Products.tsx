@@ -33,7 +33,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles, FilterX, X, MoreVertical, ChevronDown, Layers, CheckSquare, Square } from "lucide-react";
+import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles, FilterX, X, MoreVertical, ChevronDown, Layers, CheckSquare, Square, Pencil } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -46,6 +46,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BulkActionToolbar } from "@/components/products/BulkActionToolbar";
+import { ProductCardInlineEditor } from "@/components/products/ProductCardInlineEditor";
 
 const VALIDATION_FILTERS: Record<string, { label: string; fn: (p: any) => boolean }> = {
   "missing-images": { label: "Geen afbeeldingen", fn: (p) => { const imgs = Array.isArray(p.images) ? p.images : []; return imgs.length === 0; } },
@@ -86,6 +87,7 @@ const Products = () => {
   const [pendingTagFile, setPendingTagFile] = useState<File | null>(null);
   const queryClient = useQueryClient();
   const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedProductIds(prev => {
@@ -1247,9 +1249,24 @@ const Products = () => {
               return (
                 <Card
                   key={product.id}
-                  className={`card-interactive cursor-pointer group relative ${selectedProductIds.has(product.id) ? "ring-2 ring-primary" : ""}`}
-                  onClick={() => navigate(`/products/${product.id}`)}
+                  className={`card-interactive group relative ${selectedProductIds.has(product.id) ? "ring-2 ring-primary" : ""} ${editingProductId === product.id ? "ring-2 ring-accent" : "cursor-pointer"}`}
+                  onClick={() => { if (editingProductId !== product.id) navigate(`/products/${product.id}`); }}
                 >
+                  {/* Edit button */}
+                  <div
+                    className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 w-7 p-0"
+                      title="Inline bewerken"
+                      onClick={() => setEditingProductId(editingProductId === product.id ? null : product.id)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <div
                     className="absolute top-3 left-3 z-10"
                     onClick={(e) => e.stopPropagation()}
@@ -1328,9 +1345,15 @@ const Products = () => {
                           <span className="badge-neutral text-[10px]">+{checks.filter(c => !c.passed).length - 3}</span>
                         )}
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
+                     )}
+                     {editingProductId === product.id && (
+                       <ProductCardInlineEditor
+                         product={product}
+                         onClose={() => setEditingProductId(null)}
+                       />
+                     )}
+                   </CardContent>
+                 </Card>
               );
             })}
           </div>
