@@ -40,9 +40,10 @@ const KNOWN_ATTRIBUTE_VALUES: Record<string, string[]> = {
 
 interface ProductAttributesTabProps {
   product: any;
+  section?: "attributes" | "categories";
 }
 
-export const ProductAttributesTab = ({ product }: ProductAttributesTabProps) => {
+export const ProductAttributesTab = ({ product, section = "attributes" }: ProductAttributesTabProps) => {
   const queryClient = useQueryClient();
   const attrs = (product.attributes as Record<string, any>) || {};
   const cats = Array.isArray(product.categories) ? (product.categories as string[]) : [];
@@ -109,10 +110,14 @@ export const ProductAttributesTab = ({ product }: ProductAttributesTabProps) => 
 
   const unusedAttributes = KNOWN_ATTRIBUTES.filter((a) => !(a in editedAttributes));
 
+  const attrHasChanges = JSON.stringify(editedAttributes) !== JSON.stringify(attrs);
+  const catHasChanges = JSON.stringify(editedCategories) !== JSON.stringify(cats);
+  const sectionHasChanges = section === "attributes" ? attrHasChanges : catHasChanges;
+
   return (
     <div className="space-y-6">
       {/* Save bar */}
-      {hasChanges && (
+      {sectionHasChanges && (
         <div className="flex items-center justify-between p-3 rounded-lg bg-primary/5 border border-primary/20">
           <span className="text-sm text-muted-foreground">Je hebt onopgeslagen wijzigingen</span>
           <Button size="sm" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
@@ -121,164 +126,163 @@ export const ProductAttributesTab = ({ product }: ProductAttributesTabProps) => 
         </div>
       )}
 
-      {/* Attributes */}
-      <Card className="card-elevated">
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Settings2 className="h-4 w-4 text-muted-foreground" />
-            Productattributen
-            <Badge variant="secondary" className="ml-auto text-[11px]">
-              {Object.keys(editedAttributes).length} attributen
-            </Badge>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Existing attributes */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {Object.entries(editedAttributes)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([key, value]) => (
-                <div key={key} className="flex items-center gap-2 group">
-                  <Label className="text-xs text-muted-foreground w-40 flex-shrink-0 truncate" title={key}>
-                    {key}
-                  </Label>
-                  {KNOWN_ATTRIBUTE_VALUES[key] ? (
-                    <Select value={String(value)} onValueChange={(v) => setAttr(key, v)}>
-                      <SelectTrigger className="h-8 text-sm flex-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {KNOWN_ATTRIBUTE_VALUES[key].map((opt) => (
-                          <SelectItem key={opt} value={opt}>{opt}</SelectItem>
-                        ))}
-                        {/* If current value not in list, show it too */}
-                        {!KNOWN_ATTRIBUTE_VALUES[key].includes(String(value)) && (
-                          <SelectItem value={String(value)}>{String(value)}</SelectItem>
-                        )}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Input
-                      className="h-8 text-sm flex-1"
-                      value={String(value)}
-                      onChange={(e) => setAttr(key, e.target.value)}
-                    />
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-                    onClick={() => removeAttr(key)}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
-          </div>
+      {section === "attributes" && (
+        <Card className="card-elevated">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Settings2 className="h-4 w-4 text-muted-foreground" />
+              Productattributen
+              <Badge variant="secondary" className="ml-auto text-[11px]">
+                {Object.keys(editedAttributes).length} attributen
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {Object.entries(editedAttributes)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([key, value]) => (
+                  <div key={key} className="flex items-center gap-2 group">
+                    <Label className="text-xs text-muted-foreground w-40 flex-shrink-0 truncate" title={key}>
+                      {key}
+                    </Label>
+                    {KNOWN_ATTRIBUTE_VALUES[key] ? (
+                      <Select value={String(value)} onValueChange={(v) => setAttr(key, v)}>
+                        <SelectTrigger className="h-8 text-sm flex-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {KNOWN_ATTRIBUTE_VALUES[key].map((opt) => (
+                            <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                          ))}
+                          {!KNOWN_ATTRIBUTE_VALUES[key].includes(String(value)) && (
+                            <SelectItem value={String(value)}>{String(value)}</SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        className="h-8 text-sm flex-1"
+                        value={String(value)}
+                        onChange={(e) => setAttr(key, e.target.value)}
+                      />
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                      onClick={() => removeAttr(key)}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+            </div>
 
-          {/* Add attribute */}
-          <div className="flex items-end gap-2 pt-2 border-t border-border/60">
-            {unusedAttributes.length > 0 ? (
+            <div className="flex items-end gap-2 pt-2 border-t border-border/60">
+              {unusedAttributes.length > 0 ? (
+                <div className="flex-1 space-y-1">
+                  <Label className="text-xs text-muted-foreground">Attribuut toevoegen</Label>
+                  <Select value={newAttrKey} onValueChange={(v) => setNewAttrKey(v)}>
+                    <SelectTrigger className="h-8 text-sm">
+                      <SelectValue placeholder="Kies attribuut..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {unusedAttributes.map((a) => (
+                        <SelectItem key={a} value={a}>{a}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <div className="flex-1 space-y-1">
+                  <Label className="text-xs text-muted-foreground">Nieuw attribuut</Label>
+                  <Input
+                    className="h-8 text-sm"
+                    placeholder="Attribuutnaam..."
+                    value={newAttrKey}
+                    onChange={(e) => setNewAttrKey(e.target.value)}
+                  />
+                </div>
+              )}
               <div className="flex-1 space-y-1">
-                <Label className="text-xs text-muted-foreground">Attribuut toevoegen</Label>
-                <Select value={newAttrKey} onValueChange={(v) => setNewAttrKey(v)}>
-                  <SelectTrigger className="h-8 text-sm">
-                    <SelectValue placeholder="Kies attribuut..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {unusedAttributes.map((a) => (
-                      <SelectItem key={a} value={a}>{a}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label className="text-xs text-muted-foreground">Waarde</Label>
+                {newAttrKey && KNOWN_ATTRIBUTE_VALUES[newAttrKey] ? (
+                  <Select value={newAttrValue} onValueChange={setNewAttrValue}>
+                    <SelectTrigger className="h-8 text-sm">
+                      <SelectValue placeholder="Kies waarde..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {KNOWN_ATTRIBUTE_VALUES[newAttrKey].map((opt) => (
+                        <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    className="h-8 text-sm"
+                    placeholder="Waarde..."
+                    value={newAttrValue}
+                    onChange={(e) => setNewAttrValue(e.target.value)}
+                  />
+                )}
+              </div>
+              <Button size="sm" variant="outline" className="h-8" onClick={addAttribute} disabled={!newAttrKey.trim()}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Toevoegen
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {section === "categories" && (
+        <Card className="card-elevated">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Tag className="h-4 w-4 text-muted-foreground" />
+              Productcategorieën
+              <Badge variant="secondary" className="ml-auto text-[11px]">
+                {editedCategories.length} categorieën
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {editedCategories.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {editedCategories.map((cat) => (
+                  <Badge key={cat} variant="secondary" className="pl-3 pr-1.5 py-1.5 text-sm gap-1.5">
+                    {cat}
+                    <button
+                      onClick={() => removeCategory(cat)}
+                      className="ml-1 rounded-full p-0.5 hover:bg-destructive/20 hover:text-destructive transition-colors"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
               </div>
             ) : (
+              <p className="text-sm text-muted-foreground">Geen categorieën toegewezen</p>
+            )}
+
+            <div className="flex items-end gap-2 pt-2 border-t border-border/60">
               <div className="flex-1 space-y-1">
-                <Label className="text-xs text-muted-foreground">Nieuw attribuut</Label>
+                <Label className="text-xs text-muted-foreground">Categorie toevoegen</Label>
                 <Input
                   className="h-8 text-sm"
-                  placeholder="Attribuutnaam..."
-                  value={newAttrKey}
-                  onChange={(e) => setNewAttrKey(e.target.value)}
+                  placeholder="Categorienaam..."
+                  value={newCategory}
+                  onChange={(e) => setNewCategory(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCategory(); } }}
                 />
               </div>
-            )}
-            <div className="flex-1 space-y-1">
-              <Label className="text-xs text-muted-foreground">Waarde</Label>
-              {newAttrKey && KNOWN_ATTRIBUTE_VALUES[newAttrKey] ? (
-                <Select value={newAttrValue} onValueChange={setNewAttrValue}>
-                  <SelectTrigger className="h-8 text-sm">
-                    <SelectValue placeholder="Kies waarde..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {KNOWN_ATTRIBUTE_VALUES[newAttrKey].map((opt) => (
-                      <SelectItem key={opt} value={opt}>{opt}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input
-                  className="h-8 text-sm"
-                  placeholder="Waarde..."
-                  value={newAttrValue}
-                  onChange={(e) => setNewAttrValue(e.target.value)}
-                />
-              )}
+              <Button size="sm" variant="outline" className="h-8" onClick={addCategory} disabled={!newCategory.trim()}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Toevoegen
+              </Button>
             </div>
-            <Button size="sm" variant="outline" className="h-8" onClick={addAttribute} disabled={!newAttrKey.trim()}>
-              <Plus className="h-3.5 w-3.5 mr-1" /> Toevoegen
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Categories */}
-      <Card className="card-elevated">
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Tag className="h-4 w-4 text-muted-foreground" />
-            Productcategorieën
-            <Badge variant="secondary" className="ml-auto text-[11px]">
-              {editedCategories.length} categorieën
-            </Badge>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {editedCategories.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {editedCategories.map((cat) => (
-                <Badge key={cat} variant="secondary" className="pl-3 pr-1.5 py-1.5 text-sm gap-1.5">
-                  {cat}
-                  <button
-                    onClick={() => removeCategory(cat)}
-                    className="ml-1 rounded-full p-0.5 hover:bg-destructive/20 hover:text-destructive transition-colors"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Geen categorieën toegewezen</p>
-          )}
-
-          <div className="flex items-end gap-2 pt-2 border-t border-border/60">
-            <div className="flex-1 space-y-1">
-              <Label className="text-xs text-muted-foreground">Categorie toevoegen</Label>
-              <Input
-                className="h-8 text-sm"
-                placeholder="Categorienaam..."
-                value={newCategory}
-                onChange={(e) => setNewCategory(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCategory(); } }}
-              />
-            </div>
-            <Button size="sm" variant="outline" className="h-8" onClick={addCategory} disabled={!newCategory.trim()}>
-              <Plus className="h-3.5 w-3.5 mr-1" /> Toevoegen
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 };

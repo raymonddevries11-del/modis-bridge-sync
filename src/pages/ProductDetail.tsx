@@ -342,6 +342,7 @@ const ProductDetail = () => {
             <TabsTrigger value="content">Content & SEO</TabsTrigger>
             <TabsTrigger value="ai" className="flex items-center gap-1"><Sparkles className="h-3 w-3" /> AI</TabsTrigger>
             <TabsTrigger value="attributes">Attributen</TabsTrigger>
+            <TabsTrigger value="categories">Categorieën</TabsTrigger>
             <TabsTrigger value="variants">Varianten ({variantCount})</TabsTrigger>
             <TabsTrigger value="images">Afbeeldingen ({imageCount})</TabsTrigger>
             <TabsTrigger value="channels">Channel Preview</TabsTrigger>
@@ -458,9 +459,14 @@ const ProductDetail = () => {
           {/* AI */}
           <TabsContent value="ai"><AiContentTab product={product} /></TabsContent>
 
-          {/* ATTRIBUTES & CATEGORIES */}
+          {/* ATTRIBUTES */}
           <TabsContent value="attributes">
-            <ProductAttributesTab product={product} />
+            <ProductAttributesTab product={product} section="attributes" />
+          </TabsContent>
+
+          {/* CATEGORIES */}
+          <TabsContent value="categories">
+            <ProductAttributesTab product={product} section="categories" />
           </TabsContent>
 
           {/* VARIANTS */}
