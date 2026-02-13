@@ -110,6 +110,19 @@ export const ProductAttributesTab = ({ product, section = "attributes" }: Produc
 
   const unusedAttributes = KNOWN_ATTRIBUTES.filter((a) => !(a in editedAttributes));
 
+  // Derived read-only attributes from related data
+  const color = product.color as Record<string, any> | null;
+  const variants = product.variants as any[] | null;
+  const maatValues = variants && variants.length > 0
+    ? [...new Set(variants.map((v: any) => v.size_label))].sort((a: string, b: string) => parseFloat(a) - parseFloat(b)).join(", ")
+    : (attrs.Maat as string) || "";
+
+  const derivedAttributes: { label: string; value: string }[] = [
+    { label: "Merk", value: product.brands?.name || "—" },
+    { label: "Kleur", value: color ? [color.label, color.filter].filter(Boolean).join(" / ") : "—" },
+    { label: "Maat (EU)", value: maatValues || "—" },
+  ];
+
   const attrHasChanges = JSON.stringify(editedAttributes) !== JSON.stringify(attrs);
   const catHasChanges = JSON.stringify(editedCategories) !== JSON.stringify(cats);
   const sectionHasChanges = section === "attributes" ? attrHasChanges : catHasChanges;
@@ -133,11 +146,23 @@ export const ProductAttributesTab = ({ product, section = "attributes" }: Produc
               <Settings2 className="h-4 w-4 text-muted-foreground" />
               Productattributen
               <Badge variant="secondary" className="ml-auto text-[11px]">
-                {Object.keys(editedAttributes).length} attributen
+                {Object.keys(editedAttributes).length + derivedAttributes.length} attributen
               </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Derived (read-only) attributes */}
+            {derivedAttributes.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pb-3 border-b border-border/60">
+                {derivedAttributes.map(({ label, value }) => (
+                  <div key={label} className="flex items-center gap-2">
+                    <Label className="text-xs text-muted-foreground w-40 flex-shrink-0">{label}</Label>
+                    <Input className="h-8 text-sm flex-1 bg-muted/50" value={value} disabled />
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {Object.entries(editedAttributes)
                 .sort(([a], [b]) => a.localeCompare(b))
