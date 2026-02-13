@@ -16,6 +16,7 @@ import ChannelWooCommerce from "./pages/ChannelWooCommerce";
 import Mappings from "./pages/Mappings";
 import ActivityPage from "./pages/ActivityPage";
 import Validation from "./pages/Validation";
+import CatalogData from "./pages/CatalogData";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -38,6 +39,7 @@ const App = () => (
           <Route path="/tenants" element={<ProtectedRoute><Tenants /></ProtectedRoute>} />
           <Route path="/activity" element={<ProtectedRoute><ActivityPage /></ProtectedRoute>} />
           <Route path="/validation" element={<ProtectedRoute><Validation /></ProtectedRoute>} />
+          <Route path="/catalog-data" element={<ProtectedRoute><CatalogData /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           {/* Legacy redirects */}
           <Route path="/google-feed" element={<Navigate to="/channels/google" replace />} />
