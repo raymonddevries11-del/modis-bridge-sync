@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
@@ -203,6 +204,7 @@ const ProductDetail = () => {
     mutationFn: async () => {
       if (!product || !edited) return;
       const updateFields: any = { title: edited.title, sku: edited.sku, tax_code: edited.tax_code, url_key: edited.url_key };
+      if (editedFields.product_type !== undefined) updateFields.product_type = editedFields.product_type;
       if (editedFields.brand_id !== undefined) updateFields.brand_id = editedFields.brand_id;
       const { error: pErr } = await supabase.from("products").update(updateFields).eq("id", product.id);
       if (pErr) throw pErr;
@@ -280,6 +282,7 @@ const ProductDetail = () => {
             <div className="flex flex-wrap items-center gap-2 mt-2">
               {totalStock > 0 ? <span className="badge-success">● {totalStock} op voorraad</span> : <span className="badge-error">● Niet op voorraad</span>}
               <span className="badge-info">{variantCount} varianten</span>
+              <Badge variant="outline" className="text-[11px]">{(product as any).product_type === "simple" ? "Simple" : "Variable"}</Badge>
               {imageCount > 0 ? <span className="badge-neutral">{imageCount} afbeeldingen</span> : <span className="badge-warning">Geen afbeeldingen</span>}
               {productTags.map((t) => <Badge key={t} variant="outline" className="text-[11px]">{t}</Badge>)}
             </div>
@@ -402,6 +405,18 @@ const ProductDetail = () => {
                   </Popover>
                 </div>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Leverancier</Label><Input value={product.suppliers?.name || "N/A"} disabled /></div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Product type</Label>
+                  <Select value={edited?.product_type || "variable"} onValueChange={(v) => setField("product_type", v)}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="variable">Variable (met maten)</SelectItem>
+                      <SelectItem value="simple">Simple (zonder maten)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Tax Code</Label><Input value={edited?.tax_code || ""} onChange={(e) => setField("tax_code", e.target.value)} /></div>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">URL Key</Label><Input value={edited?.url_key || ""} onChange={(e) => setField("url_key", e.target.value)} /></div>
               </CardContent>

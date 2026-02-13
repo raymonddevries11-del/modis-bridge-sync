@@ -52,7 +52,7 @@ const VALIDATION_FILTERS: Record<string, { label: string; fn: (p: any) => boolea
   "no-meta-title": { label: "Geen meta titel", fn: (p) => !p.meta_title?.trim() },
   "no-meta-description": { label: "Geen meta description", fn: (p) => !p.meta_description?.trim() },
   "no-brand": { label: "Geen merk", fn: (p) => !p.brands?.name },
-  "no-variants": { label: "Geen varianten", fn: (p) => !p.variants || p.variants.length === 0 },
+  "no-variants": { label: "Geen varianten", fn: (p) => p.product_type !== "simple" && (!p.variants || p.variants.length === 0) },
   "no-stock": { label: "Geen voorraad", fn: (p) => !p.variants?.some((v: any) => v.stock_totals?.qty > 0) },
 };
 

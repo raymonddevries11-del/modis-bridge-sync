@@ -139,7 +139,7 @@ const Validation = () => {
         const { data, error } = await supabase
           .from("products")
           .select(`
-            id, sku, title, images, webshop_text, meta_title, meta_description, brand_id, tags,
+            id, sku, title, images, webshop_text, meta_title, meta_description, brand_id, tags, product_type,
             brands(id, name),
             product_prices(*),
             variants(id, size_label, stock_totals(*))
@@ -201,7 +201,7 @@ const Validation = () => {
       if (!p.brands?.name) noBrand.push(p.id);
 
       const variants = p.variants || [];
-      if (variants.length === 0) noVariants.push(p.id);
+      if (variants.length === 0 && (p as any).product_type !== "simple") noVariants.push(p.id);
 
       const hasStock = variants.some((v: any) => v.stock_totals?.qty > 0);
       if (!hasStock) noStock.push(p.id);
