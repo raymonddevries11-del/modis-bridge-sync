@@ -425,7 +425,7 @@ const ProductDetail = () => {
               <CardHeader><CardTitle className="text-base">Prijzen</CardTitle></CardHeader>
               <CardContent className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Reguliere prijs (€)</Label><Input type="number" step="0.01" value={edited?.product_prices?.regular ?? ""} onChange={(e) => setPriceField("regular", e.target.value)} /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground"><div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Sale prijs (€)</Label><Input type="number" step="0.01" value={edited?.product_prices?.list ?? ""} onChange={(e) => setPriceField("list", e.target.value)} /></div></Label><Input type="number" step="0.01" value={edited?.product_prices?.list ?? ""} onChange={(e) => setPriceField("list", e.target.value)} /></div>
+                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Sale prijs (€)</Label><Input type="number" step="0.01" value={edited?.product_prices?.list ?? ""} onChange={(e) => setPriceField("list", e.target.value)} /></div>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Inkoopprijs (€)</Label><Input value={product.cost_price || "—"} disabled /></div>
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Korting (%)</Label><Input value={product.discount_percentage || "0"} disabled /></div>
               </CardContent>
