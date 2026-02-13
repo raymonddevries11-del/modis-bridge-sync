@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search, Tag, Layers, Package, ExternalLink } from "lucide-react";
 import { AttributeManager } from "@/components/catalog/AttributeManager";
+import { CategoryManager } from "@/components/catalog/CategoryManager";
 
 interface AttrInfo {
   name: string;
@@ -107,10 +108,6 @@ const CatalogData = () => {
     },
   });
 
-  const filteredCats = catData?.filter((c) =>
-    c.name.toLowerCase().includes(catSearch.toLowerCase())
-  );
-
   return (
     <Layout>
       <div className="space-y-6">
@@ -137,39 +134,8 @@ const CatalogData = () => {
             <AttributeManager usage={attrData} isLoading={attrLoading} />
           </TabsContent>
 
-          <TabsContent value="categories" className="mt-4 space-y-4">
-            <div className="relative max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Zoek categorie..."
-                value={catSearch}
-                onChange={(e) => setCatSearch(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-
-            {catLoading ? (
-              <p className="text-sm text-muted-foreground">Laden...</p>
-            ) : (
-              <div className="grid gap-1">
-                {filteredCats?.map((cat) => (
-                  <div
-                    key={cat.name}
-                    className="flex items-center justify-between px-4 py-2.5 bg-card border border-border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors"
-                    onClick={() => navigate(`/products?category=${encodeURIComponent(cat.name)}`)}
-                  >
-                    <span className="text-sm">{cat.name}</span>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-xs">
-                        <Package className="h-3 w-3 mr-1" />
-                        {cat.count}
-                      </Badge>
-                      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground/50" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+          <TabsContent value="categories" className="mt-4">
+            <CategoryManager categories={catData} isLoading={catLoading} />
           </TabsContent>
         </Tabs>
       </div>
