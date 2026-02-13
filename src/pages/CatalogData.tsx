@@ -12,6 +12,7 @@ import { AttributeManager } from "@/components/catalog/AttributeManager";
 interface AttrInfo {
   name: string;
   values: Set<string>;
+  valueCounts: Map<string, number>;
   count: number;
 }
 
@@ -43,7 +44,7 @@ const CatalogData = () => {
           for (const [key, val] of Object.entries(attrs)) {
             if (!key || key === "-") continue;
             if (!attrMap.has(key)) {
-              attrMap.set(key, { name: key, values: new Set(), count: 0 });
+              attrMap.set(key, { name: key, values: new Set(), valueCounts: new Map(), count: 0 });
             }
             const info = attrMap.get(key)!;
             info.count++;
@@ -51,7 +52,10 @@ const CatalogData = () => {
               // Split comma-separated values
               val.split(",").forEach((v: string) => {
                 const trimmed = v.trim();
-                if (trimmed) info.values.add(trimmed);
+                if (trimmed) {
+                  info.values.add(trimmed);
+                  info.valueCounts.set(trimmed, (info.valueCounts.get(trimmed) || 0) + 1);
+                }
               });
             }
           }

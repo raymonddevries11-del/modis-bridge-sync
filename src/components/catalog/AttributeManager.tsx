@@ -21,6 +21,7 @@ import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-p
 interface AttrUsage {
   name: string;
   values: Set<string>;
+  valueCounts: Map<string, number>;
   count: number;
 }
 
@@ -215,7 +216,14 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
     }
   }, [mergedAttrs, upsert]);
 
-  const renderValueBadge = (attrName: string, val: string, variant: "secondary" | "outline", isUndefined = false) => (
+  const getValueCount = (attrName: string, val: string): number => {
+    const attr = mergedAttrs.find((a) => a.name === attrName);
+    return attr?.usage?.valueCounts?.get(val) ?? 0;
+  };
+
+  const renderValueBadge = (attrName: string, val: string, variant: "secondary" | "outline", isUndefined = false) => {
+    const count = getValueCount(attrName, val);
+    return (
     <div key={val} className="group/val inline-flex items-center gap-0.5">
       <Badge
         variant={variant}
@@ -225,6 +233,7 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
         onClick={() => navigate(`/products?attr=${encodeURIComponent(attrName)}&attrVal=${encodeURIComponent(val)}`)}
       >
         {val}
+        {count > 0 && <span className="ml-1 text-[10px] text-muted-foreground">({count})</span>}
         {isUndefined && <span className="ml-1 text-[9px]">⚠</span>}
       </Badge>
       <div className="hidden group-hover/val:inline-flex items-center gap-0.5 ml-0.5">
@@ -248,7 +257,8 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
         </Button>
       </div>
     </div>
-  );
+    );
+  };
 
   const renderAttrRow = (attr: MergedAttr, index: number) => (
     <Collapsible
