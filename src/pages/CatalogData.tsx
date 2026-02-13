@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, ChevronRight, Search, Tag, Layers, Package } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, Tag, Layers, Package, ExternalLink } from "lucide-react";
 
 interface AttrInfo {
   name: string;
@@ -16,6 +17,7 @@ interface AttrInfo {
 }
 
 const CatalogData = () => {
+  const navigate = useNavigate();
   const [attrSearch, setAttrSearch] = useState("");
   const [catSearch, setCatSearch] = useState("");
   const [openAttrs, setOpenAttrs] = useState<Set<string>>(new Set());
@@ -174,9 +176,17 @@ const CatalogData = () => {
                       <Badge variant="secondary" className="text-xs">
                         {attr.values.size} waarden
                       </Badge>
-                      <Badge variant="outline" className="text-xs">
+                      <Badge
+                        variant="outline"
+                        className="text-xs cursor-pointer hover:bg-primary/10 transition-colors"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/products?attr=${encodeURIComponent(attr.name)}`);
+                        }}
+                      >
                         <Package className="h-3 w-3 mr-1" />
                         {attr.count} producten
+                        <ExternalLink className="h-3 w-3 ml-1 opacity-50" />
                       </Badge>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
@@ -185,7 +195,12 @@ const CatalogData = () => {
                           {Array.from(attr.values)
                             .sort((a, b) => a.localeCompare(b, "nl"))
                             .map((val) => (
-                              <Badge key={val} variant="outline" className="text-xs font-normal">
+                              <Badge
+                                key={val}
+                                variant="outline"
+                                className="text-xs font-normal cursor-pointer hover:bg-primary/10 transition-colors"
+                                onClick={() => navigate(`/products?attr=${encodeURIComponent(attr.name)}&attrVal=${encodeURIComponent(val)}`)}
+                              >
                                 {val}
                               </Badge>
                             ))}
@@ -216,13 +231,17 @@ const CatalogData = () => {
                 {filteredCats?.map((cat) => (
                   <div
                     key={cat.name}
-                    className="flex items-center justify-between px-4 py-2.5 bg-card border border-border rounded-lg"
+                    className="flex items-center justify-between px-4 py-2.5 bg-card border border-border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors"
+                    onClick={() => navigate(`/products?category=${encodeURIComponent(cat.name)}`)}
                   >
                     <span className="text-sm">{cat.name}</span>
-                    <Badge variant="outline" className="text-xs">
-                      <Package className="h-3 w-3 mr-1" />
-                      {cat.count}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-xs">
+                        <Package className="h-3 w-3 mr-1" />
+                        {cat.count}
+                      </Badge>
+                      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground/50" />
+                    </div>
                   </div>
                 ))}
               </div>
