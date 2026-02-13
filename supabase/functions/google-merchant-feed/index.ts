@@ -435,11 +435,20 @@ serve(async (req) => {
           }
           isFirstVariant = false;
 
-          // Exclude from personalized advertising if description contains health/comfort terms
-          const descLower = (description || '').toLowerCase();
-          const sensitiveTerms = ['comfort', 'orthop', 'pijn', 'steun', 'voetbed', 'diabete', 'reuma', 'therapeut', 'medisch', 'gezond'];
-          if (sensitiveTerms.some(term => descLower.includes(term))) {
+          // Exclude from personalized advertising if description/title contains health/comfort/medical terms
+          const textToCheck = `${(description || '')} ${optimizedTitle}`.toLowerCase();
+          const sensitiveTerms = [
+            'comfort', 'orthop', 'pijn', 'steun', 'voetbed', 'diabete', 'reuma',
+            'therapeut', 'medisch', 'gezond', 'artritis', 'hallux', 'hielspoor',
+            'platvoet', 'spreekvoet', 'klachten', 'verlichting', 'correctie',
+            'blessure', 'herstel', 'inlegzool', 'steunzool', 'probleem',
+            'sensitive', 'gevoelig', 'zwelling', 'oedeem', 'circulatie',
+            'rugpijn', 'kniepijn', 'gewricht', 'spataderen', 'compressie',
+            'preventie', 'behandeling', 'aandoening', 'syndroom',
+          ];
+          if (sensitiveTerms.some(term => textToCheck.includes(term))) {
             itemXml += `\n      <g:excluded_destination>Personalized_advertising</g:excluded_destination>`;
+            itemXml += `\n      <g:excluded_destination>Display_ads</g:excluded_destination>`;
           }
 
           // 8️⃣ Shipping - always filled, no empty nodes
