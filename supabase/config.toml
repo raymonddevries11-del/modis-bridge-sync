@@ -137,3 +137,6 @@ verify_jwt = false
 
 [functions.bulk-add-category]
 verify_jwt = false
+
+[functions.bulk-edit-products]
+verify_jwt = false

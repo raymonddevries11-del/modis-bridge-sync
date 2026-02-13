@@ -32,8 +32,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { useState, useEffect, useRef } from "react";
-import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles, FilterX, X, MoreVertical, ChevronDown, Layers } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Search, RefreshCw, Calendar, Image, Upload, FileSpreadsheet, AlertTriangle, Package, Tag, Sparkles, FilterX, X, MoreVertical, ChevronDown, Layers, CheckSquare, Square } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -44,6 +44,8 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { Checkbox } from "@/components/ui/checkbox";
+import { BulkActionToolbar } from "@/components/products/BulkActionToolbar";
 
 const VALIDATION_FILTERS: Record<string, { label: string; fn: (p: any) => boolean }> = {
   "missing-images": { label: "Geen afbeeldingen", fn: (p) => { const imgs = Array.isArray(p.images) ? p.images : []; return imgs.length === 0; } },
@@ -83,6 +85,15 @@ const Products = () => {
   const [tagName, setTagName] = useState("2025-assortiment");
   const [pendingTagFile, setPendingTagFile] = useState<File | null>(null);
   const queryClient = useQueryClient();
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedProductIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
 
   // Auto-select first active tenant
   const { data: tenants } = useQuery({
@@ -327,6 +338,25 @@ const Products = () => {
     },
     enabled: !!selectedTenant && (!hasClientFilter || validationMatchIds !== undefined),
   });
+
+  const toggleSelectAll = useCallback(() => {
+    if (!products) return;
+    const allIds = products.map((p: any) => p.id);
+    const allSelected = allIds.length > 0 && allIds.every((id: string) => selectedProductIds.has(id));
+    if (allSelected) {
+      setSelectedProductIds(prev => {
+        const next = new Set(prev);
+        allIds.forEach((id: string) => next.delete(id));
+        return next;
+      });
+    } else {
+      setSelectedProductIds(prev => {
+        const next = new Set(prev);
+        allIds.forEach((id: string) => next.add(id));
+        return next;
+      });
+    }
+  }, [products, selectedProductIds]);
 
   // Fetch AI titles for quick comparison
   const { data: aiTitlesMap } = useQuery({
@@ -1196,6 +1226,19 @@ const Products = () => {
             <p className="text-muted-foreground">Loading products...</p>
           </div>
         ) : products && products.length > 0 ? (
+          <>
+          {/* Select all toggle */}
+          <div className="flex items-center gap-2 mb-2">
+            <Checkbox
+              checked={products.length > 0 && products.every((p: any) => selectedProductIds.has(p.id))}
+              onCheckedChange={toggleSelectAll}
+              id="select-all"
+            />
+            <label htmlFor="select-all" className="text-xs text-muted-foreground cursor-pointer select-none">
+              Selecteer alle {products.length} op deze pagina
+              {selectedProductIds.size > 0 && ` (${selectedProductIds.size} totaal geselecteerd)`}
+            </label>
+          </div>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {products.map((product: any) => {
               const { score, checks } = calculateCompleteness(product);
@@ -1204,10 +1247,20 @@ const Products = () => {
               return (
                 <Card
                   key={product.id}
-                  className="card-interactive cursor-pointer group"
+                  className={`card-interactive cursor-pointer group relative ${selectedProductIds.has(product.id) ? "ring-2 ring-primary" : ""}`}
                   onClick={() => navigate(`/products/${product.id}`)}
                 >
-                  <CardHeader className="pb-3">
+                  <div
+                    className="absolute top-3 left-3 z-10"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Checkbox
+                      checked={selectedProductIds.has(product.id)}
+                      onCheckedChange={() => toggleSelect(product.id)}
+                      className="bg-background"
+                    />
+                  </div>
+                  <CardHeader className="pb-3 pl-10">
                     <div className="flex items-start gap-3">
                       <div className="h-12 w-12 rounded-lg border border-border bg-muted/50 flex items-center justify-center flex-shrink-0 overflow-hidden">
                         {imgCount > 0 ? (
@@ -1281,6 +1334,7 @@ const Products = () => {
               );
             })}
           </div>
+          </>
         ) : (
           <Card>
             <CardContent className="text-center py-12">
@@ -1353,6 +1407,10 @@ const Products = () => {
           </Pagination>
         )}
 
+        <BulkActionToolbar
+          selectedIds={Array.from(selectedProductIds)}
+          onClearSelection={() => setSelectedProductIds(new Set())}
+        />
       </div>
     </Layout>
   );
