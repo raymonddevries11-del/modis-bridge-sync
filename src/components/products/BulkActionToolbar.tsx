@@ -6,8 +6,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Tag, Layers, X, Plus, Minus, Pencil } from "lucide-react";
+import { Tag, Layers, X, Plus, Minus, Pencil, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
@@ -23,6 +27,7 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
   const queryClient = useQueryClient();
   const [dialogAction, setDialogAction] = useState<ActionType | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   // Form values
   const [categoryName, setCategoryName] = useState("");
@@ -80,7 +85,18 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
     setDialogAction(action);
   };
 
+  const CONFIRM_THRESHOLD = 500;
+
+  const handleExecuteClick = () => {
+    if (selectedIds.length > CONFIRM_THRESHOLD) {
+      setShowConfirm(true);
+    } else {
+      handleExecute();
+    }
+  };
+
   const handleExecute = async () => {
+    setShowConfirm(false);
     if (!dialogAction) return;
     setLoading(true);
     try {
@@ -259,7 +275,7 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogAction(null)}>Annuleren</Button>
             <Button
-              onClick={handleExecute}
+              onClick={handleExecuteClick}
               disabled={loading}
               variant={dialogAction === "remove_category" || dialogAction === "remove_tag" ? "destructive" : "default"}
             >
@@ -268,6 +284,27 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Confirmation for large bulk actions */}
+      <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Weet je het zeker?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Je staat op het punt een bulk actie uit te voeren op <strong>{selectedIds.length}</strong> producten. Dit kan niet ongedaan worden gemaakt.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuleren</AlertDialogCancel>
+            <AlertDialogAction onClick={handleExecute}>
+              Ja, doorgaan met {selectedIds.length} producten
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 };
