@@ -21,7 +21,7 @@ import { ProductAttributesTab } from "@/components/ProductAttributesTab";
 import { calculateCompleteness, scoreColor, scoreBg } from "@/lib/completeness";
 import { toast } from "sonner";
 import {
-  ArrowLeft, Save, Image as ImageIcon, RefreshCw, AlertCircle,
+  ArrowLeft, Save, Image as ImageIcon, RefreshCw, AlertCircle, AlertTriangle,
   Package, Sparkles, Rss, Send, ChevronRight, ChevronDown, CheckCircle2, XCircle,
   Plus,
 } from "lucide-react";
@@ -50,14 +50,23 @@ const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; ten
     updateStockMutation.mutate(n);
   };
 
+  const hasEan = variant.ean && variant.ean !== "0" && variant.ean !== "";
+
   return (
-    <div className="flex items-center justify-between py-3 border-b border-border/60 last:border-0">
+    <div className={`flex items-center justify-between py-3 border-b border-border/60 last:border-0 ${!hasEan ? "bg-destructive/5" : ""}`}>
       <div className="flex items-center gap-4">
         <span className="text-sm font-medium w-20">{variant.size_label}</span>
         {variant.maat_web && variant.maat_web !== variant.size_label && (
           <span className="text-xs text-muted-foreground">(Web: {variant.maat_web})</span>
         )}
-        <span className="text-xs font-mono text-muted-foreground">{variant.ean || "—"}</span>
+        {hasEan ? (
+          <span className="text-xs font-mono text-muted-foreground w-32">{variant.ean}</span>
+        ) : (
+          <span className="text-xs text-destructive font-medium w-32 flex items-center gap-1">
+            <AlertTriangle className="h-3 w-3" />
+            Geen EAN
+          </span>
+        )}
         <Badge variant={variant.active ? "secondary" : "outline"} className="text-[11px]">
           {variant.active ? "Actief" : "Inactief"}
         </Badge>
