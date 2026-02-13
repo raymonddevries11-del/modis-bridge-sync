@@ -368,10 +368,11 @@ serve(async (req) => {
             itemXml += `\n      <g:identifier_exists>false</g:identifier_exists>`;
           }
 
-          // Size + size system (EU)
+          // Size + size system (EU) + size type (regular)
           if (sizeLabel) {
             itemXml += `\n      <g:size>${escapeXml(sizeLabel)}</g:size>`;
             itemXml += `\n      <g:size_system>EU</g:size_system>`;
+            itemXml += `\n      <g:size_type>regular</g:size_type>`;
           }
 
           // Color: Google format with max 3 values separated by "/"
