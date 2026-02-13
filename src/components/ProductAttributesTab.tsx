@@ -9,34 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Save, Plus, X, Tag, Settings2 } from "lucide-react";
+import { useAttributeDefinitions, buildAttributeLookups } from "@/hooks/useAttributeDefinitions";
 
-const KNOWN_ATTRIBUTES = [
-  "Gender", "Wijdte", "Sluiting", "Bovenmateriaal", "Voering", "Binnenzool",
-  "Loopzool", "Hakhoogte", "Uitneembaar voetbed", "Waterdichtheid",
-  "Wandelschoentype", "Zoolstijfheid", "Kuitwijdte", "Stretch",
-  "Hallux Valgus", "Diabetici", "Reuma/Artrose", "Peesplaat/Hielspoor",
-];
-
-const KNOWN_ATTRIBUTE_VALUES: Record<string, string[]> = {
-  Gender: ["Dames", "Heren", "Unisex", "Kinderen", "Meisjes", "Jongens"],
-  Wijdte: ["NVT", "F", "G", "G.5", "H", "H.5", "K", "M"],
-  Sluiting: ["NVT", "Instap", "Gesp", "Veter", "Rits", "Klittenband", "Veter met 1 Rits", "Veter met 2 Ritsen"],
-  Bovenmateriaal: ["Leer", "Nubuck", "Suede", "Textiel", "Synthetisch", "Combimaterialen leer"],
-  Voering: ["Leer", "Textiel", "Synthetisch", "Onge voerd"],
-  Binnenzool: ["Leer", "Textiel", "Synthetisch"],
-  Loopzool: ["Rubber", "Leer", "Synthetisch", "Overige"],
-  Hakhoogte: ["NVT", "0-1 cm", "1-2 cm", "2-4 cm", "4-6 cm", "6+ cm"],
-  "Uitneembaar voetbed": ["NVT", "Hele zool", "Halve zool", "Ja"],
-  Waterdichtheid: ["NVT", "Waterafstotend", "Waterdicht", "GORE-TEX"],
-  Wandelschoentype: ["NVT", "Licht wandelen", "Dagwandeling", "Bergtocht"],
-  Zoolstijfheid: ["NVT", "Flex", "Half Flex", "Stijf"],
-  Kuitwijdte: ["NVT", "Normaal", "Wijd", "Extra wijd", "XL", "XXL"],
-  Stretch: ["NVT", "Ja", "Nee"],
-  "Hallux Valgus": ["NVT", "Ja"],
-  Diabetici: ["NVT", "Ja"],
-  "Reuma/Artrose": ["NVT", "Ja"],
-  "Peesplaat/Hielspoor": ["NVT", "Ja"],
-};
 
 interface ProductAttributesTabProps {
   product: any;
@@ -45,6 +19,8 @@ interface ProductAttributesTabProps {
 
 export const ProductAttributesTab = ({ product, section = "attributes" }: ProductAttributesTabProps) => {
   const queryClient = useQueryClient();
+  const { definitions } = useAttributeDefinitions();
+  const { names: KNOWN_ATTRIBUTES, valuesMap: KNOWN_ATTRIBUTE_VALUES } = buildAttributeLookups(definitions);
   const attrs = (product.attributes as Record<string, any>) || {};
   const cats = Array.isArray(product.categories) ? (product.categories as string[]) : [];
 
