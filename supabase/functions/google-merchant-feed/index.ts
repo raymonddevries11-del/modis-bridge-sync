@@ -18,6 +18,72 @@ function escapeXml(str: string): string {
 }
 
 /**
+ * Format color for Google Merchant: max 3 values separated by "/".
+ * Combines webshop + article colors for richer data.
+ * E.g. webshop="Meerkleur", article="Bruin-combi" → "Bruin"
+ * E.g. webshop="Zwart", article="Zwart-Combi" → "Zwart"
+ */
+function formatGoogleColor(color: any, attrKleur: string | null): string | null {
+  const invalidColors = ['nvt', 'n.v.t.', 'n/a', 'none', 'geen', '-', '', 'meerkleur'];
+  const invalidColorsStrict = ['nvt', 'n.v.t.', 'n/a', 'none', 'geen', '-', ''];
+
+  const webshop = (color?.webshop || '').trim();
+  const article = (color?.article || '').trim();
+  const label = (color?.label || color?.name || '').trim();
+  const attrColor = (attrKleur || '').trim();
+
+  // Extract color names from article field, keeping compound colors together
+  // E.g. "Donker Blauw" stays as one color, "Bruin-combi" → "Bruin"
+  const colorPrefixes = ['donker', 'licht', 'helder', 'warm', 'off', 'dark', 'light'];
+  const articleTokens = article
+    ? article.split(/[\-]+/).map(s => s.trim())
+        .map(s => s.replace(/\s*combi\s*/gi, '').trim()) // strip "combi" from within tokens
+        .filter(s => !invalidColorsStrict.includes(s.toLowerCase()) && s.length > 1)
+    : [];
+  
+  // Rejoin prefix+color tokens (e.g. ["Donker Blauw"] stays, not ["Donker", "Blauw"])
+  const articleParts: string[] = [];
+  for (const token of articleTokens) {
+    const words = token.split(/\s+/);
+    if (words.length >= 2 && colorPrefixes.includes(words[0].toLowerCase())) {
+      // Keep compound color as single value
+      articleParts.push(token);
+    } else {
+      articleParts.push(token);
+    }
+  }
+
+  // Build candidate list: prefer specific colors
+  const candidates: string[] = [];
+
+  // Primary: webshop color if valid (not "Meerkleur")
+  if (webshop && !invalidColors.includes(webshop.toLowerCase())) {
+    candidates.push(webshop);
+  }
+
+  // Add article-derived parts that differ from webshop (case-insensitive dedup)
+  for (const part of articleParts) {
+    const normalized = part.toLowerCase().replace(/\s+/g, '');
+    if (!candidates.some(c => c.toLowerCase().replace(/\s+/g, '') === normalized)) {
+      candidates.push(part.charAt(0).toUpperCase() + part.slice(1));
+    }
+  }
+
+  // Fallback: label or attribute color
+  if (candidates.length === 0) {
+    const fallback = label || attrColor;
+    if (fallback && !invalidColors.includes(fallback.toLowerCase())) {
+      candidates.push(fallback);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // Google allows max 3 colors separated by "/"
+  return candidates.slice(0, 3).join('/');
+}
+
+/**
  * Generate a WooCommerce-compatible slug from a product title.
  * Mimics WordPress sanitize_title: lowercase, replace spaces/special chars with hyphens, trim dashes.
  */
@@ -298,23 +364,18 @@ serve(async (req) => {
             itemXml += `\n      <g:size>${escapeXml(sizeLabel)}</g:size>`;
           }
 
-          // Color: enriched validation with multiple sources and clothing fallback
-          const invalidColors = ['nvt', 'n.v.t.', 'n/a', 'none', 'geen', '-', ''];
-          const rawColor = (
-            color?.webshop || color?.label || color?.name || color?.article
-            || (product.attributes as any)?.Kleur || ''
-          ).trim();
+          // Color: Google format with max 3 values separated by "/"
+          const attrKleur = (product.attributes as any)?.Kleur || null;
+          const formattedColor = formatGoogleColor(color, attrKleur);
           const isClothingCategory = effectiveCategory && /\b(Apparel|Kleding|Shoes|Schoenen|Footwear|Clothing|Accessories)\b/i.test(effectiveCategory);
-          const colorValue = (rawColor && !invalidColors.includes(rawColor.toLowerCase()))
-            ? rawColor
-            : (isClothingCategory ? 'Meerkleur' : null);
+          const colorValue = formattedColor || (isClothingCategory ? 'Meerkleur' : null);
           
           // Track color issues for changelog
-          if (!rawColor || invalidColors.includes(rawColor.toLowerCase())) {
+          if (!formattedColor) {
             colorIssues.push({
               sku: product.sku,
               title: product.title,
-              reason: !rawColor ? 'missing' : `invalid (${rawColor})`,
+              reason: !color ? 'missing' : `no valid color (webshop: ${color?.webshop || '-'}, article: ${color?.article || '-'})`,
             });
           }
           
