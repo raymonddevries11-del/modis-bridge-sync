@@ -46,23 +46,44 @@ Deno.serve(async (req) => {
     }
     console.log(`Pre-fetched ${productMap.size} products`);
 
-    // Pre-fetch all variants for this tenant (bulk lookup)
-    const variantMap = new Map<string, { id: string; product_id: string }>();
-    let varOffset = 0;
-    while (true) {
-      const { data: variants } = await supabase
-        .from('variants')
-        .select('id, maat_id, product_id')
-        .in('product_id', Array.from(new Set([...productMap.values()].map(p => p.id))))
-        .range(varOffset, varOffset + 999);
-
-      if (!variants || variants.length === 0) break;
-      for (const v of variants) {
-        // Map by "product_id:maat_id" for quick lookup
-        variantMap.set(`${v.product_id}:${v.maat_id}`, { id: v.id, product_id: v.product_id });
+    // Collect only the product IDs referenced in CSV (not all 2936)
+    const csvProductIds = new Set<string>();
+    const csvRows = parseCSV(csvContent);
+    for (const row of csvRows) {
+      const sku = row['SKU']?.trim();
+      if (!sku) continue;
+      const dashIndex = sku.indexOf('-');
+      if (dashIndex > 0) {
+        const parentSku = sku.substring(0, dashIndex);
+        const product = productMap.get(parentSku);
+        if (product) csvProductIds.add(product.id);
+      } else {
+        const product = productMap.get(sku);
+        if (product) csvProductIds.add(product.id);
       }
-      if (variants.length < 1000) break;
-      varOffset += 1000;
+    }
+    const relevantProductIds = Array.from(csvProductIds);
+    console.log(`Relevant product IDs for variant lookup: ${relevantProductIds.length}`);
+
+    // Pre-fetch variants only for relevant products (batched .in() queries)
+    const variantMap = new Map<string, { id: string; product_id: string }>();
+    for (let i = 0; i < relevantProductIds.length; i += 100) {
+      const batch = relevantProductIds.slice(i, i + 100);
+      let varOffset = 0;
+      while (true) {
+        const { data: variants } = await supabase
+          .from('variants')
+          .select('id, maat_id, product_id')
+          .in('product_id', batch)
+          .range(varOffset, varOffset + 999);
+
+        if (!variants || variants.length === 0) break;
+        for (const v of variants) {
+          variantMap.set(`${v.product_id}:${v.maat_id}`, { id: v.id, product_id: v.product_id });
+        }
+        if (variants.length < 1000) break;
+        varOffset += 1000;
+      }
     }
     console.log(`Pre-fetched ${variantMap.size} variants`);
 
@@ -73,7 +94,7 @@ Deno.serve(async (req) => {
       const { data: prices } = await supabase
         .from('product_prices')
         .select('product_id, regular, list')
-        .in('product_id', Array.from(new Set([...productMap.values()].map(p => p.id))))
+        .in('product_id', relevantProductIds)
         .range(priceOffset, priceOffset + 999);
 
       if (!prices || prices.length === 0) break;
