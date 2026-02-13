@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,11 +11,12 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ChevronDown, ChevronRight, Search, Plus, Pencil, Trash2, X, Package, ExternalLink, Replace } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, Plus, Pencil, Trash2, X, Package, ExternalLink, Replace, GripVertical } from "lucide-react";
 import { toast } from "sonner";
 import { type AttributeDefinition, useAttributeDefinitions } from "@/hooks/useAttributeDefinitions";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
+import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 
 interface AttrUsage {
   name: string;
@@ -26,6 +27,16 @@ interface AttrUsage {
 interface Props {
   usage: AttrUsage[] | undefined;
   isLoading: boolean;
+}
+
+interface MergedAttr {
+  name: string;
+  def: AttributeDefinition | null;
+  usage: AttrUsage | null;
+  productCount: number;
+  definedValues: string[];
+  usedValues: Set<string>;
+  sortOrder: number;
 }
 
 export const AttributeManager = ({ usage, isLoading }: Props) => {
@@ -60,7 +71,7 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
   };
 
   // Merge definitions with usage data
-  const mergedAttrs = (() => {
+  const mergedAttrs: MergedAttr[] = (() => {
     const usageMap = new Map((usage ?? []).map((u) => [u.name, u]));
     const defMap = new Map(definitions.map((d) => [d.name, d]));
     const allNames = new Set([...defMap.keys(), ...usageMap.keys()]);
@@ -77,6 +88,7 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
       .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
   })();
 
+  const isSearching = search.trim().length > 0;
   const filtered = mergedAttrs.filter((a) =>
     a.name.toLowerCase().includes(search.toLowerCase())
   );
@@ -143,7 +155,6 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
 
     setBulkLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
       const resp = await supabase.functions.invoke("bulk-update-attribute-values", {
         body: {
           action: bulkAction,
@@ -162,7 +173,6 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
           : `"${bulkOldValue}" verwijderd bij ${result.productsUpdated} producten`
       );
 
-      // Refresh data
       queryClient.invalidateQueries({ queryKey: ["catalog-attributes"] });
       queryClient.invalidateQueries({ queryKey: ["attribute-definitions"] });
       setBulkAction(null);
@@ -172,6 +182,38 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
       setBulkLoading(false);
     }
   };
+
+  const handleDragEnd = useCallback(async (result: DropResult) => {
+    if (!result.destination || result.source.index === result.destination.index) return;
+
+    const reordered = [...mergedAttrs];
+    const [moved] = reordered.splice(result.source.index, 1);
+    reordered.splice(result.destination.index, 0, moved);
+
+    // Batch update sort_order for all items that have a definition
+    const updates: Promise<void>[] = [];
+    for (let i = 0; i < reordered.length; i++) {
+      const attr = reordered[i];
+      const newOrder = i + 1;
+      if (attr.def) {
+        updates.push(
+          upsert({ id: attr.def.id, name: attr.name, allowed_values: attr.definedValues, sort_order: newOrder })
+        );
+      } else {
+        // Auto-create a definition for undefined attributes when they get dragged
+        updates.push(
+          upsert({ name: attr.name, allowed_values: [], sort_order: newOrder })
+        );
+      }
+    }
+
+    try {
+      await Promise.all(updates);
+      toast.success("Volgorde opgeslagen");
+    } catch {
+      toast.error("Fout bij opslaan volgorde");
+    }
+  }, [mergedAttrs, upsert]);
 
   const renderValueBadge = (attrName: string, val: string, variant: "secondary" | "outline", isUndefined = false) => (
     <div key={val} className="group/val inline-flex items-center gap-0.5">
@@ -208,6 +250,82 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
     </div>
   );
 
+  const renderAttrRow = (attr: MergedAttr, index: number) => (
+    <Collapsible
+      key={attr.name}
+      open={openAttrs.has(attr.name)}
+      onOpenChange={() => toggleAttr(attr.name)}
+    >
+      <CollapsibleTrigger className="flex items-center gap-3 w-full px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/50 transition-colors text-left">
+        {openAttrs.has(attr.name) ? (
+          <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+        )}
+        <span className="text-sm font-medium flex-1">{attr.name}</span>
+        {!attr.def && (
+          <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">
+            Niet gedefinieerd
+          </Badge>
+        )}
+        <Badge variant="secondary" className="text-xs">
+          {attr.definedValues.length > 0 ? attr.definedValues.length : attr.usedValues.size} waarden
+        </Badge>
+        <Badge
+          variant="outline"
+          className="text-xs cursor-pointer hover:bg-primary/10 transition-colors"
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(`/products?attr=${encodeURIComponent(attr.name)}`);
+          }}
+        >
+          <Package className="h-3 w-3 mr-1" />
+          {attr.productCount} producten
+          <ExternalLink className="h-3 w-3 ml-1 opacity-50" />
+        </Badge>
+        <div className="flex items-center gap-1 ml-1" onClick={(e) => e.stopPropagation()}>
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditDialog(attr.def, attr.name)}>
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+          {attr.def && (
+            <Button
+              variant="ghost" size="sm"
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+              onClick={() => setDeleteTarget(attr.def!)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="ml-7 mt-1 mb-2 px-4 py-3 bg-muted/30 rounded-lg border border-border/50">
+          <p className="text-[10px] text-muted-foreground mb-2 italic">Hover over een waarde voor bulk-acties (hernoemen / verwijderen bij alle producten)</p>
+          {attr.definedValues.length > 0 && (
+            <div className="mb-2">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Gedefinieerde waarden</span>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {attr.definedValues.map((val) => renderValueBadge(attr.name, val, "secondary"))}
+              </div>
+            </div>
+          )}
+          {attr.usedValues.size > 0 && (
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">In gebruik</span>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {Array.from(attr.usedValues)
+                  .sort((a, b) => a.localeCompare(b, "nl"))
+                  .map((val) =>
+                    renderValueBadge(attr.name, val, "outline", attr.definedValues.length > 0 && !attr.definedValues.includes(val))
+                  )}
+              </div>
+            </div>
+          )}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -227,95 +345,45 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
 
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Laden...</p>
-      ) : (
+      ) : isSearching ? (
+        // When searching, disable DnD — just render filtered list
         <div className="grid gap-2">
-          {filtered.map((attr) => (
-            <Collapsible
-              key={attr.name}
-              open={openAttrs.has(attr.name)}
-              onOpenChange={() => toggleAttr(attr.name)}
-            >
-              <CollapsibleTrigger className="flex items-center gap-3 w-full px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/50 transition-colors text-left">
-                {openAttrs.has(attr.name) ? (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                )}
-                <span className="text-sm font-medium flex-1">{attr.name}</span>
-                {!attr.def && (
-                  <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">
-                    Niet gedefinieerd
-                  </Badge>
-                )}
-                <Badge variant="secondary" className="text-xs">
-                  {attr.definedValues.length > 0 ? attr.definedValues.length : attr.usedValues.size} waarden
-                </Badge>
-                <Badge
-                  variant="outline"
-                  className="text-xs cursor-pointer hover:bg-primary/10 transition-colors"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    navigate(`/products?attr=${encodeURIComponent(attr.name)}`);
-                  }}
-                >
-                  <Package className="h-3 w-3 mr-1" />
-                  {attr.productCount} producten
-                  <ExternalLink className="h-3 w-3 ml-1 opacity-50" />
-                </Badge>
-                <div className="flex items-center gap-1 ml-1" onClick={(e) => e.stopPropagation()}>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0"
-                    onClick={() => openEditDialog(attr.def, attr.name)}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  {attr.def && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                      onClick={() => setDeleteTarget(attr.def!)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  )}
-                </div>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <div className="ml-7 mt-1 mb-2 px-4 py-3 bg-muted/30 rounded-lg border border-border/50">
-                  <p className="text-[10px] text-muted-foreground mb-2 italic">Hover over een waarde voor bulk-acties (hernoemen / verwijderen bij alle producten)</p>
-                  {attr.definedValues.length > 0 && (
-                    <div className="mb-2">
-                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Gedefinieerde waarden</span>
-                      <div className="flex flex-wrap gap-1.5 mt-1">
-                        {attr.definedValues.map((val) => renderValueBadge(attr.name, val, "secondary"))}
-                      </div>
-                    </div>
-                  )}
-                  {attr.usedValues.size > 0 && (
-                    <div>
-                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">In gebruik</span>
-                      <div className="flex flex-wrap gap-1.5 mt-1">
-                        {Array.from(attr.usedValues)
-                          .sort((a, b) => a.localeCompare(b, "nl"))
-                          .map((val) =>
-                            renderValueBadge(
-                              attr.name,
-                              val,
-                              "outline",
-                              attr.definedValues.length > 0 && !attr.definedValues.includes(val)
-                            )
-                          )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
-          ))}
+          {filtered.map((attr, i) => renderAttrRow(attr, i))}
         </div>
+      ) : (
+        // Normal mode: DnD enabled
+        <DragDropContext onDragEnd={handleDragEnd}>
+          <Droppable droppableId="attributes">
+            {(provided) => (
+              <div ref={provided.innerRef} {...provided.droppableProps} className="grid gap-2">
+                {mergedAttrs.map((attr, index) => (
+                  <Draggable key={attr.name} draggableId={attr.name} index={index}>
+                    {(provided, snapshot) => (
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.draggableProps}
+                        className={snapshot.isDragging ? "opacity-90 z-50" : ""}
+                      >
+                        <div className="flex items-center gap-0">
+                          <div
+                            {...provided.dragHandleProps}
+                            className="flex items-center justify-center w-6 h-10 cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-muted-foreground transition-colors flex-shrink-0"
+                          >
+                            <GripVertical className="h-4 w-4" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            {renderAttrRow(attr, index)}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </Draggable>
+                ))}
+                {provided.placeholder}
+              </div>
+            )}
+          </Droppable>
+        </DragDropContext>
       )}
 
       {/* Edit / Create Dialog */}
@@ -328,11 +396,7 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
           <div className="space-y-4">
             <div className="space-y-1">
               <label className="text-sm font-medium">Naam</label>
-              <Input
-                value={dialogName}
-                onChange={(e) => setDialogName(e.target.value)}
-                placeholder="Attribuutnaam..."
-              />
+              <Input value={dialogName} onChange={(e) => setDialogName(e.target.value)} placeholder="Attribuutnaam..." />
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">Waarden ({dialogValues.length})</label>
@@ -403,12 +467,7 @@ export const AttributeManager = ({ usage, isLoading }: Props) => {
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">Nieuwe waarde</label>
-              <Input
-                value={bulkNewValue}
-                onChange={(e) => setBulkNewValue(e.target.value)}
-                placeholder="Nieuwe waarde..."
-                autoFocus
-              />
+              <Input value={bulkNewValue} onChange={(e) => setBulkNewValue(e.target.value)} placeholder="Nieuwe waarde..." autoFocus />
             </div>
           </div>
           <DialogFooter>
