@@ -76,12 +76,16 @@ Deno.serve(async (req) => {
     for (const product of productsWithStorageImages) {
       const imgs = product.images as string[];
 
-      // Check if first image actually exists (quick HEAD check)
+      // Check if first image actually exists (GET with small range to verify actual image data)
       const firstImg = imgs[0];
       let firstImgExists = false;
       try {
-        const headResp = await fetch(firstImg, { method: "HEAD" });
-        firstImgExists = headResp.ok;
+        const checkResp = await fetch(firstImg, { headers: { Range: "bytes=0-3" } });
+        if (checkResp.ok || checkResp.status === 206) {
+          const body = await checkResp.text();
+          // If body contains JSON error, file doesn't exist
+          firstImgExists = !body.includes("statusCode") && !body.includes("error");
+        }
       } catch {
         firstImgExists = false;
       }
