@@ -56,9 +56,6 @@ const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; ten
     <div className={`flex items-center justify-between py-3 border-b border-border/60 last:border-0 ${!hasEan ? "bg-destructive/5" : ""}`}>
       <div className="flex items-center gap-4">
         <span className="text-sm font-medium w-20">{variant.size_label}</span>
-        {variant.maat_web && variant.maat_web !== variant.size_label && (
-          <span className="text-xs text-muted-foreground">(Web: {variant.maat_web})</span>
-        )}
         {hasEan ? (
           <span className="text-xs font-mono text-muted-foreground w-32">{variant.ean}</span>
         ) : (
