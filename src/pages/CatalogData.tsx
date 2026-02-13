@@ -3,12 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, ChevronRight, Search, Tag, Layers, Package, ExternalLink } from "lucide-react";
+import { Search, Tag, Layers, Package, ExternalLink } from "lucide-react";
+import { AttributeManager } from "@/components/catalog/AttributeManager";
 
 interface AttrInfo {
   name: string;
@@ -18,9 +17,7 @@ interface AttrInfo {
 
 const CatalogData = () => {
   const navigate = useNavigate();
-  const [attrSearch, setAttrSearch] = useState("");
   const [catSearch, setCatSearch] = useState("");
-  const [openAttrs, setOpenAttrs] = useState<Set<string>>(new Set());
 
   // Fetch all attributes with values
   const { data: attrData, isLoading: attrLoading } = useQuery({
@@ -106,19 +103,6 @@ const CatalogData = () => {
     },
   });
 
-  const toggleAttr = (name: string) => {
-    setOpenAttrs((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  };
-
-  const filteredAttrs = attrData?.filter((a) =>
-    a.name.toLowerCase().includes(attrSearch.toLowerCase())
-  );
-
   const filteredCats = catData?.filter((c) =>
     c.name.toLowerCase().includes(catSearch.toLowerCase())
   );
@@ -145,72 +129,8 @@ const CatalogData = () => {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="attributes" className="mt-4 space-y-4">
-            <div className="relative max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Zoek attribuut..."
-                value={attrSearch}
-                onChange={(e) => setAttrSearch(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-
-            {attrLoading ? (
-              <p className="text-sm text-muted-foreground">Laden...</p>
-            ) : (
-              <div className="grid gap-2">
-                {filteredAttrs?.map((attr) => (
-                  <Collapsible
-                    key={attr.name}
-                    open={openAttrs.has(attr.name)}
-                    onOpenChange={() => toggleAttr(attr.name)}
-                  >
-                    <CollapsibleTrigger className="flex items-center gap-3 w-full px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/50 transition-colors text-left">
-                      {openAttrs.has(attr.name) ? (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                      )}
-                      <span className="text-sm font-medium flex-1">{attr.name}</span>
-                      <Badge variant="secondary" className="text-xs">
-                        {attr.values.size} waarden
-                      </Badge>
-                      <Badge
-                        variant="outline"
-                        className="text-xs cursor-pointer hover:bg-primary/10 transition-colors"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/products?attr=${encodeURIComponent(attr.name)}`);
-                        }}
-                      >
-                        <Package className="h-3 w-3 mr-1" />
-                        {attr.count} producten
-                        <ExternalLink className="h-3 w-3 ml-1 opacity-50" />
-                      </Badge>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <div className="ml-7 mt-1 mb-2 px-4 py-3 bg-muted/30 rounded-lg border border-border/50">
-                        <div className="flex flex-wrap gap-1.5">
-                          {Array.from(attr.values)
-                            .sort((a, b) => a.localeCompare(b, "nl"))
-                            .map((val) => (
-                              <Badge
-                                key={val}
-                                variant="outline"
-                                className="text-xs font-normal cursor-pointer hover:bg-primary/10 transition-colors"
-                                onClick={() => navigate(`/products?attr=${encodeURIComponent(attr.name)}&attrVal=${encodeURIComponent(val)}`)}
-                              >
-                                {val}
-                              </Badge>
-                            ))}
-                        </div>
-                      </div>
-                    </CollapsibleContent>
-                  </Collapsible>
-                ))}
-              </div>
-            )}
+          <TabsContent value="attributes" className="mt-4">
+            <AttributeManager usage={attrData} isLoading={attrLoading} />
           </TabsContent>
 
           <TabsContent value="categories" className="mt-4 space-y-4">

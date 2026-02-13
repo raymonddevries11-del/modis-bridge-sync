@@ -38,6 +38,33 @@ export type Database = {
         }
         Relationships: []
       }
+      attribute_definitions: {
+        Row: {
+          allowed_values: string[]
+          created_at: string
+          id: string
+          name: string
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          allowed_values?: string[]
+          created_at?: string
+          id?: string
+          name: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          allowed_values?: string[]
+          created_at?: string
+          id?: string
+          name?: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
       attribute_mappings: {
         Row: {
           attribute_name: string
