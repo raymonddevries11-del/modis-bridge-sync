@@ -7,8 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Activity, Clock, CheckCircle2, AlertCircle, Trash2, RefreshCw, Filter } from "lucide-react";
-import { format } from "date-fns";
+import { Activity, Clock, CheckCircle2, AlertCircle, Trash2, RefreshCw, Filter, FileSpreadsheet, Package, TrendingUp, TrendingDown } from "lucide-react";
+import { format, formatDistanceToNow } from "date-fns";
+import { nl } from "date-fns/locale";
 import { useState } from "react";
 
 const ActivityPage = () => {
@@ -118,6 +119,35 @@ function JobsTab() {
 function ChangelogTab() {
   const [eventFilter, setEventFilter] = useState<string>("all");
 
+  const { data: importSummary } = useQuery({
+    queryKey: ["product-csv-import-summary"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("changelog")
+        .select("description, metadata, created_at")
+        .eq("event_type", "PRODUCT_CSV_IMPORT")
+        .order("created_at", { ascending: false })
+        .limit(10);
+      if (error) throw error;
+
+      const lastImport = data?.[0];
+      const totalImports = data?.length || 0;
+
+      let totalNew = 0, totalUpdated = 0, totalVariantsNew = 0, totalVariantsUpdated = 0;
+      for (const entry of data || []) {
+        const meta = entry.metadata as Record<string, any> | null;
+        if (meta) {
+          totalNew += meta.productsInserted || 0;
+          totalUpdated += meta.productsUpdated || 0;
+          totalVariantsNew += meta.variantsInserted || 0;
+          totalVariantsUpdated += meta.variantsUpdated || 0;
+        }
+      }
+
+      return { lastImport, totalImports, totalNew, totalUpdated, totalVariantsNew, totalVariantsUpdated };
+    },
+  });
+
   const { data: eventTypes = [] } = useQuery({
     queryKey: ["changelog-event-types"],
     queryFn: async () => {
@@ -158,6 +188,64 @@ function ChangelogTab() {
 
   return (
     <div className="space-y-4">
+      {/* CSV Import Summary Cards */}
+      {importSummary && importSummary.totalImports > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                <FileSpreadsheet className="h-4 w-4" />
+                <span className="text-xs font-medium uppercase tracking-wider">Laatste CSV Import</span>
+              </div>
+              <p className="text-sm font-medium">
+                {importSummary.lastImport
+                  ? formatDistanceToNow(new Date(importSummary.lastImport.created_at), { addSuffix: true, locale: nl })
+                  : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {importSummary.totalImports} imports totaal
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                <Package className="h-4 w-4" />
+                <span className="text-xs font-medium uppercase tracking-wider">Producten</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div>
+                  <span className="text-lg font-semibold text-primary">{importSummary.totalNew}</span>
+                  <span className="text-xs text-muted-foreground ml-1">nieuw</span>
+                </div>
+                <div>
+                  <span className="text-lg font-semibold text-accent-foreground">{importSummary.totalUpdated}</span>
+                  <span className="text-xs text-muted-foreground ml-1">bijgewerkt</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                <TrendingUp className="h-4 w-4" />
+                <span className="text-xs font-medium uppercase tracking-wider">Varianten Nieuw</span>
+              </div>
+              <span className="text-lg font-semibold text-primary">{importSummary.totalVariantsNew}</span>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                <RefreshCw className="h-4 w-4" />
+                <span className="text-xs font-medium uppercase tracking-wider">Varianten Bijgewerkt</span>
+              </div>
+              <span className="text-lg font-semibold text-accent-foreground">{importSummary.totalVariantsUpdated}</span>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <Filter className="h-4 w-4 text-muted-foreground" />
         <Select value={eventFilter} onValueChange={setEventFilter}>
@@ -185,12 +273,12 @@ function ChangelogTab() {
           {entries.map((entry) => (
             <div key={entry.id} className="flex items-start gap-3 px-4 py-3 rounded-lg border border-border bg-card">
               <div className="mt-0.5">
-                <div className="h-2 w-2 rounded-full bg-primary" />
+                <div className={`h-2 w-2 rounded-full ${entry.event_type === 'PRODUCT_CSV_IMPORT' ? 'bg-primary' : 'bg-muted-foreground'}`} />
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm">{entry.description}</p>
                 <div className="flex items-center gap-2 mt-1">
-                  <Badge variant="secondary" className="text-[11px]">{entry.event_type}</Badge>
+                  <Badge variant={entry.event_type === 'PRODUCT_CSV_IMPORT' ? 'default' : 'secondary'} className="text-[11px]">{entry.event_type}</Badge>
                   <span className="text-xs text-muted-foreground">
                     {format(new Date(entry.created_at), "dd MMM yyyy HH:mm")}
                   </span>
