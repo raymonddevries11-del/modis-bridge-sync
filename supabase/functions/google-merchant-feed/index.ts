@@ -471,20 +471,32 @@ serve(async (req) => {
       offset += batchSize;
     }
 
-    // Log color issues to changelog (deduplicated by SKU, max 50 samples)
+    // Log color issues to changelog (max once per 24h to avoid spam)
     if (colorIssues.length > 0) {
       const uniqueBysku = [...new Map(colorIssues.map(i => [i.sku, i])).values()];
       console.log(`Found ${uniqueBysku.length} products with color issues`);
-      await supabase.from('changelog').insert({
-        tenant_id: tenantId,
-        event_type: 'FEED_COLOR_ISSUES',
-        description: `${uniqueBysku.length} producten met ontbrekende of ongeldige kleur in Google Shopping feed`,
-        metadata: {
-          total_issues: uniqueBysku.length,
-          samples: uniqueBysku.slice(0, 50).map(i => ({ sku: i.sku, title: i.title, reason: i.reason })),
-          feed_generated_at: new Date().toISOString(),
-        },
-      });
+
+      // Check if we already logged within the last 24 hours
+      const { data: recentLog } = await supabase
+        .from('changelog')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('event_type', 'FEED_COLOR_ISSUES')
+        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+        .limit(1);
+
+      if (!recentLog || recentLog.length === 0) {
+        await supabase.from('changelog').insert({
+          tenant_id: tenantId,
+          event_type: 'FEED_COLOR_ISSUES',
+          description: `${uniqueBysku.length} producten met ontbrekende of ongeldige kleur in Google Shopping feed`,
+          metadata: {
+            total_issues: uniqueBysku.length,
+            samples: uniqueBysku.slice(0, 50).map(i => ({ sku: i.sku, title: i.title, reason: i.reason })),
+            feed_generated_at: new Date().toISOString(),
+          },
+        });
+      }
     }
 
     // Build RSS 2.0 feed
