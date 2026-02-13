@@ -18,14 +18,34 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const tenantSlug = body.tenant || 'kosterschoenmode';
     const offset = body.offset || 0;
-    const chunkSize = body.chunkSize || 500;
+    const chunkSize = body.chunkSize || 200;
+    const dryRun = body.dryRun || false;
 
     // Get tenant
     const { data: tenant } = await supabase
       .from('tenants').select('id').eq('slug', tenantSlug).single();
     if (!tenant) throw new Error('Tenant not found');
 
-    // Find products with modis/foto paths in this chunk
+    // Pre-fetch list of files in storage bucket (paginated, up to 10000)
+    const bucketFiles = new Set<string>();
+    let bucketOffset = 0;
+    while (true) {
+      const { data: files } = await supabase.storage
+        .from('product-images')
+        .list('', { limit: 1000, offset: bucketOffset });
+      if (!files || files.length === 0) break;
+      for (const f of files) {
+        bucketFiles.add(f.name);
+        // Also add lowercase version for case-insensitive matching
+        bucketFiles.add(f.name.toLowerCase());
+      }
+      if (files.length < 1000) break;
+      bucketOffset += 1000;
+    }
+
+    console.log(`Loaded ${bucketFiles.size / 2} files from storage bucket`);
+
+    // Get products in this chunk
     const { data: batch, error: batchError } = await supabase
       .from('products')
       .select('id, sku, images')
@@ -36,36 +56,112 @@ Deno.serve(async (req) => {
     if (batchError) throw batchError;
     if (!batch || batch.length === 0) {
       return new Response(JSON.stringify({
-        success: true, complete: true, fixedProducts: 0, message: 'No more products to process',
+        success: true, complete: true, fixedProducts: 0,
+        message: 'No more products to process',
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // Filter only products that still have modis/foto paths
-    const toFix = batch.filter(p => JSON.stringify(p.images || []).includes('modis/foto'));
+    const storageBase = `${supabaseUrl}/storage/v1/object/public/product-images/`;
 
-    console.log(`Chunk ${offset}: ${batch.length} fetched, ${toFix.length} need fixing`);
+    // Filter products that have external URLs (not pointing to our storage)
+    const toFix = batch.filter(p => {
+      const imgs = p.images as string[];
+      if (!Array.isArray(imgs) || imgs.length === 0) return false;
+      return imgs.some(url =>
+        typeof url === 'string' && !url.includes('supabase.co/storage')
+      );
+    });
+
+    console.log(`Chunk ${offset}: ${batch.length} fetched, ${toFix.length} have external URLs`);
 
     let fixedCount = 0;
-    const missingImages: string[] = [];
+    let convertedUrls = 0;
+    let notFoundInBucket = 0;
+    const notFoundSamples: string[] = [];
 
     for (const product of toFix) {
       const images = product.images as string[];
-      if (!images || images.length === 0) continue;
+      if (!Array.isArray(images)) continue;
 
+      let changed = false;
       const newImages: string[] = [];
+
       for (const img of images) {
-        const paths = img.includes(';') ? img.split(';') : [img];
-        for (const path of paths) {
-          const trimmed = path.trim();
-          if (!trimmed) continue;
-          const filename = trimmed.split('/').pop() || trimmed;
-          const storageUrl = `${supabaseUrl}/storage/v1/object/public/product-images/${filename}`;
-          newImages.push(storageUrl);
-          missingImages.push(filename);
+        if (typeof img !== 'string' || !img) continue;
+
+        // Already points to our storage — keep as-is
+        if (img.includes('supabase.co/storage')) {
+          newImages.push(img);
+          continue;
+        }
+
+        // Extract filename from URL or path
+        let filename = '';
+        if (img.includes('modis/foto')) {
+          // Old modis path: extract and split on semicolons
+          const paths = img.includes(';') ? img.split(';') : [img];
+          for (const path of paths) {
+            const trimmed = path.trim();
+            if (!trimmed) continue;
+            filename = trimmed.split('/').pop() || trimmed;
+            const found = bucketFiles.has(filename) || bucketFiles.has(filename.toLowerCase());
+            if (found) {
+              // Use the actual filename (preserve case from bucket)
+              const actualName = bucketFiles.has(filename) ? filename : filename;
+              newImages.push(`${storageBase}${actualName}`);
+              convertedUrls++;
+              changed = true;
+            } else {
+              // Keep original if not in bucket
+              newImages.push(img);
+              notFoundInBucket++;
+              if (notFoundSamples.length < 10) notFoundSamples.push(filename);
+            }
+          }
+          continue;
+        }
+
+        // External URL (kosterschoenmode.nl, etc): extract filename
+        try {
+          const url = new URL(img);
+          filename = url.pathname.split('/').pop() || '';
+        } catch {
+          filename = img.split('/').pop() || img;
+        }
+
+        if (!filename) {
+          newImages.push(img);
+          continue;
+        }
+
+        // Check if file exists in bucket (try original and uppercase JPG variants)
+        const variants = [
+          filename,
+          filename.replace('.jpg', '.JPG'),
+          filename.replace('.JPG', '.jpg'),
+          filename.replace('.jpeg', '.JPG'),
+          filename.replace('.png', '.PNG'),
+        ];
+
+        let found = false;
+        for (const variant of variants) {
+          if (bucketFiles.has(variant)) {
+            newImages.push(`${storageBase}${variant}`);
+            convertedUrls++;
+            changed = true;
+            found = true;
+            break;
+          }
+        }
+
+        if (!found) {
+          newImages.push(img); // Keep original
+          notFoundInBucket++;
+          if (notFoundSamples.length < 10) notFoundSamples.push(filename);
         }
       }
 
-      if (newImages.length > 0) {
+      if (changed && !dryRun) {
         const { error: updateError } = await supabase
           .from('products')
           .update({ images: newImages })
@@ -76,23 +172,28 @@ Deno.serve(async (req) => {
         } else {
           fixedCount++;
         }
+      } else if (changed) {
+        fixedCount++;
       }
     }
 
-    const uniqueImages = [...new Set(missingImages)];
     const nextOffset = offset + batch.length;
     const hasMore = batch.length === chunkSize;
 
     return new Response(
       JSON.stringify({
         success: true,
+        dryRun,
         complete: !hasMore,
         hasMore,
         nextOffset: hasMore ? nextOffset : null,
         fixedProducts: fixedCount,
+        convertedUrls,
+        notFoundInBucket,
+        notFoundSamples,
         totalInChunk: batch.length,
-        totalUniqueImages: uniqueImages.length,
-        missingImages: uniqueImages.slice(0, 20),
+        externalInChunk: toFix.length,
+        bucketFileCount: bucketFiles.size / 2,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
