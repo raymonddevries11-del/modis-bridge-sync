@@ -1,0 +1,259 @@
+name: SFTP Product CSV Import
+
+on:
+  schedule:
+    # Runs daily at 01:00
+    - cron: '0 1 * * *'
+  workflow_dispatch: # Allow manual trigger via Actions tab
+
+jobs:
+  sync-product-csv:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install ssh2-sftp-client node-fetch
+
+      - name: Sync Product CSV Files
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          node << 'EOF'
+          const SftpClient = require('ssh2-sftp-client');
+          const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+
+          async function moveFile(sftp, from, to) {
+            const exists = await sftp.exists(to);
+            if (exists) {
+              try { await sftp.delete(to); } catch (e) { console.log(`Could not delete existing ${to}: ${e.message}`); }
+            }
+            try {
+              await sftp.rename(from, to);
+            } catch (renameError) {
+              console.log(`Rename failed (${renameError.message}), trying copy+delete...`);
+              const content = await sftp.get(from);
+              await sftp.put(content, to);
+              await sftp.delete(from);
+            }
+          }
+
+          async function syncProductCSV() {
+            const sftp = new SftpClient();
+
+            try {
+              console.log('=== SFTP Product CSV Import ===');
+
+              // Get active tenants
+              const tenantsResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/tenants?active=eq.true&select=id,name,slug`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                  }
+                }
+              );
+
+              const tenants = await tenantsResponse.json();
+              console.log(`✓ Found ${tenants.length} active tenants`);
+
+              // Get tenant configs
+              const configsResponse = await fetch(
+                `${process.env.SUPABASE_URL}/rest/v1/tenant_config?select=*`,
+                {
+                  headers: {
+                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                  }
+                }
+              );
+
+              const configs = await configsResponse.json();
+              const configMap = {};
+              for (const config of configs) {
+                configMap[config.tenant_id] = config;
+              }
+
+              // Connect to SFTP
+              await sftp.connect({
+                host: process.env.SFTP_HOST,
+                port: parseInt(process.env.SFTP_PORT || '22'),
+                username: process.env.SFTP_USERNAME,
+                privateKey: Buffer.from(process.env.SFTP_PRIVATE_KEY, 'utf-8'),
+                passphrase: process.env.SFTP_PASSPHRASE || undefined,
+                readyTimeout: 30000,
+              });
+              console.log('✓ Connected to SFTP');
+
+              for (const tenant of tenants) {
+                const tenantConfig = configMap[tenant.id];
+                if (!tenantConfig?.sftp_inbound_path) continue;
+
+                console.log(`\n=== Processing tenant: ${tenant.name} (${tenant.slug}) ===`);
+
+                const basePath = tenantConfig.sftp_inbound_path;
+                const processingPath = `${basePath}/processing`;
+                const archivePath = `${basePath}/archive`;
+                const errorPath = `${basePath}/error`;
+
+                // Ensure directories exist
+                for (const dir of [processingPath, archivePath, errorPath]) {
+                  await sftp.mkdir(dir, true).catch(() => {});
+                }
+
+                // List product-totaal CSV files
+                const files = await sftp.list(basePath);
+                const productCsvFiles = files.filter(f =>
+                  f.type === '-' &&
+                  f.name.toLowerCase().startsWith('product-totaal') &&
+                  f.name.toLowerCase().endsWith('.csv')
+                );
+
+                console.log(`Found ${productCsvFiles.length} product-totaal CSV files`);
+
+                for (const file of productCsvFiles) {
+                  const fileName = file.name;
+                  const readyFilePath = `${basePath}/${fileName}`;
+                  const processingFilePath = `${processingPath}/${fileName}`;
+                  const archiveFilePath = `${archivePath}/${fileName}`;
+                  const errorFilePath = `${errorPath}/${fileName}`;
+
+                  try {
+                    console.log(`Processing: ${fileName}`);
+
+                    // Move to processing
+                    await moveFile(sftp, readyFilePath, processingFilePath);
+
+                    // Download CSV content
+                    const csvBuffer = await sftp.get(processingFilePath);
+                    const csvString = csvBuffer.toString('utf-8');
+                    console.log(`Downloaded ${fileName}: ${csvString.length} bytes`);
+
+                    // Upload to Supabase Storage
+                    const storagePath = `import/${fileName}`;
+                    const uploadResponse = await fetch(
+                      `${process.env.SUPABASE_URL}/storage/v1/object/order-exports/${storagePath}`,
+                      {
+                        method: 'POST',
+                        headers: {
+                          'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                          'Content-Type': 'text/csv',
+                          'x-upsert': 'true',
+                        },
+                        body: csvString,
+                      }
+                    );
+
+                    if (!uploadResponse.ok) {
+                      const errText = await uploadResponse.text();
+                      throw new Error(`Storage upload failed: ${uploadResponse.status} ${errText}`);
+                    }
+                    console.log(`✓ Uploaded to storage: ${storagePath}`);
+
+                    // Call import-modis-csv in chunks
+                    let offset = 0;
+                    let hasMore = true;
+                    let totalStats = { productsInserted: 0, productsUpdated: 0, variantsInserted: 0, variantsUpdated: 0 };
+
+                    while (hasMore) {
+                      console.log(`  Chunk offset=${offset}...`);
+                      const response = await fetch(
+                        `${process.env.SUPABASE_URL}/functions/v1/import-modis-csv`,
+                        {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                          },
+                          body: JSON.stringify({
+                            tenant: tenant.slug,
+                            storagePath: storagePath,
+                            mode: 'upsert',
+                            offset: offset,
+                            chunkSize: 50,
+                          }),
+                        }
+                      );
+
+                      if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`import-modis-csv failed at offset ${offset}: ${response.status} ${errorText}`);
+                      }
+
+                      const result = await response.json();
+                      console.log(`  ✓ Chunk done: +${result.productsInserted || 0} new, +${result.productsUpdated || 0} updated`);
+
+                      totalStats.productsInserted += result.productsInserted || 0;
+                      totalStats.productsUpdated += result.productsUpdated || 0;
+                      totalStats.variantsInserted += result.variantsInserted || 0;
+                      totalStats.variantsUpdated += result.variantsUpdated || 0;
+
+                      hasMore = result.hasMore === true;
+                      offset = result.nextOffset || (offset + 50);
+                    }
+
+                    console.log(`✓ Import complete for ${fileName}: ${JSON.stringify(totalStats)}`);
+
+                    // Log to changelog
+                    await fetch(
+                      `${process.env.SUPABASE_URL}/rest/v1/changelog`,
+                      {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                          'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                          'Prefer': 'return=minimal'
+                        },
+                        body: JSON.stringify({
+                          tenant_id: tenant.id,
+                          event_type: 'PRODUCT_CSV_IMPORT',
+                          description: `Product CSV ${fileName} geïmporteerd: ${totalStats.productsInserted} nieuw, ${totalStats.productsUpdated} bijgewerkt, ${totalStats.variantsInserted} varianten nieuw, ${totalStats.variantsUpdated} varianten bijgewerkt`,
+                          metadata: { filename: fileName, ...totalStats }
+                        })
+                      }
+                    );
+
+                    // Archive
+                    try {
+                      await moveFile(sftp, processingFilePath, archiveFilePath);
+                      console.log(`✓ Archived: ${fileName}`);
+                    } catch (archiveError) {
+                      console.log(`Archive failed (${archiveError.message}), leaving in processing`);
+                    }
+
+                  } catch (error) {
+                    console.error(`✗ Error processing ${fileName}:`, error.message);
+                    try {
+                      const inProcessing = await sftp.exists(processingFilePath);
+                      if (inProcessing) {
+                        await moveFile(sftp, processingFilePath, errorFilePath);
+                        console.log(`Moved to error folder: ${fileName}`);
+                      }
+                    } catch (moveError) {
+                      console.log(`Could not move to error folder: ${moveError.message}`);
+                    }
+                  }
+                }
+              }
+
+              await sftp.end();
+              console.log('\n✓ Product CSV sync complete');
+
+            } catch (error) {
+              console.error('Fatal error:', error);
+              await sftp.end().catch(() => {});
+              process.exit(1);
+            }
+          }
+
+          syncProductCSV();
+          EOF
