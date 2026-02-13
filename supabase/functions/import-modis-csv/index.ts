@@ -142,6 +142,36 @@ function parseAllRows(rows: string[][], headers: string[]) {
   return { parents, variations };
 }
 
+function validateCSV(headers: string[], rows: string[][]): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const requiredHeaders = ['Type', 'SKU', 'name'];
+  for (const h of requiredHeaders) {
+    if (!headers.some(hdr => hdr.trim().toLowerCase() === h.toLowerCase())) {
+      errors.push(`Ontbrekende verplichte kolom: "${h}"`);
+    }
+  }
+  if (errors.length > 0) return { valid: false, errors };
+
+  const typeIdx = headers.findIndex(h => h.trim().toLowerCase() === 'type');
+  const skuIdx = headers.findIndex(h => h.trim().toLowerCase() === 'sku');
+  let emptySkus = 0;
+  let unknownTypes = 0;
+  const validTypes = new Set(['variable', 'variation', 'simple', '']);
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const type = row[typeIdx]?.trim() || '';
+    const sku = row[skuIdx]?.trim() || '';
+    if (!sku) { emptySkus++; continue; }
+    if (type && !validTypes.has(type)) unknownTypes++;
+  }
+
+  if (emptySkus > 0) errors.push(`${emptySkus} rijen zonder SKU`);
+  if (unknownTypes > 0) errors.push(`${unknownTypes} rijen met onbekend type`);
+
+  return { valid: errors.length === 0 || emptySkus < rows.length, errors };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -177,6 +207,23 @@ Deno.serve(async (req) => {
     if (rows.length < 2) throw new Error('CSV has no data rows');
 
     const headers = rows[0];
+
+    // === VALIDATION STEP ===
+    const validation = validateCSV(headers, rows);
+    if (validation.errors.length > 0) {
+      console.warn(`[import-modis-csv] Validation warnings: ${validation.errors.join('; ')}`);
+    }
+    if (!validation.valid) {
+      const filename = storagePath.split('/').pop() || storagePath;
+      await supabase.from('changelog').insert({
+        tenant_id: tenantId,
+        event_type: 'PRODUCT_CSV_IMPORT',
+        description: `CSV validatie mislukt voor ${filename}: ${validation.errors.join(', ')}`,
+        metadata: { filename, validation_errors: validation.errors, valid: false },
+      });
+      throw new Error(`CSV validation failed: ${validation.errors.join(', ')}`);
+    }
+
     const { parents: allParents, variations: allVariations } = parseAllRows(rows, headers);
 
     console.log(`[import-modis-csv] Total parsed: ${allParents.length} parents, ${allVariations.length} variations`);
@@ -235,6 +282,9 @@ Deno.serve(async (req) => {
     const skuToProductId = new Map<string, string>();
     existingProducts.forEach((p, sku) => skuToProductId.set(sku, p.id));
 
+    // Track new SKUs for changelog
+    const newSkus: { sku: string; title: string; brand: string }[] = [];
+
     // PHASE 1: Upsert products
     const toInsert: any[] = [];
     const toUpdate: { id: string; data: any }[] = [];
@@ -276,6 +326,7 @@ Deno.serve(async (req) => {
           fieldSources[field] = 'woocommerce-csv';
         }
         toInsert.push({ tenant_id: tenantId, sku: p.sku, ...importFields, field_sources: fieldSources });
+        newSkus.push({ sku: p.sku, title: p.title, brand: p.brand });
       }
     }
 
@@ -383,6 +434,23 @@ Deno.serve(async (req) => {
       else stats.stockUpserted += batch.length;
     }
 
+    // === LOG NEW SKUs TO CHANGELOG ===
+    if (newSkus.length > 0) {
+      const filename = storagePath.split('/').pop() || storagePath;
+      const skuSummary = newSkus.map(s => `${s.sku} (${s.brand ? s.brand + ' - ' : ''}${s.title})`);
+      await supabase.from('changelog').insert({
+        tenant_id: tenantId,
+        event_type: 'NEW_PRODUCTS_DETECTED',
+        description: `${newSkus.length} nieuwe SKU('s) gedetecteerd in ${filename}: ${skuSummary.join(', ')}`,
+        metadata: {
+          filename,
+          new_skus: newSkus,
+          count: newSkus.length,
+        },
+      });
+      console.log(`[import-modis-csv] Logged ${newSkus.length} new SKUs to changelog`);
+    }
+
     const nextOffset = offset + chunkParents.length;
     const hasMore = nextOffset < allParents.length;
 
@@ -395,6 +463,8 @@ Deno.serve(async (req) => {
       totalParents: allParents.length,
       totalVariations: allVariations.length,
       chunkProcessed: chunkParents.length,
+      newSkus: newSkus.map(s => s.sku),
+      validationWarnings: validation.errors,
       ...stats,
     };
 

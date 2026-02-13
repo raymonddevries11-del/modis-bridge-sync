@@ -23,12 +23,18 @@ function deriveOutcome(entry: Record<string, any>): { outcome: ImportFileStatus[
 
   const eventType = entry.event_type as string;
 
+  if (eventType === "NEW_PRODUCTS_DETECTED") {
+    const count = meta.count || meta.new_skus?.length || 0;
+    return { outcome: "success", details: `${count} nieuwe SKU('s) gedetecteerd` };
+  }
+
   if (eventType === "PRODUCT_CSV_IMPORT") {
     const inserted = meta.productsInserted || 0;
     const updated = meta.productsUpdated || 0;
     const vNew = meta.variantsInserted || 0;
     const vUp = meta.variantsUpdated || 0;
     const total = inserted + updated + vNew + vUp;
+    if (meta.valid === false) return { outcome: "error", details: meta.validation_errors?.join(', ') || "Validatie mislukt" };
     if (total === 0) return { outcome: "empty", details: "0 wijzigingen" };
     return { outcome: "success", details: `${inserted} nieuw, ${updated} bijgewerkt, ${vNew}/${vUp} var` };
   }
@@ -60,7 +66,7 @@ export function CsvImportStatusWidget() {
       const { data, error } = await supabase
         .from("changelog")
         .select("event_type, description, metadata, created_at")
-        .in("event_type", ["PRODUCT_CSV_IMPORT", "STOCK_CSV_IMPORT", "STOCK_IMPORT"])
+        .in("event_type", ["PRODUCT_CSV_IMPORT", "STOCK_CSV_IMPORT", "STOCK_IMPORT", "NEW_PRODUCTS_DETECTED"])
         .order("created_at", { ascending: false })
         .limit(100);
       if (error) throw error;
