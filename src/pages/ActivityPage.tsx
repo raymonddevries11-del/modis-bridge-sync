@@ -1,4 +1,5 @@
 import { Layout } from "@/components/Layout";
+import { CsvImportStatusWidget } from "@/components/activity/CsvImportStatusWidget";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useSearchParams, Navigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -189,6 +190,9 @@ function ChangelogTab() {
 
   return (
     <div className="space-y-4">
+      {/* CSV Import Status per File Widget */}
+      <CsvImportStatusWidget />
+
       {/* CSV Import Summary Cards */}
       {importSummary && importSummary.totalImports > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
