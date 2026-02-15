@@ -176,6 +176,7 @@ export type Database = {
       }
       export_files: {
         Row: {
+          ack_status: string
           created_at: string | null
           filename: string
           id: string
@@ -184,8 +185,10 @@ export type Database = {
           synced_at: string | null
           synced_to_sftp: boolean | null
           tenant_id: string | null
+          uploaded_to_sftp_at: string | null
         }
         Insert: {
+          ack_status?: string
           created_at?: string | null
           filename: string
           id?: string
@@ -194,8 +197,10 @@ export type Database = {
           synced_at?: string | null
           synced_to_sftp?: boolean | null
           tenant_id?: string | null
+          uploaded_to_sftp_at?: string | null
         }
         Update: {
+          ack_status?: string
           created_at?: string | null
           filename?: string
           id?: string
@@ -204,6 +209,7 @@ export type Database = {
           synced_at?: string | null
           synced_to_sftp?: boolean | null
           tenant_id?: string | null
+          uploaded_to_sftp_at?: string | null
         }
         Relationships: [
           {
