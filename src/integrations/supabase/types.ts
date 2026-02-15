@@ -180,7 +180,10 @@ export type Database = {
           created_at: string | null
           filename: string
           id: string
+          last_retry_at: string | null
+          max_retries: number
           order_number: string
+          retry_count: number
           storage_path: string
           synced_at: string | null
           synced_to_sftp: boolean | null
@@ -192,7 +195,10 @@ export type Database = {
           created_at?: string | null
           filename: string
           id?: string
+          last_retry_at?: string | null
+          max_retries?: number
           order_number: string
+          retry_count?: number
           storage_path: string
           synced_at?: string | null
           synced_to_sftp?: boolean | null
@@ -204,7 +210,10 @@ export type Database = {
           created_at?: string | null
           filename?: string
           id?: string
+          last_retry_at?: string | null
+          max_retries?: number
           order_number?: string
+          retry_count?: number
           storage_path?: string
           synced_at?: string | null
           synced_to_sftp?: boolean | null
