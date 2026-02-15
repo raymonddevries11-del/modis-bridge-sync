@@ -6,9 +6,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Download, RefreshCw, Package, ArrowUpDown } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Search, Download, RefreshCw, Package, ArrowUpDown, FileCheck } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
+import { OrderExportAckDashboard } from "@/components/orders/OrderExportAckDashboard";
 
 const Orders = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -85,6 +87,7 @@ const Orders = () => {
     },
     onSuccess: (data) => {
       toast.success(`Order ${data.orderNumber} geëxporteerd naar XML`);
+      queryClient.invalidateQueries({ queryKey: ["export-files-ack"] });
     },
     onError: (error: Error) => {
       toast.error(`Export gefaald: ${error.message}`);
@@ -137,117 +140,135 @@ const Orders = () => {
             value={selectedTenant} 
             onChange={setSelectedTenant} 
           />
-          
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by order number or status..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9"
-            />
-          </div>
-          <Button 
-            onClick={() => importOrders.mutate()}
-            disabled={importOrders.isPending}
-          >
-            <RefreshCw className={`mr-2 h-4 w-4 ${importOrders.isPending ? 'animate-spin' : ''}`} />
-            Importeer Orders
-          </Button>
-          <Button 
-            variant="outline"
-            onClick={() => importOrderLines.mutate()}
-            disabled={importOrderLines.isPending}
-          >
-            <Package className={`mr-2 h-4 w-4 ${importOrderLines.isPending ? 'animate-spin' : ''}`} />
-            Importeer Orderregels
-          </Button>
-          <Button 
-            variant="outline"
-            onClick={() => setSortAscending(!sortAscending)}
-          >
-            <ArrowUpDown className="mr-2 h-4 w-4" />
-            {sortAscending ? 'Oudste eerst' : 'Nieuwste eerst'}
-          </Button>
         </div>
 
-        {isLoading ? (
-          <div className="text-center py-12">
-            <p className="text-muted-foreground">Loading orders...</p>
-          </div>
-        ) : orders && orders.length > 0 ? (
-          <div className="space-y-4">
-            {orders.map((order: any) => (
-              <Card key={order.order_number}>
-                <CardContent className="pt-6">
-                  <div className="flex items-start justify-between">
-                    <div className="grid md:grid-cols-4 gap-4 flex-1">
-                      <div>
-                        <p className="text-sm font-medium text-muted-foreground">Order Number</p>
-                        <p className="font-semibold">{order.order_number}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-muted-foreground">Status</p>
-                        <Badge className={getStatusColor(order.status)} variant="outline">
-                          {order.status}
-                        </Badge>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-muted-foreground">Total</p>
-                        <p className="font-semibold">
-                          €{Number(order.totals?.total || 0).toFixed(2)}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-muted-foreground">Created</p>
-                        <p className="text-sm">{new Date(order.created_at).toLocaleString()}</p>
-                      </div>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => exportOrder.mutate(order.order_number)}
-                      disabled={exportOrder.isPending}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Export XML
-                    </Button>
-                  </div>
-                  {order.order_lines && order.order_lines.length > 0 && (
-                    <div className="mt-4 pt-4 border-t">
-                      <p className="text-sm font-medium text-muted-foreground mb-2">
-                        Items ({order.order_lines.length})
-                      </p>
-                      <div className="space-y-2">
-                        {order.order_lines.slice(0, 3).map((line: any) => (
-                          <div key={line.id} className="flex items-center justify-between text-sm">
-                            <span className="text-muted-foreground">
-                              {line.qty}x {line.name}
-                            </span>
-                            <span className="font-medium">€{Number(line.unit_price).toFixed(2)}</span>
+        <Tabs defaultValue="orders">
+          <TabsList>
+            <TabsTrigger value="orders">Orders</TabsTrigger>
+            <TabsTrigger value="exports" className="flex items-center gap-1.5">
+              <FileCheck className="h-3.5 w-3.5" />
+              Export & ACK
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="orders" className="space-y-4 mt-4">
+            <div className="flex items-center gap-4">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by order number or status..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              <Button 
+                onClick={() => importOrders.mutate()}
+                disabled={importOrders.isPending}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${importOrders.isPending ? 'animate-spin' : ''}`} />
+                Importeer Orders
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={() => importOrderLines.mutate()}
+                disabled={importOrderLines.isPending}
+              >
+                <Package className={`mr-2 h-4 w-4 ${importOrderLines.isPending ? 'animate-spin' : ''}`} />
+                Importeer Orderregels
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={() => setSortAscending(!sortAscending)}
+              >
+                <ArrowUpDown className="mr-2 h-4 w-4" />
+                {sortAscending ? 'Oudste eerst' : 'Nieuwste eerst'}
+              </Button>
+            </div>
+
+            {isLoading ? (
+              <div className="text-center py-12">
+                <p className="text-muted-foreground">Loading orders...</p>
+              </div>
+            ) : orders && orders.length > 0 ? (
+              <div className="space-y-4">
+                {orders.map((order: any) => (
+                  <Card key={order.order_number}>
+                    <CardContent className="pt-6">
+                      <div className="flex items-start justify-between">
+                        <div className="grid md:grid-cols-4 gap-4 flex-1">
+                          <div>
+                            <p className="text-sm font-medium text-muted-foreground">Order Number</p>
+                            <p className="font-semibold">{order.order_number}</p>
                           </div>
-                        ))}
-                        {order.order_lines.length > 3 && (
-                          <p className="text-xs text-muted-foreground">
-                            + {order.order_lines.length - 3} more items
-                          </p>
-                        )}
+                          <div>
+                            <p className="text-sm font-medium text-muted-foreground">Status</p>
+                            <Badge className={getStatusColor(order.status)} variant="outline">
+                              {order.status}
+                            </Badge>
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-muted-foreground">Total</p>
+                            <p className="font-semibold">
+                              €{Number(order.totals?.total || 0).toFixed(2)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-muted-foreground">Created</p>
+                            <p className="text-sm">{new Date(order.created_at).toLocaleString()}</p>
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => exportOrder.mutate(order.order_number)}
+                          disabled={exportOrder.isPending}
+                        >
+                          <Download className="mr-2 h-4 w-4" />
+                          Export XML
+                        </Button>
                       </div>
-                    </div>
-                  )}
+                      {order.order_lines && order.order_lines.length > 0 && (
+                        <div className="mt-4 pt-4 border-t">
+                          <p className="text-sm font-medium text-muted-foreground mb-2">
+                            Items ({order.order_lines.length})
+                          </p>
+                          <div className="space-y-2">
+                            {order.order_lines.slice(0, 3).map((line: any) => (
+                              <div key={line.id} className="flex items-center justify-between text-sm">
+                                <span className="text-muted-foreground">
+                                  {line.qty}x {line.name}
+                                </span>
+                                <span className="font-medium">€{Number(line.unit_price).toFixed(2)}</span>
+                              </div>
+                            ))}
+                            {order.order_lines.length > 3 && (
+                              <p className="text-xs text-muted-foreground">
+                                + {order.order_lines.length - 3} more items
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card>
+                <CardContent className="text-center py-12">
+                  <p className="text-muted-foreground">
+                    {searchTerm ? "No orders found matching your search" : "No orders found"}
+                  </p>
                 </CardContent>
               </Card>
-            ))}
-          </div>
-        ) : (
-          <Card>
-            <CardContent className="text-center py-12">
-              <p className="text-muted-foreground">
-                {searchTerm ? "No orders found matching your search" : "No orders found"}
-              </p>
-            </CardContent>
-          </Card>
-        )}
+            )}
+          </TabsContent>
+
+          <TabsContent value="exports" className="mt-4">
+            <OrderExportAckDashboard tenantId={selectedTenant} />
+          </TabsContent>
+        </Tabs>
       </div>
     </Layout>
   );
