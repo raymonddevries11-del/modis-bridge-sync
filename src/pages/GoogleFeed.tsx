@@ -17,6 +17,7 @@ import { Rss, Copy, ExternalLink, Plus, Pencil, Trash2, AlertCircle, CheckCircle
 import { Checkbox } from "@/components/ui/checkbox";
 import { GoogleCategorySearch } from "@/components/GoogleCategorySearch";
 import { ImageQaReport } from "@/components/google-feed/ImageQaReport";
+import { WooUrlValidator } from "@/components/google-feed/WooUrlValidator";
 
 interface ShippingRule {
   country: string;
@@ -340,6 +341,7 @@ const GoogleFeed = () => {
                 Afbeeldingen QA
                 <ImageOff className="h-3.5 w-3.5 ml-1.5" />
               </TabsTrigger>
+              <TabsTrigger value="url-validator">URL Validator</TabsTrigger>
             </TabsList>
 
             {/* Config Tab */}
@@ -757,6 +759,11 @@ const GoogleFeed = () => {
             {/* Image QA Tab */}
             <TabsContent value="image-qa">
               <ImageQaReport tenantId={tenantId} />
+            </TabsContent>
+
+            {/* URL Validator Tab */}
+            <TabsContent value="url-validator">
+              <WooUrlValidator tenantId={tenantId} />
             </TabsContent>
           </Tabs>
         )}
