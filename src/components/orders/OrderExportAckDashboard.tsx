@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, Clock, AlertTriangle, Upload, Package } from "lucide-react";
+import { CheckCircle2, Clock, AlertTriangle, Upload, Package, ShieldAlert, RotateCw } from "lucide-react";
 
 interface ExportFile {
   id: string;
@@ -14,13 +14,17 @@ interface ExportFile {
   created_at: string;
   synced_at: string | null;
   uploaded_to_sftp_at: string | null;
+  retry_count: number;
+  max_retries: number;
+  last_retry_at: string | null;
 }
 
 const statusConfig: Record<string, { label: string; icon: React.ElementType; color: string }> = {
   pending: { label: "Wacht op upload", icon: Clock, color: "bg-muted text-muted-foreground" },
   uploaded: { label: "Op SFTP, wacht op ACK", icon: Upload, color: "bg-warning/10 text-warning border-warning/20" },
   acked: { label: "Opgepikt door Modis", icon: CheckCircle2, color: "bg-success/10 text-success border-success/20" },
-  timeout: { label: "Timeout – niet opgepikt", icon: AlertTriangle, color: "bg-destructive/10 text-destructive border-destructive/20" },
+  timeout: { label: "Timeout – wordt herstart", icon: RotateCw, color: "bg-orange-500/10 text-orange-600 border-orange-500/20" },
+  quarantined: { label: "Quarantaine", icon: ShieldAlert, color: "bg-destructive/10 text-destructive border-destructive/20" },
 };
 
 function timeAgo(date: string) {
@@ -53,6 +57,7 @@ export function OrderExportAckDashboard({ tenantId }: { tenantId: string }) {
     uploaded: exports?.filter(e => e.ack_status === "uploaded").length || 0,
     acked: exports?.filter(e => e.ack_status === "acked").length || 0,
     timeout: exports?.filter(e => e.ack_status === "timeout").length || 0,
+    quarantined: exports?.filter(e => e.ack_status === "quarantined").length || 0,
   };
 
   if (isLoading) {
@@ -62,10 +67,10 @@ export function OrderExportAckDashboard({ tenantId }: { tenantId: string }) {
   return (
     <div className="space-y-6">
       {/* KPI cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {Object.entries(statusConfig).map(([key, cfg]) => {
           const Icon = cfg.icon;
-          const count = stats[key as keyof typeof stats];
+          const count = stats[key as keyof typeof stats] || 0;
           return (
             <Card key={key}>
               <CardContent className="pt-4 pb-3 flex items-center gap-3">
@@ -98,6 +103,7 @@ export function OrderExportAckDashboard({ tenantId }: { tenantId: string }) {
               {exports.map((exp) => {
                 const cfg = statusConfig[exp.ack_status] || statusConfig.pending;
                 const Icon = cfg.icon;
+                const showRetry = exp.retry_count > 0;
                 return (
                   <div key={exp.id} className="flex items-center justify-between py-3 gap-4">
                     <div className="flex items-center gap-3 min-w-0">
@@ -108,6 +114,11 @@ export function OrderExportAckDashboard({ tenantId }: { tenantId: string }) {
                       </div>
                     </div>
                     <div className="flex items-center gap-3 flex-shrink-0">
+                      {showRetry && (
+                        <span className="text-xs text-muted-foreground">
+                          poging {exp.retry_count}/{exp.max_retries}
+                        </span>
+                      )}
                       <Badge variant="outline" className={cfg.color}>
                         {cfg.label}
                       </Badge>

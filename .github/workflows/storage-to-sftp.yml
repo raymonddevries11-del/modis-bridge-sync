@@ -24,7 +24,7 @@ jobs:
           npm init -y
           npm install ssh2-sftp-client @supabase/supabase-js
 
-      - name: Sync Supabase Storage to SFTP with ACK handling
+      - name: Sync Supabase Storage to SFTP with ACK + Quarantine
         env:
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
           SFTP_PORT: ${{ secrets.SFTP_PORT }}
@@ -73,21 +73,44 @@ jobs:
             }
           }
 
+          // Cache outbound paths per tenant
+          const outboundCache = new Map();
           async function getOutboundPath(tenantId) {
+            if (outboundCache.has(tenantId)) return outboundCache.get(tenantId);
             const configs = await supabaseRequest(
               `tenant_config?tenant_id=eq.${tenantId}&select=sftp_outbound_path`,
               { returnJson: true }
             );
-            return configs?.[0]?.sftp_outbound_path || null;
+            const path = configs?.[0]?.sftp_outbound_path || null;
+            outboundCache.set(tenantId, path);
+            return path;
+          }
+
+          async function uploadFile(sftp, file, outboundBase) {
+            const readyDir = `${outboundBase}/ready`;
+            const remotePath = `${readyDir}/${file.filename}`;
+
+            try { await sftp.mkdir(readyDir, true); } catch (e) { /* exists */ }
+
+            const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/order-exports/${file.storage_path}`;
+            const dlRes = await fetch(publicUrl);
+            if (!dlRes.ok) throw new Error(`Download failed: ${dlRes.status}`);
+
+            const buffer = Buffer.from(await dlRes.arrayBuffer());
+            await sftp.put(buffer, remotePath);
+
+            const exists = await sftp.exists(remotePath);
+            if (!exists) throw new Error(`File not found after upload: ${remotePath}`);
+
+            return remotePath;
           }
 
           async function syncToSftp() {
             const sftp = new SftpClient();
             
             try {
-              console.log('=== Order SFTP Sync (Upload + ACK) ===');
+              console.log('=== Order SFTP Sync (Upload + ACK + Quarantine) ===');
               
-              // Connect to SFTP
               const connectConfig = {
                 host: process.env.SFTP_HOST,
                 port: parseInt(process.env.SFTP_PORT),
@@ -117,39 +140,14 @@ jobs:
               let uploaded = 0;
               for (const file of pendingFiles) {
                 const tenantSlug = file.tenants?.slug;
-                if (!tenantSlug) {
-                  console.error(`No tenant for file ${file.filename}, skipping`);
-                  continue;
-                }
+                if (!tenantSlug) { console.error(`No tenant for ${file.filename}`); continue; }
 
                 const outboundBase = await getOutboundPath(file.tenant_id);
-                if (!outboundBase) {
-                  console.error(`No outbound path configured for tenant ${tenantSlug}, skipping`);
-                  continue;
-                }
-
-                const readyDir = `${outboundBase}/ready`;
-                const remotePath = `${readyDir}/${file.filename}`;
+                if (!outboundBase) { console.error(`No outbound path for ${tenantSlug}`); continue; }
                 
                 try {
-                  // Ensure /ready/ directory exists
-                  try { await sftp.mkdir(readyDir, true); } catch (e) { /* exists */ }
+                  const remotePath = await uploadFile(sftp, file, outboundBase);
                   
-                  // Download from Supabase Storage
-                  const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/order-exports/${file.storage_path}`;
-                  console.log(`Downloading ${file.filename}...`);
-                  const dlRes = await fetch(publicUrl);
-                  if (!dlRes.ok) throw new Error(`Download failed: ${dlRes.status}`);
-                  
-                  const buffer = Buffer.from(await dlRes.arrayBuffer());
-                  console.log(`Uploading to ${remotePath} (${buffer.length} bytes)`);
-                  await sftp.put(buffer, remotePath);
-                  
-                  // Verify upload
-                  const exists = await sftp.exists(remotePath);
-                  if (!exists) throw new Error(`File not found after upload: ${remotePath}`);
-                  
-                  // Mark as uploaded + awaiting ACK
                   const now = new Date().toISOString();
                   await supabaseRequest(`export_files?id=eq.${file.id}`, {
                     method: 'PATCH',
@@ -200,7 +198,6 @@ jobs:
                   const exists = await sftp.exists(remotePath);
                   
                   if (!exists) {
-                    // File disappeared → Modis picked it up → ACK
                     console.log(`✓ ACK: ${file.filename} picked up by Modis`);
                     
                     await supabaseRequest(`export_files?id=eq.${file.id}`, {
@@ -215,12 +212,11 @@ jobs:
                     
                     acked++;
                   } else {
-                    // File still there — check timeout
                     const uploadedAt = new Date(file.uploaded_to_sftp_at);
                     const hoursElapsed = (Date.now() - uploadedAt.getTime()) / (1000 * 60 * 60);
                     
                     if (hoursElapsed > ACK_TIMEOUT_HOURS) {
-                      console.warn(`⚠ TIMEOUT: ${file.filename} still on SFTP after ${hoursElapsed.toFixed(1)}h`);
+                      console.warn(`⚠ TIMEOUT: ${file.filename} after ${hoursElapsed.toFixed(1)}h`);
                       
                       await supabaseRequest(`export_files?id=eq.${file.id}`, {
                         method: 'PATCH',
@@ -234,7 +230,7 @@ jobs:
                       
                       timedOut++;
                     } else {
-                      console.log(`⏳ Waiting: ${file.filename} (${hoursElapsed.toFixed(1)}h elapsed)`);
+                      console.log(`⏳ Waiting: ${file.filename} (${hoursElapsed.toFixed(1)}h)`);
                     }
                   }
                 } catch (error) {
@@ -243,10 +239,106 @@ jobs:
               }
 
               // ──────────────────────────────────────
+              // PHASE 3: Quarantine + Re-upload timed out files
+              // ──────────────────────────────────────
+              console.log('\n── Phase 3: Re-upload timed out files ──');
+
+              const timedOutFiles = await supabaseRequest(
+                'export_files?ack_status=eq.timeout&select=*,tenants!inner(slug)',
+                { returnJson: true }
+              );
+              console.log(`Found ${timedOutFiles.length} timed out files`);
+
+              let retried = 0;
+              let quarantined = 0;
+
+              for (const file of timedOutFiles) {
+                const tenantSlug = file.tenants?.slug;
+                if (!tenantSlug) continue;
+
+                const outboundBase = await getOutboundPath(file.tenant_id);
+                if (!outboundBase) continue;
+
+                const currentRetry = file.retry_count || 0;
+                const maxRetries = file.max_retries || 3;
+
+                if (currentRetry >= maxRetries) {
+                  // ── Permanent quarantine ──
+                  if (file.ack_status !== 'quarantined') {
+                    console.error(`🚫 QUARANTINE: ${file.filename} (${currentRetry}/${maxRetries} retries exhausted)`);
+
+                    // Remove stale file from /ready/ if still there
+                    const stalePath = `${outboundBase}/ready/${file.filename}`;
+                    try {
+                      const exists = await sftp.exists(stalePath);
+                      if (exists) {
+                        // Move to quarantine dir
+                        const quarantineDir = `${outboundBase}/quarantine`;
+                        try { await sftp.mkdir(quarantineDir, true); } catch (e) { /* exists */ }
+                        await sftp.rename(stalePath, `${quarantineDir}/${file.filename}`);
+                        console.log(`  Moved to ${quarantineDir}/`);
+                      }
+                    } catch (e) {
+                      console.error(`  Could not move to quarantine: ${e.message}`);
+                    }
+
+                    await supabaseRequest(`export_files?id=eq.${file.id}`, {
+                      method: 'PATCH',
+                      body: JSON.stringify({ ack_status: 'quarantined' }),
+                    });
+
+                    await logChangelog(file.tenant_id, 'ORDER_QUARANTINED',
+                      `Order ${file.order_number} in quarantaine na ${maxRetries} mislukte pogingen`,
+                      { filename: file.filename, order_number: file.order_number, retry_count: currentRetry }
+                    );
+
+                    quarantined++;
+                  }
+                  continue;
+                }
+
+                // ── Re-upload attempt ──
+                console.log(`🔄 Retry ${currentRetry + 1}/${maxRetries}: ${file.filename}`);
+
+                try {
+                  // Remove old file from /ready/ if still there
+                  const oldPath = `${outboundBase}/ready/${file.filename}`;
+                  try {
+                    const exists = await sftp.exists(oldPath);
+                    if (exists) await sftp.delete(oldPath);
+                  } catch (e) { /* ignore */ }
+
+                  // Re-upload fresh copy
+                  const remotePath = await uploadFile(sftp, file, outboundBase);
+                  const now = new Date().toISOString();
+
+                  await supabaseRequest(`export_files?id=eq.${file.id}`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({
+                      ack_status: 'uploaded',
+                      uploaded_to_sftp_at: now,
+                      retry_count: currentRetry + 1,
+                      last_retry_at: now,
+                    }),
+                  });
+
+                  await logChangelog(file.tenant_id, 'ORDER_REUPLOAD',
+                    `Order ${file.order_number} opnieuw geüpload (poging ${currentRetry + 1}/${maxRetries})`,
+                    { filename: file.filename, order_number: file.order_number, retry: currentRetry + 1, remote_path: remotePath }
+                  );
+
+                  retried++;
+                  console.log(`✓ Re-uploaded ${file.filename}`);
+                } catch (error) {
+                  console.error(`Error re-uploading ${file.filename}:`, error.message);
+                }
+              }
+
+              // ──────────────────────────────────────
               // Summary
               // ──────────────────────────────────────
               console.log('\n=== Sync Complete ===');
-              console.log(`Uploaded: ${uploaded} | ACKed: ${acked} | Timed out: ${timedOut}`);
+              console.log(`Uploaded: ${uploaded} | ACKed: ${acked} | Timed out: ${timedOut} | Retried: ${retried} | Quarantined: ${quarantined}`);
               
             } catch (error) {
               console.error('Sync failed:', error);
