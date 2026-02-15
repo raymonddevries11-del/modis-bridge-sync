@@ -283,7 +283,17 @@ serve(async (req) => {
         const regularPrice = price?.regular || 0;
         const salePrice = price?.list && price.list < regularPrice ? price.list : null;
         const currency = price?.currency || feedConfig.currency || 'EUR';
-        const images = (product.images as string[]) || [];
+        // Filter images: only supported formats AND prefer WooCommerce-hosted URLs
+        // Supabase storage URLs are rejected by Google Merchant ("unsupported image type")
+        const rawImages = (product.images as string[]) || [];
+        const images = rawImages.filter((url: string) => {
+          if (!url || typeof url !== 'string') return false;
+          // Must end in supported image extension
+          if (!/\.(jpe?g|png|gif)(\?.*)?$/i.test(url)) return false;
+          // Exclude Supabase storage URLs (Google rejects them)
+          if (url.includes('supabase.co/storage')) return false;
+          return true;
+        });
         const color = (product.color as any);
         const aiData = aiContentMap.get(product.id);
         const description = aiData?.description || product.webshop_text || product.meta_description || product.title;
