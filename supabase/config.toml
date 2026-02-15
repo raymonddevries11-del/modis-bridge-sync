@@ -143,3 +143,6 @@ verify_jwt = false
 
 [functions.google-merchant-feed-stock]
 verify_jwt = false
+
+[functions.validate-inbound-xml]
+verify_jwt = false

@@ -965,6 +965,56 @@ export type Database = {
           },
         ]
       }
+      xml_validation_logs: {
+        Row: {
+          created_at: string
+          errors: Json
+          file_name: string
+          file_size: number | null
+          file_type: string
+          id: string
+          is_valid: boolean
+          stats: Json
+          tenant_id: string
+          validated_at: string
+          warnings: Json
+        }
+        Insert: {
+          created_at?: string
+          errors?: Json
+          file_name: string
+          file_size?: number | null
+          file_type: string
+          id?: string
+          is_valid?: boolean
+          stats?: Json
+          tenant_id: string
+          validated_at?: string
+          warnings?: Json
+        }
+        Update: {
+          created_at?: string
+          errors?: Json
+          file_name?: string
+          file_size?: number | null
+          file_type?: string
+          id?: string
+          is_valid?: boolean
+          stats?: Json
+          tenant_id?: string
+          validated_at?: string
+          warnings?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "xml_validation_logs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
