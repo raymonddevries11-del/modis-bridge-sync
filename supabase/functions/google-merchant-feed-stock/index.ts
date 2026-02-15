@@ -1,5 +1,6 @@
 // Google Merchant Local Inventory Feed — production-ready
 // Outputs per-store stock with correct local inventory attributes
+// Uses Atom feed format as required by Google's local inventory specification
 // Mirrors exact g:id construction from primary feed (sku-maat_id)
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -18,6 +19,9 @@ function escapeXml(str: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 }
+
+// Google Business Profile store code
+const GOOGLE_STORE_CODE = '8741066502151997251';
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -84,16 +88,13 @@ serve(async (req) => {
       stockOffset += stockBatch;
     }
 
-    // Collect unique store IDs for fallback (ensure every variant has entries for all stores)
+    // Collect unique store IDs for fallback
     const allStoreIds = new Set<string>();
     for (const entries of storeStockMap.values()) {
       for (const e of entries) allStoreIds.add(e.store_id);
     }
 
-    // Google Business Profile store code (used as store_code in local inventory feed)
-    const GOOGLE_STORE_CODE = '8741066502151997251';
-
-    // ── Also load stock_totals as fallback for variants without store-level data ──
+    // ── Also load stock_totals as fallback ───────────────────────────
     const stockTotalsMap = new Map<string, number>();
     let totalsOffset = 0;
     while (true) {
@@ -111,10 +112,13 @@ serve(async (req) => {
     }
 
     // ── Iterate products in batches ─────────────────────────────────
-    const items: string[] = [];
+    const entries: string[] = [];
     let offset = 0;
     const batchSize = 1000;
     let totalItems = 0;
+
+    // De-duplicate: only emit one entry per itemId (aggregate stock across stores)
+    const emittedIds = new Set<string>();
 
     while (true) {
       const { data: products, error } = await supabase
@@ -133,7 +137,6 @@ serve(async (req) => {
       if (!products || products.length === 0) break;
 
       for (const product of products) {
-        // ── Mirror primary feed inclusion logic ──────────────────────
         const articleGroupId = (product.article_group as any)?.id;
         const hasMapping = articleGroupId ? mappedGroups.has(articleGroupId) : false;
         if (!hasMapping && !hasFallback) continue;
@@ -153,51 +156,38 @@ serve(async (req) => {
           if (!variant.active) continue;
 
           const itemId = `${product.sku}-${variant.maat_id}`;
+          if (emittedIds.has(itemId)) continue;
+          emittedIds.add(itemId);
+
+          // Aggregate qty across all stores for this variant
           const storeEntries = storeStockMap.get(variant.id);
+          let totalQty = 0;
 
           if (storeEntries && storeEntries.length > 0) {
-            // ── Emit one <item> per store ────────────────────────────
-            for (const store of storeEntries) {
-              const availability = store.qty > 0
-                ? 'in_stock'
-                : (variant.allow_backorder ? 'backorder' : 'out_of_stock');
-
-              let itemXml = `    <item>
-      <g:id>${escapeXml(itemId)}</g:id>
-      <g:store_code>${GOOGLE_STORE_CODE}</g:store_code>
-      <g:availability>${availability}</g:availability>
-      <g:quantity>${store.qty}</g:quantity>
-      <g:price>${regularPrice.toFixed(2)} ${currency}</g:price>`;
-              if (salePrice && salePrice > 0) {
-                itemXml += `\n      <g:sale_price>${salePrice.toFixed(2)} ${currency}</g:sale_price>`;
-              }
-              itemXml += `\n    </item>`;
-              items.push(itemXml);
-              totalItems++;
-            }
-          } else if (allStoreIds.size > 0) {
-            // ── Variant has no store-level data, emit for all stores with total stock ──
-            const totalQty = stockTotalsMap.get(variant.id) ?? 0;
-            for (const storeId of allStoreIds) {
-              const availability = totalQty > 0
-                ? 'in_stock'
-                : (variant.allow_backorder ? 'backorder' : 'out_of_stock');
-
-              let itemXml = `    <item>
-      <g:id>${escapeXml(itemId)}</g:id>
-      <g:store_code>${GOOGLE_STORE_CODE}</g:store_code>
-      <g:availability>${availability}</g:availability>
-      <g:quantity>${totalQty}</g:quantity>
-      <g:price>${regularPrice.toFixed(2)} ${currency}</g:price>`;
-              if (salePrice && salePrice > 0) {
-                itemXml += `\n      <g:sale_price>${salePrice.toFixed(2)} ${currency}</g:sale_price>`;
-              }
-              itemXml += `\n    </item>`;
-              items.push(itemXml);
-              totalItems++;
-            }
+            totalQty = storeEntries.reduce((sum, s) => sum + s.qty, 0);
+          } else {
+            totalQty = stockTotalsMap.get(variant.id) ?? 0;
           }
-          // If no stores exist at all, skip (local inventory needs store codes)
+
+          // Google local inventory availability values (with spaces)
+          const availability = totalQty > 0
+            ? 'in stock'
+            : (variant.allow_backorder ? 'backorder' : 'out of stock');
+
+          let entryXml = `  <entry>
+    <g:store_code>${GOOGLE_STORE_CODE}</g:store_code>
+    <g:id>${escapeXml(itemId)}</g:id>
+    <g:quantity>${totalQty}</g:quantity>
+    <g:price>${regularPrice.toFixed(2)} ${currency}</g:price>
+    <g:availability>${availability}</g:availability>`;
+
+          if (salePrice && salePrice > 0) {
+            entryXml += `\n    <g:sale_price>${salePrice.toFixed(2)} ${currency}</g:sale_price>`;
+          }
+
+          entryXml += `\n  </entry>`;
+          entries.push(entryXml);
+          totalItems++;
         }
       }
 
@@ -205,18 +195,14 @@ serve(async (req) => {
       offset += batchSize;
     }
 
-    console.log(`Local inventory feed generated: ${totalItems} items across ${allStoreIds.size} stores`);
+    console.log(`Local inventory feed generated: ${totalItems} items for store ${GOOGLE_STORE_CODE}`);
 
-    // ── Build RSS 2.0 feed ──────────────────────────────────────────
+    // ── Build Atom feed (Google's expected format for local inventory) ──
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">
-  <channel>
-    <title>${escapeXml((feedConfig.feed_title || 'Google Shopping Feed') + ' - Local Inventory')}</title>
-    <link>${escapeXml(feedConfig.shop_url || '')}</link>
-    <description>Local product inventory feed</description>
-${items.join('\n')}
-  </channel>
-</rss>`;
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:g="http://base.google.com/ns/1.0">
+  <title>${escapeXml((feedConfig.feed_title || 'Local Inventory') + ' - Local Inventory')}</title>
+${entries.join('\n')}
+</feed>`;
 
     return new Response(xml, {
       headers: {
