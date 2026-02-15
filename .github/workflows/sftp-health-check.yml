@@ -1,0 +1,194 @@
+name: SFTP Outbound Health Check
+
+on:
+  schedule:
+    # Every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install ssh2-sftp-client
+
+      - name: Check SFTP outbound paths
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          node << 'EOF'
+          const SftpClient = require('ssh2-sftp-client');
+
+          async function supabaseRequest(path, options = {}) {
+            const res = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
+              ...options,
+              headers: {
+                'apikey': process.env.SUPABASE_SERVICE_KEY,
+                'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+                'Content-Type': 'application/json',
+                'Prefer': options.prefer || 'return=minimal',
+                ...(options.headers || {}),
+              },
+            });
+            if (!res.ok && !options.ignoreError) {
+              const body = await res.text();
+              throw new Error(`Supabase ${path}: ${res.status} ${body}`);
+            }
+            if (options.returnJson) return res.json();
+            return res;
+          }
+
+          async function run() {
+            const sftp = new SftpClient();
+            const results = [];
+
+            try {
+              // 1. Load tenants + config
+              const tenants = await supabaseRequest(
+                'tenants?active=eq.true&select=id,name,slug',
+                { returnJson: true }
+              );
+              const configs = await supabaseRequest(
+                'tenant_config?select=tenant_id,sftp_outbound_path,sftp_inbound_path',
+                { returnJson: true }
+              );
+              const configMap = new Map();
+              for (const c of configs) configMap.set(c.tenant_id, c);
+
+              // 2. Connect to SFTP
+              const connectConfig = {
+                host: process.env.SFTP_HOST,
+                port: parseInt(process.env.SFTP_PORT),
+                username: process.env.SFTP_USERNAME,
+                privateKey: Buffer.from(process.env.SFTP_PRIVATE_KEY, 'utf-8'),
+                readyTimeout: 30000,
+              };
+              if (process.env.SFTP_PASSPHRASE) {
+                connectConfig.passphrase = process.env.SFTP_PASSPHRASE;
+              }
+
+              console.log('Connecting to SFTP...');
+              await sftp.connect(connectConfig);
+              console.log('✓ Connected');
+
+              // 3. Check each tenant
+              for (const tenant of tenants) {
+                const cfg = configMap.get(tenant.id);
+                if (!cfg) {
+                  results.push({ tenant: tenant.name, status: 'skip', reason: 'No config' });
+                  continue;
+                }
+
+                const checks = [];
+
+                // Check outbound paths
+                for (const subdir of ['', '/ready']) {
+                  const path = cfg.sftp_outbound_path + subdir;
+                  try {
+                    const exists = await sftp.exists(path);
+                    if (!exists) {
+                      checks.push({ path, exists: false, writable: false });
+                    } else {
+                      // Test write permission with a temp file
+                      const testFile = `${path}/.health-check-${Date.now()}`;
+                      try {
+                        await sftp.put(Buffer.from('ok'), testFile);
+                        await sftp.delete(testFile);
+                        checks.push({ path, exists: true, writable: true });
+                      } catch (writeErr) {
+                        checks.push({ path, exists: true, writable: false, error: writeErr.message });
+                      }
+                    }
+                  } catch (err) {
+                    checks.push({ path, exists: false, writable: false, error: err.message });
+                  }
+                }
+
+                // Check inbound paths
+                for (const subdir of ['', '/ready']) {
+                  const path = cfg.sftp_inbound_path + subdir;
+                  try {
+                    const exists = await sftp.exists(path);
+                    checks.push({ path, exists: !!exists, readable: !!exists });
+                  } catch (err) {
+                    checks.push({ path, exists: false, readable: false, error: err.message });
+                  }
+                }
+
+                const allOk = checks.every(c => c.exists && (c.writable !== false || c.readable !== false));
+                const status = allOk ? 'healthy' : 'unhealthy';
+                results.push({ tenant: tenant.name, tenant_id: tenant.id, status, checks });
+
+                const icon = allOk ? '✓' : '✗';
+                console.log(`${icon} ${tenant.name}: ${status}`);
+                for (const c of checks) {
+                  const flags = [
+                    c.exists ? 'exists' : 'MISSING',
+                    c.writable === true ? 'writable' : c.writable === false ? 'NOT WRITABLE' : '',
+                    c.readable === true ? 'readable' : c.readable === false ? 'NOT READABLE' : '',
+                  ].filter(Boolean).join(', ');
+                  console.log(`  ${c.path} → ${flags}${c.error ? ' (' + c.error + ')' : ''}`);
+                }
+              }
+
+              // 4. Log results to changelog per tenant
+              for (const r of results) {
+                if (!r.tenant_id) continue;
+                const eventType = r.status === 'healthy' ? 'SFTP_HEALTH_OK' : 'SFTP_HEALTH_FAIL';
+                const description = r.status === 'healthy'
+                  ? 'SFTP health check OK – alle paden bereikbaar en schrijfbaar'
+                  : `SFTP health check FAILED – ${(r.checks || []).filter(c => !c.exists || c.writable === false).map(c => c.path).join(', ')}`;
+
+                await supabaseRequest('changelog', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    tenant_id: r.tenant_id,
+                    event_type: eventType,
+                    description,
+                    metadata: { checks: r.checks },
+                  }),
+                  ignoreError: true,
+                });
+              }
+
+              // 5. Summary
+              const healthy = results.filter(r => r.status === 'healthy').length;
+              const unhealthy = results.filter(r => r.status === 'unhealthy').length;
+              console.log(`\n=== Health Check Complete ===`);
+              console.log(`Healthy: ${healthy} | Unhealthy: ${unhealthy} | Skipped: ${results.length - healthy - unhealthy}`);
+
+              if (unhealthy > 0) {
+                process.exit(1);
+              }
+
+            } catch (error) {
+              console.error('Health check failed:', error);
+              process.exit(1);
+            } finally {
+              await sftp.end();
+            }
+          }
+
+          run().catch(err => {
+            console.error('Fatal error:', err);
+            process.exit(1);
+          });
+          EOF
