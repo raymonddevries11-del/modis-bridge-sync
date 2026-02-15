@@ -90,6 +90,9 @@ serve(async (req) => {
       for (const e of entries) allStoreIds.add(e.store_id);
     }
 
+    // Google Business Profile store code (used as store_code in local inventory feed)
+    const GOOGLE_STORE_CODE = '8741066502151997251';
+
     // ── Also load stock_totals as fallback for variants without store-level data ──
     const stockTotalsMap = new Map<string, number>();
     let totalsOffset = 0;
@@ -156,12 +159,12 @@ serve(async (req) => {
             // ── Emit one <item> per store ────────────────────────────
             for (const store of storeEntries) {
               const availability = store.qty > 0
-                ? 'in stock'
-                : (variant.allow_backorder ? 'limited availability' : 'out of stock');
+                ? 'in_stock'
+                : (variant.allow_backorder ? 'backorder' : 'out_of_stock');
 
               let itemXml = `    <item>
       <g:id>${escapeXml(itemId)}</g:id>
-      <g:store_code>${escapeXml(store.store_id)}</g:store_code>
+      <g:store_code>${GOOGLE_STORE_CODE}</g:store_code>
       <g:availability>${availability}</g:availability>
       <g:quantity>${store.qty}</g:quantity>
       <g:price>${regularPrice.toFixed(2)} ${currency}</g:price>`;
@@ -177,12 +180,12 @@ serve(async (req) => {
             const totalQty = stockTotalsMap.get(variant.id) ?? 0;
             for (const storeId of allStoreIds) {
               const availability = totalQty > 0
-                ? 'in stock'
-                : (variant.allow_backorder ? 'limited availability' : 'out of stock');
+                ? 'in_stock'
+                : (variant.allow_backorder ? 'backorder' : 'out_of_stock');
 
               let itemXml = `    <item>
       <g:id>${escapeXml(itemId)}</g:id>
-      <g:store_code>${escapeXml(storeId)}</g:store_code>
+      <g:store_code>${GOOGLE_STORE_CODE}</g:store_code>
       <g:availability>${availability}</g:availability>
       <g:quantity>${totalQty}</g:quantity>
       <g:price>${regularPrice.toFixed(2)} ${currency}</g:price>`;
