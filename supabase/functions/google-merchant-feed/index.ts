@@ -241,6 +241,7 @@ serve(async (req) => {
 
     const allItems: string[] = [];
     const colorIssues: { sku: string; title: string; reason: string }[] = [];
+    const imageIssues: { sku: string; title: string; reason: string; urls: string[] }[] = [];
     let offset = 0;
     const batchSize = 500;
 
@@ -288,12 +289,22 @@ serve(async (req) => {
         const rawImages = (product.images as string[]) || [];
         const images = rawImages.filter((url: string) => {
           if (!url || typeof url !== 'string') return false;
-          // Must end in supported image extension
           if (!/\.(jpe?g|png|gif)(\?.*)?$/i.test(url)) return false;
-          // Exclude Supabase storage URLs (Google rejects them)
           if (url.includes('supabase.co/storage')) return false;
           return true;
         });
+
+        // Track image issues for QA report
+        if (images.length === 0 && rawImages.length > 0) {
+          const reason = rawImages.every(u => u?.includes('supabase.co/storage'))
+            ? 'only_supabase_storage_urls'
+            : rawImages.every(u => !/\.(jpe?g|png|gif)(\?.*)?$/i.test(u || ''))
+              ? 'unsupported_format'
+              : 'mixed_invalid';
+          imageIssues.push({ sku: product.sku, title: product.title, reason, urls: rawImages.slice(0, 3) });
+        } else if (rawImages.length === 0) {
+          imageIssues.push({ sku: product.sku, title: product.title, reason: 'no_images', urls: [] });
+        }
         const color = (product.color as any);
         const aiData = aiContentMap.get(product.id);
         const description = aiData?.description || product.webshop_text || product.meta_description || product.title;
@@ -516,7 +527,46 @@ serve(async (req) => {
             feed_generated_at: new Date().toISOString(),
           },
         });
+    }
+
+    // Log image issues to changelog (max once per 24h)
+    if (imageIssues.length > 0) {
+      const uniqueBysku = [...new Map(imageIssues.map(i => [i.sku, i])).values()];
+      const byReason = {
+        no_images: uniqueBysku.filter(i => i.reason === 'no_images').length,
+        only_supabase_storage_urls: uniqueBysku.filter(i => i.reason === 'only_supabase_storage_urls').length,
+        unsupported_format: uniqueBysku.filter(i => i.reason === 'unsupported_format').length,
+        mixed_invalid: uniqueBysku.filter(i => i.reason === 'mixed_invalid').length,
+      };
+      console.log(`Found ${uniqueBysku.length} products with image issues:`, JSON.stringify(byReason));
+
+      const { data: recentImageLog } = await supabase
+        .from('changelog')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('event_type', 'FEED_IMAGE_ISSUES')
+        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+        .limit(1);
+
+      if (!recentImageLog || recentImageLog.length === 0) {
+        await supabase.from('changelog').insert({
+          tenant_id: tenantId,
+          event_type: 'FEED_IMAGE_ISSUES',
+          description: `${uniqueBysku.length} producten overgeslagen in feed wegens ontbrekende of ongeldige afbeelding`,
+          metadata: {
+            total_issues: uniqueBysku.length,
+            by_reason: byReason,
+            products: uniqueBysku.map(i => ({
+              sku: i.sku,
+              title: i.title,
+              reason: i.reason,
+              urls: i.urls,
+            })),
+            feed_generated_at: new Date().toISOString(),
+          },
+        });
       }
+    }
     }
 
     // Build RSS 2.0 feed

@@ -13,9 +13,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { TenantSelector } from "@/components/TenantSelector";
-import { Rss, Copy, ExternalLink, Plus, Pencil, Trash2, AlertCircle, CheckCircle2, Loader2, CheckSquare } from "lucide-react";
+import { Rss, Copy, ExternalLink, Plus, Pencil, Trash2, AlertCircle, CheckCircle2, Loader2, CheckSquare, ImageOff } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { GoogleCategorySearch } from "@/components/GoogleCategorySearch";
+import { ImageQaReport } from "@/components/google-feed/ImageQaReport";
 
 interface ShippingRule {
   country: string;
@@ -335,6 +336,10 @@ const GoogleFeed = () => {
                 )}
               </TabsTrigger>
               <TabsTrigger value="preview">Feed Preview</TabsTrigger>
+              <TabsTrigger value="image-qa">
+                Afbeeldingen QA
+                <ImageOff className="h-3.5 w-3.5 ml-1.5" />
+              </TabsTrigger>
             </TabsList>
 
             {/* Config Tab */}
@@ -747,6 +752,11 @@ const GoogleFeed = () => {
             {/* Preview Tab */}
             <TabsContent value="preview">
               <FeedPreview tenantId={tenantId} feedUrl={feedUrl} enabled={feedConfig?.enabled || false} />
+            </TabsContent>
+
+            {/* Image QA Tab */}
+            <TabsContent value="image-qa">
+              <ImageQaReport tenantId={tenantId} />
             </TabsContent>
           </Tabs>
         )}
