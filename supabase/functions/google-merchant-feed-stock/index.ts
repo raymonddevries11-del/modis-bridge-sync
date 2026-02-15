@@ -169,10 +169,10 @@ serve(async (req) => {
             totalQty = stockTotalsMap.get(variant.id) ?? 0;
           }
 
-          // Google local inventory availability values (with spaces)
+          // Google local inventory availability values (underscores required)
           const availability = totalQty > 0
-            ? 'in stock'
-            : (variant.allow_backorder ? 'backorder' : 'out of stock');
+            ? 'in_stock'
+            : (variant.allow_backorder ? 'backorder' : 'out_of_stock');
 
           let entryXml = `  <entry>
     <g:store_code>${GOOGLE_STORE_CODE}</g:store_code>
