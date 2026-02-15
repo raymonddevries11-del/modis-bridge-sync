@@ -10,7 +10,7 @@ import { calculateCompleteness } from "@/lib/completeness";
 import {
   Package, ShoppingCart, Activity, AlertCircle, CheckCircle2,
   Clock, Server, Send, Rss, ArrowRight, Zap, TrendingUp,
-  AlertTriangle, RefreshCw,
+  AlertTriangle, RefreshCw, ShieldAlert, XCircle,
 } from "lucide-react";
 
 // --- Helpers ---
@@ -31,6 +31,15 @@ const stateIcon: Record<string, { icon: typeof CheckCircle2; cls: string }> = {
   error: { icon: AlertCircle, cls: "text-destructive" },
   ready: { icon: Clock, cls: "text-muted-foreground" },
 };
+
+interface ChannelHealth {
+  channel: string;
+  status: "healthy" | "warning" | "error";
+  errorCount: number;
+  lastSuccess: string | null;
+  lastError: string | null;
+  lastErrorMessage: string | null;
+}
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -69,6 +78,76 @@ const Dashboard = () => {
       };
     },
     refetchInterval: 5000,
+  });
+
+  // Channel health: analyze recent jobs + changelog for failures per channel
+  const { data: channelHealth } = useQuery({
+    queryKey: ["channel-health"],
+    queryFn: async () => {
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+      const [recentJobs, recentChangelog] = await Promise.all([
+        supabase
+          .from("jobs")
+          .select("type, state, error, updated_at")
+          .gte("updated_at", since24h)
+          .order("updated_at", { ascending: false })
+          .limit(500),
+        supabase
+          .from("changelog")
+          .select("event_type, description, metadata, created_at")
+          .gte("created_at", since24h)
+          .order("created_at", { ascending: false })
+          .limit(100),
+      ]);
+
+      const jobs = recentJobs.data || [];
+      const logs = recentChangelog.data || [];
+
+      // Classify jobs by channel
+      const sftpTypes = ["SFTP_SCAN", "SFTP_SYNC", "SFTP_UPLOAD", "PROCESS_STOCK", "PROCESS_ARTICLES", "IMPORT_CSV"];
+      const wooTypes = ["SYNC_TO_WOO", "WOO_SYNC", "BATCH_WOO_SYNC", "WOO_WEBHOOK", "WOO_STOCK_SYNC"];
+      const feedTypes = ["GOOGLE_FEED", "FEED_GENERATE"];
+
+      function analyzeChannel(name: string, typeFilter: string[], eventFilter: string[]): ChannelHealth {
+        const channelJobs = jobs.filter((j) =>
+          typeFilter.some((t) => j.type.toUpperCase().includes(t))
+        );
+        const errorJobs = channelJobs.filter((j) => j.state === "error");
+        const doneJobs = channelJobs.filter((j) => j.state === "done");
+        const lastSuccess = doneJobs.length > 0 ? doneJobs[0].updated_at : null;
+        const lastErr = errorJobs.length > 0 ? errorJobs[0] : null;
+
+        // Also check changelog for feed/image/color issues
+        const channelLogs = logs.filter((l) =>
+          eventFilter.some((e) => l.event_type.toUpperCase().includes(e))
+        );
+        const issueLogCount = channelLogs.filter((l) =>
+          l.event_type.includes("ISSUE") || l.event_type.includes("ERROR")
+        ).length;
+
+        const errorCount = errorJobs.length + issueLogCount;
+        let status: ChannelHealth["status"] = "healthy";
+        if (errorCount >= 5) status = "error";
+        else if (errorCount >= 1) status = "warning";
+
+        return {
+          channel: name,
+          status,
+          errorCount,
+          lastSuccess,
+          lastError: lastErr?.updated_at || null,
+          lastErrorMessage: lastErr?.error || null,
+        };
+      }
+
+      return {
+        sftp: analyzeChannel("SFTP", sftpTypes, ["SFTP", "STOCK", "ARTICLE"]),
+        woocommerce: analyzeChannel("WooCommerce", wooTypes, ["WOO", "SYNC"]),
+        feed: analyzeChannel("Google Feed", feedTypes, ["FEED"]),
+      };
+    },
+    refetchInterval: 15000,
   });
 
   const { data: recentJobs } = useQuery({
@@ -118,6 +197,28 @@ const Dashboard = () => {
     refetchInterval: 10000,
   });
 
+  // Collect active alerts
+  const alerts: { channel: string; message: string; severity: "error" | "warning" }[] = [];
+  if (channelHealth) {
+    for (const [, ch] of Object.entries(channelHealth)) {
+      if (ch.status === "error") {
+        alerts.push({
+          channel: ch.channel,
+          message: ch.lastErrorMessage
+            ? `${ch.errorCount} fouten (24u) — ${ch.lastErrorMessage.slice(0, 80)}`
+            : `${ch.errorCount} fouten in de afgelopen 24 uur`,
+          severity: "error",
+        });
+      } else if (ch.status === "warning") {
+        alerts.push({
+          channel: ch.channel,
+          message: `${ch.errorCount} waarschuwing(en) in de afgelopen 24 uur`,
+          severity: "warning",
+        });
+      }
+    }
+  }
+
   return (
     <Layout>
       <div className="space-y-8">
@@ -126,6 +227,34 @@ const Dashboard = () => {
           <h1>Dashboard</h1>
           <p className="text-muted-foreground text-sm mt-1">Modis Bridge — overzicht van je integratie</p>
         </div>
+
+        {/* Alert Banner */}
+        {alerts.length > 0 && (
+          <div className="space-y-2">
+            {alerts.map((alert, i) => (
+              <div
+                key={i}
+                className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-sm ${
+                  alert.severity === "error"
+                    ? "border-destructive/30 bg-destructive/5 text-destructive"
+                    : "border-warning/30 bg-warning/5 text-warning"
+                }`}
+              >
+                <ShieldAlert className="h-4 w-4 flex-shrink-0" />
+                <span className="font-medium">{alert.channel}:</span>
+                <span className="flex-1">{alert.message}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-7"
+                  onClick={() => navigate("/activity")}
+                >
+                  Details
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* KPI Row */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -145,30 +274,31 @@ const Dashboard = () => {
             <CardContent>
               <div className="grid sm:grid-cols-3 gap-4">
                 {/* WooCommerce */}
-                <ChannelCard
+                <HealthChannelCard
                   icon={Send}
                   name="WooCommerce"
                   connected={stats?.wooCommerceConnected || false}
                   lastSync={stats?.lastWooCommerceSync}
                   pendingSyncs={pendingSyncs || 0}
+                  health={channelHealth?.woocommerce}
                   onClick={() => navigate("/channels/woocommerce")}
                 />
                 {/* Google Shopping */}
-                <ChannelCard
+                <HealthChannelCard
                   icon={Rss}
                   name="Google Shopping"
                   connected={true}
+                  health={channelHealth?.feed}
                   onClick={() => navigate("/channels/google")}
                 />
                 {/* SFTP */}
-                <div className="rounded-xl border border-border p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Server className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">SFTP</span>
-                    <span className="badge-success ml-auto">Actief</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">Auto-scheduler elke 2 minuten</p>
-                </div>
+                <HealthChannelCard
+                  icon={Server}
+                  name="SFTP"
+                  connected={true}
+                  health={channelHealth?.sftp}
+                  onClick={() => navigate("/activity")}
+                />
               </div>
             </CardContent>
           </Card>
@@ -179,7 +309,6 @@ const Dashboard = () => {
               <CardTitle className="text-base flex items-center gap-2"><TrendingUp className="h-4 w-4 text-primary" /> Data Kwaliteit</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Big score */}
               <div className="flex items-center gap-4">
                 <div className={`h-16 w-16 rounded-2xl flex items-center justify-center text-lg font-bold ${(completenessStats?.avg ?? 0) >= 80 ? "bg-success/15 text-success" : (completenessStats?.avg ?? 0) >= 50 ? "bg-warning/15 text-warning" : "bg-destructive/15 text-destructive"}`}>
                   {completenessStats?.avg ?? 0}%
@@ -189,7 +318,6 @@ const Dashboard = () => {
                   <p className="text-xs text-muted-foreground">{completenessStats?.total ?? 0} producten geanalyseerd</p>
                 </div>
               </div>
-              {/* Breakdown */}
               <div className="space-y-2">
                 <ScoreBar label="Compleet (≥80%)" count={completenessStats?.complete ?? 0} total={completenessStats?.total || 1} color="bg-success" />
                 <ScoreBar label="Aandacht (50-79%)" count={completenessStats?.warning ?? 0} total={completenessStats?.total || 1} color="bg-warning" />
@@ -204,7 +332,7 @@ const Dashboard = () => {
 
         {/* Bottom row: Activity Feed + Job Queue */}
         <div className="grid gap-4 lg:grid-cols-2">
-          {/* Activity Feed (Intercom-style) */}
+          {/* Activity Feed */}
           <Card className="card-elevated">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -216,7 +344,6 @@ const Dashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="relative">
-                {/* Timeline line */}
                 <div className="absolute left-3 top-2 bottom-2 w-px bg-border" />
                 <div className="space-y-0">
                   {recentChangelog && recentChangelog.length > 0 ? (
@@ -253,14 +380,12 @@ const Dashboard = () => {
               </div>
             </CardHeader>
             <CardContent>
-              {/* Summary strip */}
               <div className="flex items-center gap-3 mb-4 p-2.5 rounded-lg bg-muted/50 text-xs">
                 <span className="flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-success" /> {stats?.completedJobs || 0}</span>
                 <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-muted-foreground" /> {stats?.pendingJobs || 0}</span>
                 <span className="flex items-center gap-1"><Activity className="h-3.5 w-3.5 text-primary" /> {stats?.processingJobs || 0}</span>
                 <span className="flex items-center gap-1"><AlertCircle className="h-3.5 w-3.5 text-destructive" /> {stats?.failedJobs || 0}</span>
               </div>
-              {/* Job list */}
               <div className="space-y-0.5">
                 {recentJobs && recentJobs.length > 0 ? (
                   recentJobs.map((job) => {
@@ -312,18 +437,51 @@ function KPICard({ icon: Icon, label, value, onClick, accent, sub }: {
   );
 }
 
-function ChannelCard({ icon: Icon, name, connected, lastSync, pendingSyncs, onClick }: {
-  icon: typeof Send; name: string; connected: boolean; lastSync?: string | null; pendingSyncs?: number; onClick: () => void;
+function HealthChannelCard({ icon: Icon, name, connected, lastSync, pendingSyncs, health, onClick }: {
+  icon: typeof Send; name: string; connected: boolean; lastSync?: string | null; pendingSyncs?: number; health?: ChannelHealth; onClick: () => void;
 }) {
+  const statusColor = health?.status === "error"
+    ? "border-destructive/30"
+    : health?.status === "warning"
+      ? "border-warning/30"
+      : "border-border";
+
+  const statusBadge = health?.status === "error"
+    ? "badge-destructive"
+    : health?.status === "warning"
+      ? "badge-warning"
+      : connected
+        ? "badge-success"
+        : "badge-warning";
+
+  const statusLabel = health?.status === "error"
+    ? `${health.errorCount} fouten`
+    : health?.status === "warning"
+      ? `${health.errorCount} waarschuwing`
+      : connected
+        ? "Gezond"
+        : "Niet verbonden";
+
   return (
-    <div className="rounded-xl border border-border p-4 space-y-3 cursor-pointer hover:border-primary/20 transition-colors" onClick={onClick}>
+    <div
+      className={`rounded-xl border ${statusColor} p-4 space-y-2 cursor-pointer hover:border-primary/20 transition-colors`}
+      onClick={onClick}
+    >
       <div className="flex items-center gap-2">
         <Icon className="h-4 w-4 text-muted-foreground" />
         <span className="text-sm font-medium">{name}</span>
-        {connected ? <span className="badge-success ml-auto">Verbonden</span> : <span className="badge-warning ml-auto">Niet verbonden</span>}
+        <span className={`${statusBadge} ml-auto`}>{statusLabel}</span>
       </div>
       {lastSync && <p className="text-[11px] text-muted-foreground">Laatste sync: {timeAgo(lastSync)}</p>}
+      {health?.lastSuccess && !lastSync && (
+        <p className="text-[11px] text-muted-foreground">Laatste succes: {timeAgo(health.lastSuccess)}</p>
+      )}
       {(pendingSyncs ?? 0) > 0 && <p className="text-[11px] text-warning">{pendingSyncs} pending syncs</p>}
+      {health?.status !== "healthy" && health?.lastErrorMessage && (
+        <p className="text-[11px] text-destructive truncate" title={health.lastErrorMessage}>
+          {health.lastErrorMessage.slice(0, 60)}…
+        </p>
+      )}
     </div>
   );
 }
@@ -346,7 +504,8 @@ function ScoreBar({ label, count, total, color }: { label: string; count: number
 function ActivityIcon({ type }: { type: string }) {
   if (type.includes("sync") || type.includes("SYNC")) return <RefreshCw className="h-3 w-3 text-primary" />;
   if (type.includes("import") || type.includes("IMPORT")) return <Package className="h-3 w-3 text-success" />;
-  if (type.includes("error") || type.includes("ERROR")) return <AlertTriangle className="h-3 w-3 text-destructive" />;
+  if (type.includes("error") || type.includes("ERROR") || type.includes("ISSUE")) return <AlertTriangle className="h-3 w-3 text-destructive" />;
+  if (type.includes("FEED")) return <Rss className="h-3 w-3 text-primary" />;
   return <Activity className="h-3 w-3 text-muted-foreground" />;
 }
 
