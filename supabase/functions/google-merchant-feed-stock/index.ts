@@ -1,5 +1,6 @@
-// Google Merchant Supplemental Stock Feed v2 — production-ready
-// Mirrors exact g:id construction from primary feed so every variant matches 1:1
+// Google Merchant Local Inventory Feed — production-ready
+// Outputs per-store stock with correct local inventory attributes
+// Mirrors exact g:id construction from primary feed (sku-maat_id)
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -31,7 +32,6 @@ serve(async (req) => {
     const url = new URL(req.url);
     let tenantId = url.searchParams.get('tenantId');
 
-    // Support POST body for tenantId (bypasses Cloudflare GET caching)
     if (!tenantId && req.method === 'POST') {
       try {
         const body = await req.json();
@@ -54,7 +54,7 @@ serve(async (req) => {
       return new Response('Feed not enabled', { status: 404, headers: corsHeaders });
     }
 
-    // ── Load category mappings (determines which products are in the primary feed) ──
+    // ── Load category mappings ──────────────────────────────────────
     const { data: mappings } = await supabase
       .from('google_category_mappings')
       .select('article_group_id')
@@ -64,12 +64,54 @@ serve(async (req) => {
     const hasFallback = !!feedConfig.fallback_google_category;
     const currency = feedConfig.currency || 'EUR';
 
+    // ── Pre-load all stock_by_store into a map: variant_id → [{store_id, qty}] ──
+    const storeStockMap = new Map<string, { store_id: string; qty: number }[]>();
+    let stockOffset = 0;
+    const stockBatch = 1000;
+    while (true) {
+      const { data: stockRows, error: stockErr } = await supabase
+        .from('stock_by_store')
+        .select('variant_id, store_id, qty')
+        .range(stockOffset, stockOffset + stockBatch - 1);
+      if (stockErr) throw stockErr;
+      if (!stockRows || stockRows.length === 0) break;
+      for (const row of stockRows) {
+        const existing = storeStockMap.get(row.variant_id) || [];
+        existing.push({ store_id: row.store_id, qty: row.qty });
+        storeStockMap.set(row.variant_id, existing);
+      }
+      if (stockRows.length < stockBatch) break;
+      stockOffset += stockBatch;
+    }
+
+    // Collect unique store IDs for fallback (ensure every variant has entries for all stores)
+    const allStoreIds = new Set<string>();
+    for (const entries of storeStockMap.values()) {
+      for (const e of entries) allStoreIds.add(e.store_id);
+    }
+
+    // ── Also load stock_totals as fallback for variants without store-level data ──
+    const stockTotalsMap = new Map<string, number>();
+    let totalsOffset = 0;
+    while (true) {
+      const { data: totalsRows, error: totErr } = await supabase
+        .from('stock_totals')
+        .select('variant_id, qty')
+        .range(totalsOffset, totalsOffset + stockBatch - 1);
+      if (totErr) throw totErr;
+      if (!totalsRows || totalsRows.length === 0) break;
+      for (const row of totalsRows) {
+        stockTotalsMap.set(row.variant_id, row.qty);
+      }
+      if (totalsRows.length < stockBatch) break;
+      totalsOffset += stockBatch;
+    }
+
     // ── Iterate products in batches ─────────────────────────────────
     const items: string[] = [];
     let offset = 0;
     const batchSize = 1000;
-    let totalVariants = 0;
-    let inStockCount = 0;
+    let totalItems = 0;
 
     while (true) {
       const { data: products, error } = await supabase
@@ -78,8 +120,7 @@ serve(async (req) => {
           sku, images, article_group,
           product_prices(regular, list),
           variants!variants_product_id_fkey(
-            maat_id, active, allow_backorder,
-            stock_totals(qty)
+            id, maat_id, active, allow_backorder
           )
         `)
         .eq('tenant_id', tenantId)
@@ -89,18 +130,16 @@ serve(async (req) => {
       if (!products || products.length === 0) break;
 
       for (const product of products) {
-        // ── Mirror primary feed inclusion logic exactly ──────────────
+        // ── Mirror primary feed inclusion logic ──────────────────────
         const articleGroupId = (product.article_group as any)?.id;
         const hasMapping = articleGroupId ? mappedGroups.has(articleGroupId) : false;
         if (!hasMapping && !hasFallback) continue;
 
-        // Skip products with no price (primary feed does this)
         const priceData = product.product_prices as any;
         const price = Array.isArray(priceData) ? priceData[0] : priceData;
         const regularPrice = price?.regular || 0;
         if (regularPrice <= 0) continue;
 
-        // Skip products with no images (primary feed does this)
         const images = (product.images as string[]) || [];
         if (images.length === 0) continue;
 
@@ -110,41 +149,52 @@ serve(async (req) => {
         for (const variant of variants) {
           if (!variant.active) continue;
 
-          // ── Stock & availability ────────────────────────────────
-          const stockQty = variant.stock_totals?.[0]?.qty ?? variant.stock_totals?.qty ?? 0;
-          let availability: string;
-          if (stockQty > 0) {
-            availability = 'in_stock';
-            inStockCount++;
-          } else if (variant.allow_backorder) {
-            availability = 'backorder';
-          } else {
-            availability = 'out_of_stock';
-          }
-
-          // ── g:id must match primary feed exactly ────────────────
           const itemId = `${product.sku}-${variant.maat_id}`;
+          const storeEntries = storeStockMap.get(variant.id);
 
-          let itemXml = `    <item>
+          if (storeEntries && storeEntries.length > 0) {
+            // ── Emit one <item> per store ────────────────────────────
+            for (const store of storeEntries) {
+              const availability = store.qty > 0
+                ? 'in stock'
+                : (variant.allow_backorder ? 'limited availability' : 'out of stock');
+
+              let itemXml = `    <item>
       <g:id>${escapeXml(itemId)}</g:id>
-      <g:availability>${availability}</g:availability>`;
+      <g:store_code>${escapeXml(store.store_id)}</g:store_code>
+      <g:availability>${availability}</g:availability>
+      <g:quantity>${store.qty}</g:quantity>
+      <g:price>${regularPrice.toFixed(2)} ${currency}</g:price>`;
+              if (salePrice && salePrice > 0) {
+                itemXml += `\n      <g:sale_price>${salePrice.toFixed(2)} ${currency}</g:sale_price>`;
+              }
+              itemXml += `\n    </item>`;
+              items.push(itemXml);
+              totalItems++;
+            }
+          } else if (allStoreIds.size > 0) {
+            // ── Variant has no store-level data, emit for all stores with total stock ──
+            const totalQty = stockTotalsMap.get(variant.id) ?? 0;
+            for (const storeId of allStoreIds) {
+              const availability = totalQty > 0
+                ? 'in stock'
+                : (variant.allow_backorder ? 'limited availability' : 'out of stock');
 
-          // availability_date for out_of_stock (30 days from now, matches primary feed)
-          if (availability === 'out_of_stock') {
-            const availDate = new Date();
-            availDate.setDate(availDate.getDate() + 30);
-            itemXml += `\n      <g:availability_date>${availDate.toISOString().split('T')[0]}T00:00:00+01:00</g:availability_date>`;
+              let itemXml = `    <item>
+      <g:id>${escapeXml(itemId)}</g:id>
+      <g:store_code>${escapeXml(storeId)}</g:store_code>
+      <g:availability>${availability}</g:availability>
+      <g:quantity>${totalQty}</g:quantity>
+      <g:price>${regularPrice.toFixed(2)} ${currency}</g:price>`;
+              if (salePrice && salePrice > 0) {
+                itemXml += `\n      <g:sale_price>${salePrice.toFixed(2)} ${currency}</g:sale_price>`;
+              }
+              itemXml += `\n    </item>`;
+              items.push(itemXml);
+              totalItems++;
+            }
           }
-
-          // Include price in supplemental feed (Google recommends for faster updates)
-          itemXml += `\n      <g:price>${regularPrice.toFixed(2)} ${currency}</g:price>`;
-          if (salePrice && salePrice > 0) {
-            itemXml += `\n      <g:sale_price>${salePrice.toFixed(2)} ${currency}</g:sale_price>`;
-          }
-
-          itemXml += `\n    </item>`;
-          items.push(itemXml);
-          totalVariants++;
+          // If no stores exist at all, skip (local inventory needs store codes)
         }
       }
 
@@ -152,15 +202,15 @@ serve(async (req) => {
       offset += batchSize;
     }
 
-    console.log(`Stock feed generated: ${totalVariants} variants (${inStockCount} in_stock, ${totalVariants - inStockCount} out_of_stock/backorder)`);
+    console.log(`Local inventory feed generated: ${totalItems} items across ${allStoreIds.size} stores`);
 
     // ── Build RSS 2.0 feed ──────────────────────────────────────────
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">
   <channel>
-    <title>${escapeXml((feedConfig.feed_title || 'Google Shopping Feed') + ' - Stock')}</title>
+    <title>${escapeXml((feedConfig.feed_title || 'Google Shopping Feed') + ' - Local Inventory')}</title>
     <link>${escapeXml(feedConfig.shop_url || '')}</link>
-    <description>Supplemental stock and price feed</description>
+    <description>Local product inventory feed</description>
 ${items.join('\n')}
   </channel>
 </rss>`;
@@ -173,7 +223,7 @@ ${items.join('\n')}
       },
     });
   } catch (error: any) {
-    console.error('Error generating stock feed:', error);
+    console.error('Error generating local inventory feed:', error);
     return new Response(
       JSON.stringify({ error: error.message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
