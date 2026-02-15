@@ -155,3 +155,6 @@ verify_jwt = false
 
 [functions.sync-woo-images]
 verify_jwt = false
+
+[functions.refresh-image-urls]
+verify_jwt = false

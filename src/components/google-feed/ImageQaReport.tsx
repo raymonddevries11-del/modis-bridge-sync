@@ -86,8 +86,8 @@ export function ImageQaReport({ tenantId }: { tenantId: string }) {
       let hasMore = true;
 
       while (hasMore) {
-        const { data, error } = await supabase.functions.invoke("sync-woo-image-urls", {
-          body: { tenantId, dryRun: false, offset, limit: 100 },
+        const { data, error } = await supabase.functions.invoke("refresh-image-urls", {
+          body: { tenantId, dryRun: false, offset, limit: 500 },
         });
 
         if (error) throw new Error(error.message);
@@ -96,26 +96,24 @@ export function ImageQaReport({ tenantId }: { tenantId: string }) {
         if (!summary) break;
 
         totalUpdated += summary.updated || 0;
-        totalNotFound += summary.notFound || 0;
+        totalNotFound += summary.notInWoo || 0;
         totalErrors += summary.errors || 0;
 
         hasMore = !!summary.nextOffset;
         offset = summary.nextOffset || 0;
 
-        // Safety: max 20 iterations (2000 products)
-        if (offset > 2000) break;
+        if (offset > 10000) break;
       }
 
       setSyncResult({ updated: totalUpdated, notFound: totalNotFound, errors: totalErrors });
       toast({
-        title: "WooCommerce image sync voltooid",
-        description: `${totalUpdated} producten bijgewerkt, ${totalNotFound} niet gevonden`,
+        title: "Bulk image refresh voltooid",
+        description: `${totalUpdated} producten bijgewerkt, ${totalNotFound} niet in WC`,
       });
 
-      // Reload report after sync
       await loadReport();
     } catch (err: any) {
-      toast({ title: "Sync mislukt", description: err.message, variant: "destructive" });
+      toast({ title: "Refresh mislukt", description: err.message, variant: "destructive" });
     } finally {
       setSyncing(false);
     }
@@ -161,10 +159,10 @@ export function ImageQaReport({ tenantId }: { tenantId: string }) {
         <CardHeader className="pb-3">
           <CardTitle className="text-lg flex items-center gap-2">
             <CloudDownload className="h-5 w-5 text-primary" />
-            WooCommerce Image URL Sync
+            Bulk Image URL Refresh
           </CardTitle>
           <CardDescription>
-            Vervang interne storage URLs door WooCommerce-gehoste afbeeldings-URLs.
+            Haalt alle WooCommerce-producten op en vervangt lokale afbeeldings-URLs in bulk.
             Dit zorgt ervoor dat de Google Merchant feed alleen externe URLs bevat.
           </CardDescription>
         </CardHeader>
