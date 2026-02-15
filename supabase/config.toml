@@ -140,3 +140,6 @@ verify_jwt = false
 
 [functions.bulk-edit-products]
 verify_jwt = false
+
+[functions.google-merchant-feed-stock]
+verify_jwt = false
