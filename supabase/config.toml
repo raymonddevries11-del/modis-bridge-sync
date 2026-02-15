@@ -152,3 +152,6 @@ verify_jwt = false
 
 [functions.sync-woo-slugs]
 verify_jwt = false
+
+[functions.sync-woo-images]
+verify_jwt = false
