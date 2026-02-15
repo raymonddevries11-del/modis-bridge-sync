@@ -21,7 +21,7 @@ function escapeXml(str: string): string {
 }
 
 // Google Business Profile store code
-const GOOGLE_STORE_CODE = '8741066502151997251';
+const GOOGLE_STORE_CODE = 'Kosterschoenmode1';
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
