@@ -149,3 +149,6 @@ verify_jwt = false
 
 [functions.batch-woo-sync]
 verify_jwt = false
+
+[functions.sync-woo-slugs]
+verify_jwt = false

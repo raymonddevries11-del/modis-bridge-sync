@@ -292,9 +292,8 @@ serve(async (req) => {
         // 1️⃣ Skip products with no real price (price must never be 0)
         if (regularPrice <= 0) continue;
 
-        // 2️⃣ Product URL: slugify the product title (matches WooCommerce auto-generated slugs)
-        // url_key is often stale/incorrect, so we derive from title instead
-        const productSlug = slugify(product.title);
+        // 2️⃣ Product URL: prefer url_key (synced from WooCommerce), fallback to slugified title
+        const productSlug = product.url_key || slugify(product.title);
         const productUrl = productSlug
           ? `${shopUrl}/product/${productSlug}/`
           : `${shopUrl}/shop/`;
