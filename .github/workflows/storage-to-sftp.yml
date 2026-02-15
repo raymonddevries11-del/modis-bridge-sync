@@ -24,7 +24,7 @@ jobs:
           npm init -y
           npm install ssh2-sftp-client @supabase/supabase-js
 
-      - name: Sync Supabase Storage to SFTP
+      - name: Sync Supabase Storage to SFTP with ACK handling
         env:
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
           SFTP_PORT: ${{ secrets.SFTP_PORT }}
@@ -38,34 +38,54 @@ jobs:
           node << 'EOF'
           const SftpClient = require('ssh2-sftp-client');
 
+          const ACK_TIMEOUT_HOURS = 24;
+
+          async function supabaseRequest(path, options = {}) {
+            const url = `${process.env.SUPABASE_URL}/rest/v1/${path}`;
+            const res = await fetch(url, {
+              ...options,
+              headers: {
+                'apikey': process.env.SUPABASE_SERVICE_KEY,
+                'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+                'Content-Type': 'application/json',
+                'Prefer': options.prefer || 'return=minimal',
+                ...(options.headers || {}),
+              },
+            });
+            if (!res.ok && !options.ignoreError) {
+              const body = await res.text();
+              throw new Error(`Supabase ${path}: ${res.status} ${body}`);
+            }
+            if (options.prefer === 'return=representation' || options.returnJson) {
+              return res.json();
+            }
+            return res;
+          }
+
+          async function logChangelog(tenantId, eventType, description, metadata) {
+            try {
+              await supabaseRequest('changelog', {
+                method: 'POST',
+                body: JSON.stringify({ tenant_id: tenantId, event_type: eventType, description, metadata }),
+              });
+            } catch (e) {
+              console.error('Changelog error:', e.message);
+            }
+          }
+
+          async function getOutboundPath(tenantId) {
+            const configs = await supabaseRequest(
+              `tenant_config?tenant_id=eq.${tenantId}&select=sftp_outbound_path`,
+              { returnJson: true }
+            );
+            return configs?.[0]?.sftp_outbound_path || null;
+          }
+
           async function syncToSftp() {
             const sftp = new SftpClient();
             
             try {
-              console.log('=== Syncing Supabase Storage to SFTP ===');
-              
-              // Get list of files from database with tenant info
-              const response = await fetch(
-                `${process.env.SUPABASE_URL}/rest/v1/export_files?synced_to_sftp=eq.false&select=*,tenants!inner(slug)`,
-                {
-                  headers: {
-                    'apikey': process.env.SUPABASE_ANON_KEY,
-                    'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
-                  }
-                }
-              );
-              
-              if (!response.ok) {
-                throw new Error(`Failed to fetch export files: ${response.status}`);
-              }
-              
-              const files = await response.json();
-              console.log(`Found ${files.length} files to sync`);
-              
-              if (files.length === 0) {
-                console.log('No files to sync');
-                return;
-              }
+              console.log('=== Order SFTP Sync (Upload + ACK) ===');
               
               // Connect to SFTP
               const connectConfig = {
@@ -75,7 +95,6 @@ jobs:
                 privateKey: Buffer.from(process.env.SFTP_PRIVATE_KEY, 'utf-8'),
                 readyTimeout: 30000,
               };
-              
               if (process.env.SFTP_PASSPHRASE) {
                 connectConfig.passphrase = process.env.SFTP_PASSPHRASE;
               }
@@ -83,109 +102,151 @@ jobs:
               console.log('Connecting to SFTP...');
               await sftp.connect(connectConfig);
               console.log('✓ Connected to SFTP');
+
+              // ──────────────────────────────────────
+              // PHASE 1: Upload new files to /ready/
+              // ──────────────────────────────────────
+              console.log('\n── Phase 1: Upload pending files ──');
+
+              const pendingFiles = await supabaseRequest(
+                'export_files?ack_status=eq.pending&select=*,tenants!inner(slug)',
+                { returnJson: true }
+              );
+              console.log(`Found ${pendingFiles.length} files to upload`);
               
-              let synced = 0;
-              
-              for (const file of files) {
+              let uploaded = 0;
+              for (const file of pendingFiles) {
                 const tenantSlug = file.tenants?.slug;
                 if (!tenantSlug) {
-                  console.error(`No tenant found for file ${file.filename}, skipping`);
+                  console.error(`No tenant for file ${file.filename}, skipping`);
                   continue;
                 }
-                
-                const tenantDir = `/home/customer/www/modisbridge.nl/public_html/${tenantSlug}/wp-to-modis`;
-                const remotePath = `${tenantDir}/${file.filename}`;
+
+                const outboundBase = await getOutboundPath(file.tenant_id);
+                if (!outboundBase) {
+                  console.error(`No outbound path configured for tenant ${tenantSlug}, skipping`);
+                  continue;
+                }
+
+                const readyDir = `${outboundBase}/ready`;
+                const remotePath = `${readyDir}/${file.filename}`;
                 
                 try {
-                  // Ensure tenant directory exists
-                  try {
-                    await sftp.mkdir(tenantDir, true);
-                    console.log(`✓ Directory ensured: ${tenantDir}`);
-                  } catch (e) {
-                    console.log('Directory already exists:', e.message);
-                  }
+                  // Ensure /ready/ directory exists
+                  try { await sftp.mkdir(readyDir, true); } catch (e) { /* exists */ }
                   
-                  // Download from Supabase Storage via public URL
+                  // Download from Supabase Storage
                   const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/order-exports/${file.storage_path}`;
-                  console.log(`Downloading ${file.filename} for tenant ${tenantSlug}`);
+                  console.log(`Downloading ${file.filename}...`);
+                  const dlRes = await fetch(publicUrl);
+                  if (!dlRes.ok) throw new Error(`Download failed: ${dlRes.status}`);
                   
-                  const downloadResponse = await fetch(publicUrl);
-                  
-                  if (!downloadResponse.ok) {
-                    throw new Error(`Download failed: ${downloadResponse.status}`);
-                  }
-                  
-                  const arrayBuffer = await downloadResponse.arrayBuffer();
-                  const buffer = Buffer.from(arrayBuffer);
-                  
-                  console.log(`Uploading to: ${remotePath} (${buffer.length} bytes)`);
-                  
+                  const buffer = Buffer.from(await dlRes.arrayBuffer());
+                  console.log(`Uploading to ${remotePath} (${buffer.length} bytes)`);
                   await sftp.put(buffer, remotePath);
-                  console.log(`✓ Uploaded ${file.filename} to ${tenantSlug}/wp-to-modis`);
                   
+                  // Verify upload
                   const exists = await sftp.exists(remotePath);
-                  if (!exists) {
-                    throw new Error(`File not found after upload: ${remotePath}`);
-                  }
+                  if (!exists) throw new Error(`File not found after upload: ${remotePath}`);
                   
-                  const dirList = await sftp.list(tenantDir);
-                  console.log(`Files in ${tenantSlug}:`, dirList.map(f => f.name).join(', '));
+                  // Mark as uploaded + awaiting ACK
+                  const now = new Date().toISOString();
+                  await supabaseRequest(`export_files?id=eq.${file.id}`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({
+                      synced_to_sftp: true,
+                      synced_at: now,
+                      ack_status: 'uploaded',
+                      uploaded_to_sftp_at: now,
+                    }),
+                  });
                   
-                  // Mark as synced in database
-                  const updateResponse = await fetch(
-                    `${process.env.SUPABASE_URL}/rest/v1/export_files?id=eq.${file.id}`,
-                    {
-                      method: 'PATCH',
-                      headers: {
-                        'apikey': process.env.SUPABASE_SERVICE_KEY,
-                        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
-                        'Content-Type': 'application/json',
-                        'Prefer': 'return=minimal'
-                      },
-                      body: JSON.stringify({
-                        synced_to_sftp: true,
-                        synced_at: new Date().toISOString()
-                      })
-                    }
+                  await logChangelog(file.tenant_id, 'ORDER_SFTP_UPLOADED',
+                    `Order ${file.order_number} XML geüpload naar SFTP /ready/`,
+                    { filename: file.filename, order_number: file.order_number, remote_path: remotePath }
                   );
                   
-                  if (!updateResponse.ok) {
-                    console.error(`Failed to mark ${file.filename} as synced`);
-                  }
-                  
-                  // Log to changelog
-                  try {
-                    await fetch(
-                      `${process.env.SUPABASE_URL}/rest/v1/changelog`,
-                      {
-                        method: 'POST',
-                        headers: {
-                          'apikey': process.env.SUPABASE_SERVICE_KEY,
-                          'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
-                          'Content-Type': 'application/json',
-                          'Prefer': 'return=minimal'
-                        },
-                        body: JSON.stringify({
-                          tenant_id: file.tenant_id,
-                          event_type: 'SFTP_UPLOAD',
-                          description: `Order ${file.order_number} geüpload naar SFTP`,
-                          metadata: { filename: file.filename, order_number: file.order_number }
-                        })
-                      }
-                    );
-                  } catch (logError) {
-                    console.error('Failed to log to changelog:', logError.message);
-                  }
-                  
-                  synced++;
-                  
+                  uploaded++;
+                  console.log(`✓ Uploaded ${file.filename}`);
                 } catch (error) {
-                  console.error(`Error syncing ${file.filename}:`, error.message);
+                  console.error(`Error uploading ${file.filename}:`, error.message);
                 }
               }
+
+              // ──────────────────────────────────────
+              // PHASE 2: Check ACK (file disappeared)
+              // ──────────────────────────────────────
+              console.log('\n── Phase 2: Check ACK for uploaded files ──');
+
+              const uploadedFiles = await supabaseRequest(
+                'export_files?ack_status=eq.uploaded&select=*,tenants!inner(slug)',
+                { returnJson: true }
+              );
+              console.log(`Checking ACK for ${uploadedFiles.length} files`);
               
-              console.log(`\n=== Sync Complete ===`);
-              console.log(`Synced: ${synced}`);
+              let acked = 0;
+              let timedOut = 0;
+
+              for (const file of uploadedFiles) {
+                const tenantSlug = file.tenants?.slug;
+                if (!tenantSlug) continue;
+
+                const outboundBase = await getOutboundPath(file.tenant_id);
+                if (!outboundBase) continue;
+
+                const remotePath = `${outboundBase}/ready/${file.filename}`;
+                
+                try {
+                  const exists = await sftp.exists(remotePath);
+                  
+                  if (!exists) {
+                    // File disappeared → Modis picked it up → ACK
+                    console.log(`✓ ACK: ${file.filename} picked up by Modis`);
+                    
+                    await supabaseRequest(`export_files?id=eq.${file.id}`, {
+                      method: 'PATCH',
+                      body: JSON.stringify({ ack_status: 'acked' }),
+                    });
+                    
+                    await logChangelog(file.tenant_id, 'ORDER_ACK_RECEIVED',
+                      `Order ${file.order_number} opgepikt door Modis (ACK)`,
+                      { filename: file.filename, order_number: file.order_number }
+                    );
+                    
+                    acked++;
+                  } else {
+                    // File still there — check timeout
+                    const uploadedAt = new Date(file.uploaded_to_sftp_at);
+                    const hoursElapsed = (Date.now() - uploadedAt.getTime()) / (1000 * 60 * 60);
+                    
+                    if (hoursElapsed > ACK_TIMEOUT_HOURS) {
+                      console.warn(`⚠ TIMEOUT: ${file.filename} still on SFTP after ${hoursElapsed.toFixed(1)}h`);
+                      
+                      await supabaseRequest(`export_files?id=eq.${file.id}`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ ack_status: 'timeout' }),
+                      });
+                      
+                      await logChangelog(file.tenant_id, 'ORDER_ACK_TIMEOUT',
+                        `Order ${file.order_number} niet opgepikt na ${ACK_TIMEOUT_HOURS}h`,
+                        { filename: file.filename, order_number: file.order_number, hours_elapsed: hoursElapsed }
+                      );
+                      
+                      timedOut++;
+                    } else {
+                      console.log(`⏳ Waiting: ${file.filename} (${hoursElapsed.toFixed(1)}h elapsed)`);
+                    }
+                  }
+                } catch (error) {
+                  console.error(`Error checking ACK for ${file.filename}:`, error.message);
+                }
+              }
+
+              // ──────────────────────────────────────
+              // Summary
+              // ──────────────────────────────────────
+              console.log('\n=== Sync Complete ===');
+              console.log(`Uploaded: ${uploaded} | ACKed: ${acked} | Timed out: ${timedOut}`);
               
             } catch (error) {
               console.error('Sync failed:', error);
