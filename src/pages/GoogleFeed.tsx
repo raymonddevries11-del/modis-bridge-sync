@@ -72,6 +72,7 @@ const GoogleFeed = () => {
 
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const feedUrl = tenantId ? `${supabaseUrl}/functions/v1/google-merchant-feed?tenantId=${tenantId}` : '';
+  const stockFeedUrl = tenantId ? `${supabaseUrl}/functions/v1/google-merchant-feed-stock?tenantId=${tenantId}` : '';
 
   useEffect(() => {
     if (tenantId) {
@@ -239,8 +240,8 @@ const GoogleFeed = () => {
     }
   };
 
-  const copyFeedUrl = () => {
-    navigator.clipboard.writeText(feedUrl);
+  const copyFeedUrl = (url?: string) => {
+    navigator.clipboard.writeText(url || feedUrl);
     toast({ title: "Feed URL gekopieerd" });
   };
 
@@ -518,11 +519,36 @@ const GoogleFeed = () => {
                   {feedConfig?.enabled ? (
                     <div className="flex items-center gap-2">
                       <Input readOnly value={feedUrl} className="font-mono text-sm" />
-                      <Button variant="outline" size="icon" onClick={copyFeedUrl}>
+                      <Button variant="outline" size="icon" onClick={() => copyFeedUrl()}>
                         <Copy className="h-4 w-4" />
                       </Button>
                       <Button variant="outline" size="icon" asChild>
                         <a href={feedUrl} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="h-4 w-4" />
+                        </a>
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground">Activeer de feed om de URL te genereren</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Supplemental Stock Feed URL */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Aanvullende Voorraadfeed URL</CardTitle>
+                  <CardDescription>Gebruik deze URL als supplemental feed in Google Merchant Center voor real-time voorraadstatus</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {feedConfig?.enabled ? (
+                    <div className="flex items-center gap-2">
+                      <Input readOnly value={stockFeedUrl} className="font-mono text-sm" />
+                      <Button variant="outline" size="icon" onClick={() => copyFeedUrl(stockFeedUrl)}>
+                        <Copy className="h-4 w-4" />
+                      </Button>
+                      <Button variant="outline" size="icon" asChild>
+                        <a href={stockFeedUrl} target="_blank" rel="noopener noreferrer">
                           <ExternalLink className="h-4 w-4" />
                         </a>
                       </Button>
