@@ -146,3 +146,6 @@ verify_jwt = false
 
 [functions.validate-inbound-xml]
 verify_jwt = false
+
+[functions.batch-woo-sync]
+verify_jwt = false
