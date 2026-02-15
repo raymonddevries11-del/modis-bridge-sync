@@ -5,6 +5,46 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+/**
+ * Try to find a WooCommerce product by SKU.
+ * Falls back to base SKU (without trailing "000") if exact match fails.
+ */
+async function findWooProduct(wooUrl: string, ck: string, cs: string, sku: string): Promise<any | null> {
+  // Try exact SKU first
+  const url1 = `${wooUrl}/wp-json/wc/v3/products?sku=${encodeURIComponent(sku)}&consumer_key=${ck}&consumer_secret=${cs}`;
+  const res1 = await fetch(url1);
+  if (res1.ok) {
+    const products = await res1.json();
+    if (products?.length > 0) return products[0];
+  }
+
+  // Try base SKU without trailing "000" (common Modis pattern)
+  if (sku.endsWith('000') && sku.length > 6) {
+    const baseSku = sku.slice(0, -3);
+    const url2 = `${wooUrl}/wp-json/wc/v3/products?sku=${encodeURIComponent(baseSku)}&consumer_key=${ck}&consumer_secret=${cs}`;
+    const res2 = await fetch(url2);
+    if (res2.ok) {
+      const products = await res2.json();
+      if (products?.length > 0) return products[0];
+    }
+  }
+
+  // Try search by slug-like partial match
+  const url3 = `${wooUrl}/wp-json/wc/v3/products?search=${encodeURIComponent(sku.replace(/000$/, ''))}&consumer_key=${ck}&consumer_secret=${cs}&per_page=5`;
+  const res3 = await fetch(url3);
+  if (res3.ok) {
+    const products = await res3.json();
+    // Find exact or close SKU match
+    const match = products?.find((p: any) => 
+      p.sku === sku || p.sku === sku.replace(/000$/, '') ||
+      sku.startsWith(p.sku)
+    );
+    if (match) return match;
+  }
+
+  return null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -16,7 +56,7 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const { tenantId, dryRun = true, offset = 0, limit = 50 } = await req.json();
+    const { tenantId, dryRun = true, offset = 0, limit = 50, onlySupabaseUrls = false } = await req.json();
     if (!tenantId) throw new Error('tenantId is required');
 
     // Get WooCommerce config
@@ -31,16 +71,23 @@ Deno.serve(async (req) => {
     const ck = config.woocommerce_consumer_key;
     const cs = config.woocommerce_consumer_secret;
 
-    // Get products page
-    const { data: products, error: prodErr, count } = await supabase
+    // Build query - optionally filter to only products with Supabase storage URLs
+    let query = supabase
       .from('products')
       .select('id, sku, title, images', { count: 'exact' })
       .eq('tenant_id', tenantId)
-      .order('sku')
-      .range(offset, offset + limit - 1);
+      .order('sku');
+
+    // Note: can't filter jsonb with LIKE via SDK, so we filter in-memory after fetch
+    const { data: allProducts, error: prodErr, count } = await query.range(offset, offset + limit - 1);
+
+    // Filter to only products with Supabase storage URLs if requested
+    const products = onlySupabaseUrls
+      ? (allProducts || []).filter(p => JSON.stringify(p.images || []).includes('supabase'))
+      : (allProducts || []);
     if (prodErr) throw new Error(`Failed to fetch products: ${prodErr.message}`);
 
-    console.log(`Processing ${products.length} products (offset=${offset}, total=${count})`);
+    console.log(`Processing ${products.length} products (offset=${offset}, total=${count}, onlySupabase=${onlySupabaseUrls})`);
 
     const results: any[] = [];
     let updated = 0;
@@ -55,22 +102,14 @@ Deno.serve(async (req) => {
 
       const promises = batch.map(async (product) => {
         try {
-          const url = `${wooUrl}/wp-json/wc/v3/products?sku=${encodeURIComponent(product.sku)}&consumer_key=${ck}&consumer_secret=${cs}`;
-          const res = await fetch(url);
-          if (!res.ok) {
-            errors++;
-            results.push({ sku: product.sku, status: 'api_error', code: res.status });
-            return;
-          }
+          const wooProduct = await findWooProduct(wooUrl, ck, cs, product.sku);
 
-          const wooProducts = await res.json();
-          if (!wooProducts || wooProducts.length === 0) {
+          if (!wooProduct) {
             notFound++;
             results.push({ sku: product.sku, status: 'not_found_in_woo' });
             return;
           }
 
-          const wooProduct = wooProducts[0];
           const wooImages: string[] = (wooProduct.images || [])
             .map((img: any) => img.src)
             .filter((src: string) => src && !src.includes('placeholder'));
@@ -111,7 +150,8 @@ Deno.serve(async (req) => {
             status: dryRun ? 'would_update' : 'updated',
             oldCount: currentImages.length,
             newCount: wooImages.length,
-            sample: wooImages[0],
+            oldSample: currentImages[0],
+            newSample: wooImages[0],
           });
         } catch (e) {
           errors++;
@@ -136,6 +176,7 @@ Deno.serve(async (req) => {
       noImages,
       errors,
       dryRun,
+      onlySupabaseUrls,
     };
 
     console.log('Summary:', JSON.stringify(summary));
