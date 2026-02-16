@@ -5,6 +5,92 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// --- Base64 image conversion for Supabase storage URLs ---
+// SiteGround's firewall blocks WooCommerce from fetching Supabase storage URLs.
+// We download images server-side and convert to data URLs so WooCommerce can sideload them.
+
+const MIME_TYPES: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  webp: 'image/webp', gif: 'image/gif', JPG: 'image/jpeg',
+  JPEG: 'image/jpeg', PNG: 'image/png',
+};
+
+function isSupabaseStorageUrl(url: string): boolean {
+  return url.includes('supabase.co/storage') || url.includes('supabase.co/storage');
+}
+
+/**
+ * Extract the storage path from a full Supabase storage URL.
+ * E.g. "https://xxx.supabase.co/storage/v1/object/public/product-images/foto.JPG" → "foto.JPG"
+ */
+function extractStoragePath(url: string): string | null {
+  const match = url.match(/\/storage\/v1\/object\/public\/product-images\/(.+)$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
+ * Download an image from Supabase Storage and return it as a base64 data URL.
+ * Falls back to original URL on failure so the sync can continue.
+ */
+async function convertToDataUrl(imageUrl: string, supabase: any): Promise<string> {
+  const storagePath = extractStoragePath(imageUrl);
+  if (!storagePath) {
+    console.warn(`Could not extract storage path from: ${imageUrl}`);
+    return imageUrl; // fallback to original URL
+  }
+
+  try {
+    const { data: fileData, error } = await supabase.storage
+      .from('product-images')
+      .download(storagePath);
+
+    if (error || !fileData) {
+      console.warn(`Failed to download ${storagePath}: ${error?.message}`);
+      return imageUrl;
+    }
+
+    const arrayBuffer = await fileData.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+
+    // Skip very large images (>5MB) to avoid memory issues
+    if (bytes.length > 5 * 1024 * 1024) {
+      console.warn(`Image too large for base64 conversion (${(bytes.length / 1024 / 1024).toFixed(1)}MB): ${storagePath}`);
+      return imageUrl;
+    }
+
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+
+    const ext = storagePath.split('.').pop() || 'jpg';
+    const mimeType = MIME_TYPES[ext] || 'image/jpeg';
+
+    console.log(`✓ Converted ${storagePath} to data URL (${(bytes.length / 1024).toFixed(0)}KB)`);
+    return `data:${mimeType};base64,${base64}`;
+  } catch (err) {
+    console.warn(`Base64 conversion failed for ${storagePath}:`, err);
+    return imageUrl; // fallback
+  }
+}
+
+/**
+ * Process an array of image URLs: convert Supabase storage URLs to base64 data URLs,
+ * leave other URLs as-is.
+ */
+async function convertImagesToDataUrls(imageUrls: string[], supabase: any): Promise<string[]> {
+  const results: string[] = [];
+  for (const url of imageUrls) {
+    if (isSupabaseStorageUrl(url)) {
+      results.push(await convertToDataUrl(url, supabase));
+    } else {
+      results.push(url);
+    }
+  }
+  return results;
+}
+
 // --- SiteGround bot-protection hardening ---
 
 const SG_SAFE_HEADERS: Record<string, string> = {
@@ -612,16 +698,17 @@ Deno.serve(async (req) => {
 
         const pimImages = Array.isArray(pim.images) ? pim.images : [];
         const storageBaseUrl = `${Deno.env.get('SUPABASE_URL')}/storage/v1/object/public/product-images/`;
-        const validImages = pimImages
+        let validImages = pimImages
           .map((img: any) => typeof img === 'string' ? img : img.url || img.src)
           .filter(Boolean)
           .map((src: string) => {
-            // Already an absolute URL — use as-is
             if (src.startsWith('http://') || src.startsWith('https://')) return src;
-            // Relative storage path (e.g. "modis/foto/W-1_233761001.JPG") — convert to public URL
             return `${storageBaseUrl}${src}`;
           });
+
+        // Convert Supabase storage URLs to base64 data URLs to bypass SiteGround firewall
         if (validImages.length > 0) {
+          validImages = await convertImagesToDataUrls(validImages, supabase);
           desiredData.images = validImages.map((src: string, idx: number) => ({
             src,
             position: idx,
