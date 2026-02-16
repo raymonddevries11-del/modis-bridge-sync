@@ -105,6 +105,12 @@ serve(async (req) => {
           case 'UPDATE_PRODUCTS':
             functionName = 'woocommerce-sync'; // Use existing function for updates
             break;
+          case 'FIX_URL_KEYS':
+            functionName = 'fix-url-keys';
+            break;
+          case 'SYNC_WOO_SLUGS':
+            functionName = 'sync-woo-slugs';
+            break;
           default:
             throw new Error(`Unknown job type: ${job.type}`);
         }

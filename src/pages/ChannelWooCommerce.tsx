@@ -1,10 +1,43 @@
+import { useState } from "react";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Send, RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
+import { Send, RefreshCw, CheckCircle2, Link2, Globe } from "lucide-react";
+import { TenantSelector } from "@/components/TenantSelector";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
 
 const ChannelWooCommerce = () => {
+  const [tenantId, setTenantId] = useState("");
+  const [fixingKeys, setFixingKeys] = useState(false);
+  const [syncingSlugs, setSyncingSlugs] = useState(false);
+  const navigate = useNavigate();
+
+  const createJob = async (type: string, label: string, setLoading: (v: boolean) => void) => {
+    if (!tenantId) {
+      toast.error("Selecteer eerst een tenant");
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.from("jobs").insert({
+        type,
+        state: "ready" as const,
+        payload: { tenantId },
+        tenant_id: tenantId,
+      });
+      if (error) throw error;
+      toast.success(`${label} job aangemaakt`, {
+        action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") },
+      });
+    } catch (e: any) {
+      toast.error(`Fout bij aanmaken job: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -53,15 +86,38 @@ const ChannelWooCommerce = () => {
           <CardHeader>
             <CardTitle className="text-base">Acties</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-3">
-            <Button variant="outline" size="sm">
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Full Sync
-            </Button>
-            <Button variant="outline" size="sm">
-              <Send className="mr-2 h-4 w-4" />
-              Sync Missing Products
-            </Button>
+          <CardContent className="space-y-4">
+            <div>
+              <TenantSelector value={tenantId} onChange={setTenantId} />
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button variant="outline" size="sm">
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Full Sync
+              </Button>
+              <Button variant="outline" size="sm">
+                <Send className="mr-2 h-4 w-4" />
+                Sync Missing Products
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!tenantId || fixingKeys}
+                onClick={() => createJob("FIX_URL_KEYS", "Fix URL Keys", setFixingKeys)}
+              >
+                <Link2 className="mr-2 h-4 w-4" />
+                {fixingKeys ? "Bezig..." : "Fix URL Keys"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!tenantId || syncingSlugs}
+                onClick={() => createJob("SYNC_WOO_SLUGS", "Sync Slugs", setSyncingSlugs)}
+              >
+                <Globe className="mr-2 h-4 w-4" />
+                {syncingSlugs ? "Bezig..." : "Sync alle Slugs"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
 

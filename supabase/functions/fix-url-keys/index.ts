@@ -16,7 +16,7 @@ Deno.serve(async (req) => {
   );
 
   try {
-    const { tenantId, dryRun = false } = await req.json();
+    const { tenantId, dryRun = false, jobId } = await req.json();
     if (!tenantId) throw new Error('tenantId is required');
 
     // Get WooCommerce credentials
