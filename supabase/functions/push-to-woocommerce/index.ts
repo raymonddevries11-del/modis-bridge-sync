@@ -932,6 +932,55 @@ Deno.serve(async (req) => {
               break;
             }
           } else if (!updateResult.response.ok || !updateResult.json) {
+            // Check for image upload error — retry without images
+            const errCode = updateResult.json?.code;
+            if (errCode === 'woocommerce_product_image_upload_error') {
+              console.warn(`Product ${pim.sku}: image upload failed on update, retrying WITHOUT images`);
+              const noImgData = { ...desiredData };
+              delete noImgData.images;
+              const retryResult = await fetchWithRetry(updateUrl, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(noImgData),
+              }, rateLimiter);
+
+              if (retryResult.response.ok && retryResult.json) {
+                await recordSuccess(supabase);
+                const updated = retryResult.json;
+                console.log(`Updated product ${pim.sku} (without images) WC #${updated.id}`);
+
+                await supabase.from('changelog').insert({
+                  tenant_id: tenantId, event_type: 'WOO_IMAGE_UPLOAD_FAILED',
+                  description: `Afbeeldingen konden niet worden geüpload voor ${pim.sku} — product bijgewerkt zonder afbeeldingen`,
+                  metadata: { sku: pim.sku, imageCount: validImages.length, error: updateResult.json?.message?.substring(0, 200) },
+                });
+
+                await supabase.from('woo_products').upsert({
+                  tenant_id: tenantId, woo_id: updated.id, product_id: pim.id,
+                  sku: pim.sku, name: updated.name, slug: updated.slug,
+                  permalink: updated.permalink, status: updated.status,
+                  stock_status: updated.stock_status, stock_quantity: updated.stock_quantity,
+                  regular_price: updated.regular_price, sale_price: updated.sale_price,
+                  categories: updated.categories || [], tags: updated.tags || [],
+                  images: (updated.images || []).map((img: any) => ({ id: img.id, src: img.src, alt: img.alt })),
+                  type: updated.type,
+                  last_fetched_at: new Date().toISOString(),
+                  last_pushed_at: new Date().toISOString(),
+                  last_push_changes: { action: 'updated', fields: changes, pushed_at: new Date().toISOString(), note: 'images skipped due to upload error' },
+                }, { onConflict: 'tenant_id,woo_id' });
+
+                // Still sync variations
+                if (isVariable) {
+                  const varResult = await createOrUpdateVariations(
+                    config.woocommerce_url, wooAuth, updated.id, pim, rateLimiter, supabase, tenantId, maatAttrId
+                  );
+                  variationAudits.push(varResult.audit);
+                }
+
+                results.push({ sku: pim.sku, action: 'updated', changes: [...changes, { field: 'images', old_value: null, new_value: 'skipped (upload error)' }], message: `Updated without images (WC #${updated.id})` });
+                continue;
+              }
+            }
             results.push({ sku: pim.sku, action: 'error', changes, message: `Update failed: ${updateResult.response.status} - ${(updateResult.text || '').substring(0, 150)}` });
           } else {
             await recordSuccess(supabase);
