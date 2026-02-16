@@ -712,6 +712,9 @@ Deno.serve(async (req) => {
 
     let sessionBlocks = 0;
     const variationAudits: VariationAudit[] = [];
+    // Collect attribute mapping diagnostics across all products
+    const allUnmappedAttrs = new Map<string, { count: number; slug: string; sample_values: string[] }>();
+    const attrMappingStats = { total_mapped: 0, total_unmapped: 0, terms_missing: 0 };
 
     for (const pim of pimProducts) {
       try {
@@ -817,6 +820,11 @@ Deno.serve(async (req) => {
           }
           attrs.push(maatAttrDef);
         }
+
+        // --- Attribute mapping validation & logging ---
+        const unmappedAttrs: Array<{ key: string; value: string; slug: string }> = [];
+        const mappedAttrs: Array<{ key: string; wc_id: number; wc_name: string; value: string; term_id: number | null }> = [];
+
         if (pim.attributes && typeof pim.attributes === 'object') {
           const pimAttrs = pim.attributes as Record<string, any>;
           let pos = 1;
@@ -827,26 +835,62 @@ Deno.serve(async (req) => {
             // Priority: 1) explicit PIM→WC mapping from DB, 2) slug match, 3) name match
             const globalAttr = pimToWooMap.get(key.toLowerCase()) || pimToWooMap.get(lookupKey) || globalAttrMap.get(lookupKey) || globalAttrMap.get(key.toLowerCase());
             if (globalAttr) {
-              // Use global attribute ID so the value is "saved" and works as a filter
+              if (!globalAttr.id || globalAttr.id <= 0) {
+                console.error(`  ⚠ Attr "${key}" matched "${globalAttr.name}" but has invalid ID: ${globalAttr.id} — skipping`);
+                unmappedAttrs.push({ key, value: valStr, slug: lookupKey });
+                continue;
+              }
               const termResult = await ensureAttributeTerms(config.woocommerce_url, wooAuth, globalAttr.id, globalAttr.name, [valStr], rateLimiter, cachedTermsByAttrId.get(globalAttr.id) || null, supabase, tenantId);
-              const termId = termResult.get(valStr.toLowerCase());
+              const termId = termResult.get(valStr.toLowerCase()) || null;
               attrs.push({ id: globalAttr.id, position: pos++, visible: true, variation: false, options: [valStr] });
-              console.log(`  Attr "${key}" → global ID ${globalAttr.id} (${globalAttr.name}), value="${valStr}"`);
+              mappedAttrs.push({ key, wc_id: globalAttr.id, wc_name: globalAttr.name, value: valStr, term_id: termId });
+              if (!termId) {
+                console.warn(`  ⚠ Attr "${key}" → global ID ${globalAttr.id}, value="${valStr}" — term NOT resolved (may not save as filter)`);
+              }
             } else {
-              // Fallback: push as local attribute (won't work as filter but preserves data)
               attrs.push({ name: key, position: pos++, visible: true, variation: false, options: [valStr] });
-              console.warn(`  Attr "${key}" has no matching global WC attribute — pushed as local (won't filter)`);
+              unmappedAttrs.push({ key, value: valStr, slug: lookupKey });
+              console.warn(`  ✗ Attr "${key}" (slug: ${lookupKey}) has no matching global WC attribute — pushed as local`);
             }
           }
         }
         if (brand) {
           const merkAttr = globalAttrMap.get('merk');
           if (merkAttr) {
-            await ensureAttributeTerms(config.woocommerce_url, wooAuth, merkAttr.id, 'Merk', [brand], rateLimiter, cachedTermsByAttrId.get(merkAttr.id) || null, supabase, tenantId);
+            const termResult = await ensureAttributeTerms(config.woocommerce_url, wooAuth, merkAttr.id, 'Merk', [brand], rateLimiter, cachedTermsByAttrId.get(merkAttr.id) || null, supabase, tenantId);
+            const termId = termResult.get(brand.toLowerCase()) || null;
             attrs.push({ id: merkAttr.id, position: attrs.length, visible: true, variation: false, options: [brand] });
+            mappedAttrs.push({ key: 'Merk', wc_id: merkAttr.id, wc_name: 'Merk', value: brand, term_id: termId });
           } else {
             attrs.push({ name: 'Merk', position: attrs.length, visible: true, variation: false, options: [brand] });
+            unmappedAttrs.push({ key: 'Merk', value: brand, slug: 'merk' });
           }
+        }
+
+        // Aggregate attribute mapping diagnostics
+        for (const ua of unmappedAttrs) {
+          const existing = allUnmappedAttrs.get(ua.key);
+          if (existing) {
+            existing.count++;
+            if (existing.sample_values.length < 3 && !existing.sample_values.includes(ua.value)) {
+              existing.sample_values.push(ua.value);
+            }
+          } else {
+            allUnmappedAttrs.set(ua.key, { count: 1, slug: ua.slug, sample_values: [ua.value] });
+          }
+          attrMappingStats.total_unmapped++;
+        }
+        for (const ma of mappedAttrs) {
+          attrMappingStats.total_mapped++;
+          if (!ma.term_id) attrMappingStats.terms_missing++;
+        }
+
+        if (unmappedAttrs.length > 0) {
+          console.warn(`[${pim.sku}] ${unmappedAttrs.length} unmapped attributes: ${unmappedAttrs.map(a => `"${a.key}"`).join(', ')}`);
+        }
+        if (mappedAttrs.length > 0) {
+          const noTerm = mappedAttrs.filter(a => !a.term_id);
+          console.log(`[${pim.sku}] ${mappedAttrs.length} mapped attrs (${noTerm.length} without term ID)`);
         }
         if (attrs.length > 0) desiredData.attributes = attrs;
 
@@ -1228,16 +1272,37 @@ Deno.serve(async (req) => {
       mis_mapped_details: variationAudits.flatMap(a => a.mis_mapped).slice(0, 100),
     };
 
+    // Attribute mapping audit
+    const unmappedSummary = [...allUnmappedAttrs.entries()].map(([key, v]) => ({
+      attribute: key, slug: v.slug, products_affected: v.count, sample_values: v.sample_values,
+    }));
+    const attrAudit = {
+      ...attrMappingStats,
+      unmapped_attributes: unmappedSummary,
+    };
+
+    // Log unmapped attributes as separate changelog event if any found
+    if (unmappedSummary.length > 0) {
+      await supabase.from('changelog').insert({
+        tenant_id: tenantId,
+        event_type: 'WOO_ATTR_MAPPING_GAPS',
+        description: `${unmappedSummary.length} PIM-attributen zonder WC global mapping: ${unmappedSummary.map(a => `"${a.attribute}" (${a.products_affected}x)`).join(', ')}`,
+        metadata: { unmapped: unmappedSummary, stats: attrMappingStats },
+      });
+    }
+
     await supabase.from('changelog').insert({
       tenant_id: tenantId,
       event_type: 'WOO_PRODUCT_PUSH',
       description: `Push naar WooCommerce: ${created} aangemaakt, ${updated} bijgewerkt, ${skipped} ongewijzigd, ${errors} fouten` +
-        (totalMisMapped > 0 ? ` | ${totalMisMapped} mis-mapped variaties gecorrigeerd` : ''),
+        (totalMisMapped > 0 ? ` | ${totalMisMapped} mis-mapped variaties gecorrigeerd` : '') +
+        (unmappedSummary.length > 0 ? ` | ${unmappedSummary.length} attributen zonder mapping` : ''),
       metadata: {
         results: results.slice(0, 50),
         totals: { created, updated, skipped, errors },
         session_blocks: sessionBlocks,
         variation_audit: variationAuditSummary,
+        attribute_audit: attrAudit,
       },
     });
 
@@ -1245,11 +1310,15 @@ Deno.serve(async (req) => {
     if (totalMisMapped > 0) {
       console.warn(`⚠ ${totalMisMapped} mis-mapped variations detected and fixed across ${variationAudits.filter(a => a.mis_mapped.length > 0).length} products`);
     }
+    if (unmappedSummary.length > 0) {
+      console.warn(`⚠ ${unmappedSummary.length} PIM attributes have no global WC mapping: ${unmappedSummary.map(a => a.attribute).join(', ')}`);
+    }
 
     return new Response(JSON.stringify({
       success: true,
       totals: { created, updated, skipped, errors },
       variation_audit: variationAuditSummary,
+      attribute_audit: attrAudit,
       results,
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
