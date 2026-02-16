@@ -240,8 +240,10 @@ serve(async (req) => {
     console.log(`Loaded ${aiContentMap.size} approved AI content entries`);
 
     // Pre-fetch WooCommerce slugs AND images for accurate product URLs and image fallback
+    // Also track which products actually exist in WooCommerce (have a woo_products record)
     const wooSlugMap = new Map<string, string>();
     const wooImageMap = new Map<string, string[]>();
+    const wooProductIds = new Set<string>(); // All products that exist in WooCommerce
     let wooOffset = 0;
     while (true) {
       const { data: wooProducts } = await supabase
@@ -252,7 +254,10 @@ serve(async (req) => {
         .range(wooOffset, wooOffset + 999);
       if (!wooProducts || wooProducts.length === 0) break;
       for (const wp of wooProducts) {
-        if (wp.product_id && wp.slug) wooSlugMap.set(wp.product_id, wp.slug);
+        if (wp.product_id) {
+          wooProductIds.add(wp.product_id);
+          if (wp.slug) wooSlugMap.set(wp.product_id, wp.slug);
+        }
         // Extract WooCommerce-hosted image URLs
         if (wp.product_id && Array.isArray(wp.images) && wp.images.length > 0) {
           const urls = wp.images
@@ -264,7 +269,7 @@ serve(async (req) => {
       if (wooProducts.length < 1000) break;
       wooOffset += 1000;
     }
-    console.log(`Loaded ${wooSlugMap.size} WooCommerce slugs, ${wooImageMap.size} WooCommerce image sets`);
+    console.log(`Loaded ${wooProductIds.size} WooCommerce products, ${wooSlugMap.size} slugs, ${wooImageMap.size} image sets`);
 
     const allItems: string[] = [];
     const colorIssues: { sku: string; title: string; reason: string }[] = [];
@@ -349,21 +354,18 @@ serve(async (req) => {
         // 1️⃣ Skip products with no real price (price must never be 0)
         if (regularPrice <= 0) continue;
 
-        // 2️⃣ Product URL: prefer WooCommerce slug (actual permalink), fallback to url_key, then slugified title
+        // 2️⃣ Product URL: ONLY include products that exist in WooCommerce
+        // Products without a woo_products record don't have a live product page → 404
+        if (!wooProductIds.has(product.id)) continue;
+        
         const wooSlug = wooSlugMap.get(product.id);
         const cleanUrlKey = product.url_key ? product.url_key.replace(/-+$/, '').replace(/-nvt$/, '') : null;
-        // Validate slug is not empty or just hyphens after cleaning
         const candidateSlug = wooSlug || (cleanUrlKey && cleanUrlKey.length > 2 ? cleanUrlKey : null) || slugify(product.title);
         
-        // Skip products without a WooCommerce slug — their product page likely doesn't exist
-        if (!wooSlug && !cleanUrlKey) {
-          // No reliable URL available — skip to avoid "page not available" errors
-          continue;
-        }
+        // Require a real slug for the URL
+        if (!candidateSlug || candidateSlug.length <= 2) continue;
         
-        const productUrl = candidateSlug
-          ? `${shopUrl}/product/${candidateSlug}/`
-          : `${shopUrl}/shop/`;
+        const productUrl = `${shopUrl}/product/${candidateSlug}/`;
 
         // Each active variant = unique product
         const variants = (product.variants as any[]) || [];
