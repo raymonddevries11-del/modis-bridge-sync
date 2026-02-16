@@ -1,19 +1,45 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Send, RefreshCw, CheckCircle2, Link2, Globe } from "lucide-react";
+import { Send, RefreshCw, CheckCircle2, Link2, Globe, Loader2, Package, ArrowUpDown } from "lucide-react";
 import { TenantSelector } from "@/components/TenantSelector";
 import { UrlKeyAudit } from "@/components/woocommerce/UrlKeyAudit";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 
 const ChannelWooCommerce = () => {
   const [tenantId, setTenantId] = useState("");
   const [fixingKeys, setFixingKeys] = useState(false);
   const [syncingSlugs, setSyncingSlugs] = useState(false);
+  const [fullSyncing, setFullSyncing] = useState(false);
+  const [syncingMissing, setSyncingMissing] = useState(false);
   const navigate = useNavigate();
+
+  // Fetch sync stats
+  const { data: stats, refetch: refetchStats } = useQuery({
+    queryKey: ["woo-sync-stats", tenantId],
+    queryFn: async () => {
+      const [productsRes, syncedRes, pendingRes, activeJobsRes, recentJobsRes] = await Promise.all([
+        supabase.from("products").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+        supabase.from("product_sync_status").select("product_id", { count: "exact", head: true }),
+        supabase.from("pending_product_syncs").select("product_id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+        supabase.from("jobs").select("id", { count: "exact", head: true }).eq("type", "SYNC_TO_WOO").in("state", ["ready", "processing"]),
+        supabase.from("jobs").select("id, state, created_at, updated_at, payload").eq("type", "SYNC_TO_WOO").order("created_at", { ascending: false }).limit(5),
+      ]);
+      return {
+        totalProducts: productsRes.count ?? 0,
+        syncedProducts: syncedRes.count ?? 0,
+        pendingSyncs: pendingRes.count ?? 0,
+        activeJobs: activeJobsRes.count ?? 0,
+        recentJobs: recentJobsRes.data ?? [],
+      };
+    },
+    enabled: !!tenantId,
+    refetchInterval: 10000,
+  });
 
   const createJob = async (type: string, label: string, setLoading: (v: boolean) => void) => {
     if (!tenantId) {
@@ -32,12 +58,83 @@ const ChannelWooCommerce = () => {
       toast.success(`${label} job aangemaakt`, {
         action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") },
       });
+      refetchStats();
     } catch (e: any) {
       toast.error(`Fout bij aanmaken job: ${e.message}`);
     } finally {
       setLoading(false);
     }
   };
+
+  const handleFullSync = async () => {
+    if (!tenantId) {
+      toast.error("Selecteer eerst een tenant");
+      return;
+    }
+    setFullSyncing(true);
+    try {
+      // Get all product IDs for this tenant
+      const { data: products, error: productsError } = await supabase
+        .from("products")
+        .select("id")
+        .eq("tenant_id", tenantId);
+      
+      if (productsError) throw productsError;
+      if (!products || products.length === 0) {
+        toast.error("Geen producten gevonden voor deze tenant");
+        return;
+      }
+
+      const productIds = products.map(p => p.id);
+      
+      // Create SYNC_TO_WOO job with all product IDs
+      const { error } = await supabase.from("jobs").insert({
+        type: "SYNC_TO_WOO",
+        state: "ready" as const,
+        payload: { productIds },
+        tenant_id: tenantId,
+      });
+      if (error) throw error;
+      
+      toast.success(`Full sync job aangemaakt voor ${productIds.length} producten`, {
+        action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") },
+      });
+      refetchStats();
+    } catch (e: any) {
+      toast.error(`Fout bij full sync: ${e.message}`);
+    } finally {
+      setFullSyncing(false);
+    }
+  };
+
+  const handleSyncMissing = async () => {
+    if (!tenantId) {
+      toast.error("Selecteer eerst een tenant");
+      return;
+    }
+    setSyncingMissing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("sync-new-products", {
+        body: { tenantId },
+      });
+      if (error) throw error;
+      
+      if (data?.new_products_found > 0) {
+        toast.success(`${data.new_products_found} nieuwe producten gevonden, ${data.jobs_created} jobs aangemaakt`, {
+          action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") },
+        });
+      } else {
+        toast.info("Alle producten bestaan al in WooCommerce");
+      }
+      refetchStats();
+    } catch (e: any) {
+      toast.error(`Fout bij sync missing: ${e.message}`);
+    } finally {
+      setSyncingMissing(false);
+    }
+  };
+
+  const syncPercentage = stats ? Math.round((stats.syncedProducts / Math.max(stats.totalProducts, 1)) * 100) : 0;
 
   return (
     <Layout>
@@ -49,26 +146,28 @@ const ChannelWooCommerce = () => {
           </p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-4">
           <Card className="card-elevated">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Sync Status</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Producten in PIM</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5 text-success" />
-                <span className="text-2xl font-semibold">Connected</span>
+                <Package className="h-5 w-5 text-primary" />
+                <span className="text-2xl font-semibold">{stats?.totalProducts ?? "—"}</span>
               </div>
             </CardContent>
           </Card>
 
           <Card className="card-elevated">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Last Sync</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Gesynchroniseerd</CardTitle>
             </CardHeader>
             <CardContent>
-              <span className="text-2xl font-semibold">—</span>
-              <p className="text-xs text-muted-foreground mt-1">Geen recente sync</p>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-success" />
+                <span className="text-2xl font-semibold">{stats ? `${stats.syncedProducts} (${syncPercentage}%)` : "—"}</span>
+              </div>
             </CardContent>
           </Card>
 
@@ -77,8 +176,24 @@ const ChannelWooCommerce = () => {
               <CardTitle className="text-sm font-medium text-muted-foreground">Pending Syncs</CardTitle>
             </CardHeader>
             <CardContent>
-              <span className="text-2xl font-semibold">0</span>
-              <p className="text-xs text-muted-foreground mt-1">Producten in wachtrij</p>
+              <div className="flex items-center gap-2">
+                <ArrowUpDown className="h-5 w-5 text-warning" />
+                <span className="text-2xl font-semibold">{stats?.pendingSyncs ?? "0"}</span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Wijzigingen in wachtrij</p>
+            </CardContent>
+          </Card>
+
+          <Card className="card-elevated">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Actieve Jobs</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2">
+                {stats?.activeJobs ? <Loader2 className="h-5 w-5 text-primary animate-spin" /> : <CheckCircle2 className="h-5 w-5 text-success" />}
+                <span className="text-2xl font-semibold">{stats?.activeJobs ?? "0"}</span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">SYNC_TO_WOO jobs</p>
             </CardContent>
           </Card>
         </div>
@@ -92,13 +207,23 @@ const ChannelWooCommerce = () => {
               <TenantSelector value={tenantId} onChange={setTenantId} />
             </div>
             <div className="flex flex-wrap gap-3">
-              <Button variant="outline" size="sm">
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Full Sync
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!tenantId || fullSyncing}
+                onClick={handleFullSync}
+              >
+                {fullSyncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                {fullSyncing ? "Bezig..." : "Full Sync"}
               </Button>
-              <Button variant="outline" size="sm">
-                <Send className="mr-2 h-4 w-4" />
-                Sync Missing Products
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!tenantId || syncingMissing}
+                onClick={handleSyncMissing}
+              >
+                {syncingMissing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                {syncingMissing ? "Bezig..." : "Sync Missing Products"}
               </Button>
               <Button
                 variant="outline"
@@ -122,15 +247,41 @@ const ChannelWooCommerce = () => {
           </CardContent>
         </Card>
 
-        <UrlKeyAudit tenantId={tenantId} />
+        {/* Recent sync jobs */}
+        {stats?.recentJobs && stats.recentJobs.length > 0 && (
+          <Card className="card-elevated">
+            <CardHeader>
+              <CardTitle className="text-base">Recente Sync Jobs</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {stats.recentJobs.map((job: any) => {
+                  const productCount = job.payload?.productIds?.length ?? job.payload?.variantIds?.length ?? 0;
+                  return (
+                    <div key={job.id} className="flex items-center justify-between text-sm border rounded-lg p-3">
+                      <div className="flex items-center gap-3">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                          job.state === "done" ? "bg-success/10 text-success" :
+                          job.state === "error" ? "bg-destructive/10 text-destructive" :
+                          job.state === "processing" ? "bg-primary/10 text-primary" :
+                          "bg-muted text-muted-foreground"
+                        }`}>
+                          {job.state}
+                        </span>
+                        <span className="text-muted-foreground">{productCount} producten</span>
+                      </div>
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(job.created_at).toLocaleString("nl-NL")}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
-        <div className="rounded-xl border border-border bg-muted/30 p-8 text-center">
-          <Send className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
-          <p className="text-sm font-medium text-muted-foreground">WooCommerce sync details</p>
-          <p className="text-xs text-muted-foreground/70 mt-1">
-            Gedetailleerde sync historie en product-level status worden in V2 toegevoegd.
-          </p>
-        </div>
+        <UrlKeyAudit tenantId={tenantId} />
       </div>
     </Layout>
   );
