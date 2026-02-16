@@ -239,25 +239,32 @@ serve(async (req) => {
     }
     console.log(`Loaded ${aiContentMap.size} approved AI content entries`);
 
-    // Pre-fetch WooCommerce slugs for accurate product URLs
+    // Pre-fetch WooCommerce slugs AND images for accurate product URLs and image fallback
     const wooSlugMap = new Map<string, string>();
+    const wooImageMap = new Map<string, string[]>();
     let wooOffset = 0;
     while (true) {
       const { data: wooProducts } = await supabase
         .from('woo_products')
-        .select('product_id, slug')
+        .select('product_id, slug, images')
         .eq('tenant_id', tenantId)
-        .not('slug', 'is', null)
         .not('product_id', 'is', null)
         .range(wooOffset, wooOffset + 999);
       if (!wooProducts || wooProducts.length === 0) break;
       for (const wp of wooProducts) {
         if (wp.product_id && wp.slug) wooSlugMap.set(wp.product_id, wp.slug);
+        // Extract WooCommerce-hosted image URLs
+        if (wp.product_id && Array.isArray(wp.images) && wp.images.length > 0) {
+          const urls = wp.images
+            .map((img: any) => img?.src || '')
+            .filter((src: string) => src && /^https?:\/\//i.test(src));
+          if (urls.length > 0) wooImageMap.set(wp.product_id, urls);
+        }
       }
       if (wooProducts.length < 1000) break;
       wooOffset += 1000;
     }
-    console.log(`Loaded ${wooSlugMap.size} WooCommerce slugs`);
+    console.log(`Loaded ${wooSlugMap.size} WooCommerce slugs, ${wooImageMap.size} WooCommerce image sets`);
 
     const allItems: string[] = [];
     const colorIssues: { sku: string; title: string; reason: string }[] = [];
@@ -307,14 +314,21 @@ serve(async (req) => {
         // Filter images: only supported formats AND prefer WooCommerce-hosted URLs
         // Supabase storage URLs are rejected by Google Merchant ("unsupported image type")
         const rawImages = (product.images as string[]) || [];
-        const images = rawImages.filter((url: string) => {
+        let images = rawImages.filter((url: string) => {
           if (!url || typeof url !== 'string') return false;
-          // Must be an absolute URL starting with http(s)://
           if (!/^https?:\/\//i.test(url)) return false;
           if (!/\.(jpe?g|png|gif)(\?.*)?$/i.test(url)) return false;
           if (url.includes('supabase.co/storage')) return false;
           return true;
         });
+
+        // Fallback: use WooCommerce-hosted images from woo_products table
+        if (images.length === 0) {
+          const wooImages = wooImageMap.get(product.id);
+          if (wooImages && wooImages.length > 0) {
+            images = wooImages;
+          }
+        }
 
         // Track image issues for QA report
         if (images.length === 0 && rawImages.length > 0) {
@@ -324,7 +338,7 @@ serve(async (req) => {
               ? 'unsupported_format'
               : 'mixed_invalid';
           imageIssues.push({ sku: product.sku, title: product.title, reason, urls: rawImages.slice(0, 3) });
-        } else if (rawImages.length === 0) {
+        } else if (rawImages.length === 0 && !wooImageMap.has(product.id)) {
           imageIssues.push({ sku: product.sku, title: product.title, reason: 'no_images', urls: [] });
         }
         const color = (product.color as any);

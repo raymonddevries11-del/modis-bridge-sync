@@ -120,19 +120,25 @@ serve(async (req) => {
     // De-duplicate: only emit one entry per itemId (aggregate stock across stores)
     const emittedIds = new Set<string>();
 
-    // ── Pre-fetch WooCommerce slugs to determine which products have valid URLs ──
+    // ── Pre-fetch WooCommerce slugs and images to match primary feed filtering ──
     const wooSlugProductIds = new Set<string>();
+    const wooImageProductIds = new Set<string>();
     let wooOffset = 0;
     while (true) {
       const { data: wooProducts } = await supabase
         .from('woo_products')
-        .select('product_id')
+        .select('product_id, images')
         .eq('tenant_id', tenantId)
         .not('product_id', 'is', null)
         .range(wooOffset, wooOffset + 999);
       if (!wooProducts || wooProducts.length === 0) break;
       for (const wp of wooProducts) {
         if (wp.product_id) wooSlugProductIds.add(wp.product_id);
+        // Track products that have WooCommerce-hosted images (fallback source)
+        if (wp.product_id && Array.isArray(wp.images) && wp.images.length > 0) {
+          const hasValidImg = wp.images.some((img: any) => img?.src && /^https?:\/\//i.test(img.src));
+          if (hasValidImg) wooImageProductIds.add(wp.product_id);
+        }
       }
       if (wooProducts.length < 1000) break;
       wooOffset += 1000;
@@ -164,7 +170,7 @@ serve(async (req) => {
         const regularPrice = price?.regular || 0;
         if (regularPrice <= 0) continue;
 
-        // Match primary feed image filtering: must have valid external image URLs
+        // Match primary feed image filtering: must have valid external image URLs OR WooCommerce fallback
         const rawImages = (product.images as string[]) || [];
         const validImages = rawImages.filter((url: string) => {
           if (!url || typeof url !== 'string') return false;
@@ -173,7 +179,8 @@ serve(async (req) => {
           if (url.includes('supabase.co/storage')) return false;
           return true;
         });
-        if (validImages.length === 0) continue;
+        // Include product if it has valid images directly OR has WooCommerce-hosted images as fallback
+        if (validImages.length === 0 && !wooImageProductIds.has(product.id)) continue;
 
         // Match primary feed URL validation: skip products without WooCommerce slug or valid url_key
         const hasWooSlug = wooSlugProductIds.has(product.id);
