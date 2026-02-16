@@ -239,6 +239,26 @@ serve(async (req) => {
     }
     console.log(`Loaded ${aiContentMap.size} approved AI content entries`);
 
+    // Pre-fetch WooCommerce slugs for accurate product URLs
+    const wooSlugMap = new Map<string, string>();
+    let wooOffset = 0;
+    while (true) {
+      const { data: wooProducts } = await supabase
+        .from('woo_products')
+        .select('product_id, slug')
+        .eq('tenant_id', tenantId)
+        .not('slug', 'is', null)
+        .not('product_id', 'is', null)
+        .range(wooOffset, wooOffset + 999);
+      if (!wooProducts || wooProducts.length === 0) break;
+      for (const wp of wooProducts) {
+        if (wp.product_id && wp.slug) wooSlugMap.set(wp.product_id, wp.slug);
+      }
+      if (wooProducts.length < 1000) break;
+      wooOffset += 1000;
+    }
+    console.log(`Loaded ${wooSlugMap.size} WooCommerce slugs`);
+
     const allItems: string[] = [];
     const colorIssues: { sku: string; title: string; reason: string }[] = [];
     const imageIssues: { sku: string; title: string; reason: string; urls: string[] }[] = [];
@@ -313,8 +333,10 @@ serve(async (req) => {
         // 1️⃣ Skip products with no real price (price must never be 0)
         if (regularPrice <= 0) continue;
 
-        // 2️⃣ Product URL: prefer url_key (synced from WooCommerce), fallback to slugified title
-        const productSlug = product.url_key || slugify(product.title);
+        // 2️⃣ Product URL: prefer WooCommerce slug (actual permalink), fallback to url_key (strip trailing hyphens), then slugified title
+        const wooSlug = wooSlugMap.get(product.id);
+        const cleanUrlKey = product.url_key ? product.url_key.replace(/-+$/, '') : null;
+        const productSlug = wooSlug || cleanUrlKey || slugify(product.title);
         const productUrl = productSlug
           ? `${shopUrl}/product/${productSlug}/`
           : `${shopUrl}/shop/`;
@@ -382,9 +404,11 @@ serve(async (req) => {
       <g:condition>${escapeXml(effectiveCondition)}</g:condition>
       <g:google_product_category>${escapeXml(effectiveCategory)}</g:google_product_category>`;
 
-          // 5️⃣ GTIN / Identifiers - no empty GTIN fields
-          if (variant.ean && variant.ean.trim() !== '') {
-            itemXml += `\n      <g:gtin>${escapeXml(variant.ean.trim())}</g:gtin>`;
+          // 5️⃣ GTIN / Identifiers - validate: must be 8-14 digits only
+          const eanRaw = (variant.ean || '').trim();
+          const isValidGtin = /^\d{8,14}$/.test(eanRaw);
+          if (isValidGtin) {
+            itemXml += `\n      <g:gtin>${escapeXml(eanRaw)}</g:gtin>`;
           } else {
             itemXml += `\n      <g:identifier_exists>false</g:identifier_exists>`;
           }
