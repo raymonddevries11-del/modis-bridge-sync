@@ -1,18 +1,22 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
-import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { RefreshCw, Loader2, Search, ChevronDown, ChevronRight, Check, Link2, Unlink } from "lucide-react";
+import {
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from "@/components/ui/command";
+import {
+  Popover, PopoverContent, PopoverTrigger,
+} from "@/components/ui/popover";
+import { RefreshCw, Loader2, Search, ChevronDown, ChevronRight, Check, Link2, Unlink, X, ArrowRight } from "lucide-react";
 import { TenantSelector } from "@/components/TenantSelector";
+import { toast } from "sonner";
 
 interface WooAttribute {
   id: number;
@@ -29,10 +33,15 @@ interface ModisAttribute {
   count: number;
 }
 
+type AttrMappings = Record<string, string>; // modisName -> wooSlug
+
 export function WooAttributeSync() {
+  const queryClient = useQueryClient();
   const [tenantId, setTenantId] = useState("");
   const [search, setSearch] = useState("");
   const [openAttrs, setOpenAttrs] = useState<Set<string>>(new Set());
+  const [editingAttr, setEditingAttr] = useState<string | null>(null);
+  const [popoverOpen, setPopoverOpen] = useState(false);
 
   // Fetch WooCommerce attributes
   const { data: wooAttrs, isLoading: wooLoading, refetch: refetchWoo } = useQuery({
@@ -84,6 +93,51 @@ export function WooAttributeSync() {
     },
   });
 
+  // Fetch saved manual mappings from config table
+  const configKey = `woo_attribute_mappings_${tenantId}`;
+  const { data: savedMappings } = useQuery({
+    queryKey: ["woo-attr-mappings-config", tenantId],
+    enabled: !!tenantId,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("config")
+        .select("value")
+        .eq("key", configKey)
+        .maybeSingle();
+      return (data?.value as AttrMappings) ?? {};
+    },
+  });
+
+  const manualMappings: AttrMappings = savedMappings ?? {};
+
+  // Save mapping mutation
+  const saveMappingMutation = useMutation({
+    mutationFn: async (newMappings: AttrMappings) => {
+      const { error } = await supabase
+        .from("config")
+        .upsert({ key: configKey, value: newMappings as any, updated_at: new Date().toISOString() });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["woo-attr-mappings-config", tenantId] });
+      toast.success("Mapping opgeslagen");
+    },
+    onError: (err: any) => toast.error(`Fout: ${err.message}`),
+  });
+
+  const setMapping = (modisName: string, wooSlug: string) => {
+    const updated = { ...manualMappings, [modisName]: wooSlug };
+    saveMappingMutation.mutate(updated);
+    setEditingAttr(null);
+    setPopoverOpen(false);
+  };
+
+  const removeMapping = (modisName: string) => {
+    const updated = { ...manualMappings };
+    delete updated[modisName];
+    saveMappingMutation.mutate(updated);
+  };
+
   const toggleAttr = (key: string) => {
     setOpenAttrs((prev) => {
       const next = new Set(prev);
@@ -92,9 +146,16 @@ export function WooAttributeSync() {
     });
   };
 
-  // Build matching: find WC attribute that matches Modis attribute by name/slug
+  // Resolve WC match: manual mapping first, then auto-match by name/slug
   const getWooMatch = (modisName: string): WooAttribute | null => {
     if (!wooAttrs) return null;
+    // Check manual mapping first
+    const manualSlug = manualMappings[modisName];
+    if (manualSlug) {
+      const found = wooAttrs.find((wa) => wa.slug === manualSlug);
+      if (found) return found;
+    }
+    // Auto-match
     const lower = modisName.toLowerCase().replace(/\s+/g, "-");
     return (
       wooAttrs.find(
@@ -106,6 +167,8 @@ export function WooAttributeSync() {
     );
   };
 
+  const isManuallyMapped = (modisName: string): boolean => !!manualMappings[modisName];
+
   const isLoading = wooLoading || modisLoading;
 
   const filtered = modisAttrs?.filter(
@@ -115,18 +178,21 @@ export function WooAttributeSync() {
   const matchedCount = modisAttrs?.filter((a) => getWooMatch(a.name) !== null).length ?? 0;
   const unmatchedCount = (modisAttrs?.length ?? 0) - matchedCount;
 
-  // WC attributes not matched to any Modis attribute
-  const unmatchedWoo = wooAttrs?.filter((wa) => {
-    if (!modisAttrs) return true;
-    return !modisAttrs.some((ma) => {
-      const lower = ma.name.toLowerCase().replace(/\s+/g, "-");
-      return (
-        wa.name.toLowerCase() === ma.name.toLowerCase() ||
-        wa.slug === lower ||
-        wa.slug === `pa_${lower}`
-      );
+  const unmatchedWoo = useMemo(() => {
+    if (!wooAttrs || !modisAttrs) return wooAttrs ?? [];
+    const mappedSlugs = new Set(Object.values(manualMappings));
+    return wooAttrs.filter((wa) => {
+      if (mappedSlugs.has(wa.slug)) return false;
+      return !modisAttrs.some((ma) => {
+        const lower = ma.name.toLowerCase().replace(/\s+/g, "-");
+        return (
+          wa.name.toLowerCase() === ma.name.toLowerCase() ||
+          wa.slug === lower ||
+          wa.slug === `pa_${lower}`
+        );
+      });
     });
-  });
+  }, [wooAttrs, modisAttrs, manualMappings]);
 
   return (
     <Card>
@@ -155,6 +221,11 @@ export function WooAttributeSync() {
           >
             {wooLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           </Button>
+          {wooAttrs && (
+            <Badge variant="secondary" className="text-[10px]">
+              {wooAttrs.length} WC attributen
+            </Badge>
+          )}
         </div>
 
         {/* Summary */}
@@ -169,12 +240,7 @@ export function WooAttributeSync() {
             {unmatchedCount > 0 && (
               <Badge variant="outline" className="bg-warning/10 text-warning border-warning/20">
                 <Unlink className="h-3 w-3 mr-1" />
-                {unmatchedCount} Modis niet gematcht
-              </Badge>
-            )}
-            {unmatchedWoo && unmatchedWoo.length > 0 && (
-              <Badge variant="outline" className="bg-muted text-muted-foreground">
-                {unmatchedWoo.length} WC zonder Modis bron
+                {unmatchedCount} niet gematcht
               </Badge>
             )}
           </div>
@@ -191,44 +257,127 @@ export function WooAttributeSync() {
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Modis attributes with WC match status */}
             <div className="space-y-1">
               <h3 className="text-sm font-medium text-muted-foreground mb-2">Modis Attributen</h3>
               {filtered?.map((attr) => {
                 const wooMatch = getWooMatch(attr.name);
+                const isManual = isManuallyMapped(attr.name);
                 const key = `modis-${attr.name}`;
                 const isOpen = openAttrs.has(key);
+                const isEditing = editingAttr === attr.name;
 
                 return (
                   <Collapsible key={key} open={isOpen} onOpenChange={() => toggleAttr(key)}>
-                    <CollapsibleTrigger className="flex items-center gap-3 w-full px-4 py-2.5 bg-card border border-border rounded-lg hover:bg-muted/50 transition-colors text-left">
-                      {isOpen ? (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                      )}
-                      <span className="text-sm font-medium flex-1">{attr.name}</span>
-                      <Badge variant="secondary" className="text-[10px]">
-                        {attr.count} producten
-                      </Badge>
-                      <Badge variant="secondary" className="text-[10px]">
-                        {attr.values.length} waarden
-                      </Badge>
-                      {wooMatch ? (
-                        <Badge variant="outline" className="text-[10px] bg-success/10 text-success border-success/20">
-                          <Check className="h-3 w-3 mr-1" />
-                          WC: {wooMatch.name} ({wooMatch.slug})
+                    <div className="flex items-center gap-2 px-4 py-2.5 bg-card border border-border rounded-lg hover:bg-muted/50 transition-colors group">
+                      <CollapsibleTrigger className="flex items-center gap-3 flex-1 text-left min-w-0">
+                        {isOpen ? (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                        )}
+                        <span className="text-sm font-medium truncate">{attr.name}</span>
+                        <Badge variant="secondary" className="text-[10px] shrink-0">
+                          {attr.count}
                         </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-[10px] bg-warning/10 text-warning border-warning/20">
-                          <Unlink className="h-3 w-3 mr-1" />
-                          Geen WC match
-                        </Badge>
-                      )}
-                    </CollapsibleTrigger>
+                      </CollapsibleTrigger>
+
+                      <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+
+                      {/* WC mapping area */}
+                      <div className="flex items-center gap-2 min-w-0 shrink-0">
+                        {isEditing ? (
+                          <div className="flex items-center gap-1">
+                            <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+                              <PopoverTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 text-sm justify-start min-w-[220px] font-normal truncate"
+                                >
+                                  {wooMatch ? `${wooMatch.name} (${wooMatch.slug})` : "Kies WC attribuut..."}
+                                </Button>
+                              </PopoverTrigger>
+                              <PopoverContent className="w-[350px] p-0 z-50 bg-popover" align="end">
+                                <Command>
+                                  <CommandInput placeholder="Zoek WC attribuut..." />
+                                  <CommandList>
+                                    <CommandEmpty>Geen attributen gevonden</CommandEmpty>
+                                    <CommandGroup>
+                                      {wooAttrs?.map((wa) => (
+                                        <CommandItem
+                                          key={wa.id}
+                                          value={`${wa.name} ${wa.slug}`}
+                                          onSelect={() => setMapping(attr.name, wa.slug)}
+                                        >
+                                          <div className="flex items-center gap-2 w-full">
+                                            <span className="truncate flex-1">{wa.name}</span>
+                                            <Badge variant="secondary" className="text-[10px] shrink-0">
+                                              {wa.slug}
+                                            </Badge>
+                                            <Badge variant="secondary" className="text-[10px] shrink-0">
+                                              {wa.termCount} termen
+                                            </Badge>
+                                          </div>
+                                        </CommandItem>
+                                      ))}
+                                    </CommandGroup>
+                                  </CommandList>
+                                </Command>
+                              </PopoverContent>
+                            </Popover>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingAttr(null); setPopoverOpen(false); }}>
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ) : wooMatch ? (
+                          <div className="flex items-center gap-2">
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] max-w-[220px] truncate ${
+                                isManual
+                                  ? "bg-primary/10 text-primary border-primary/20"
+                                  : "bg-success/10 text-success border-success/20"
+                              }`}
+                            >
+                              <Check className="h-3 w-3 mr-1 shrink-0" />
+                              {wooMatch.name} ({wooMatch.slug})
+                            </Badge>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                onClick={(e) => { e.stopPropagation(); setEditingAttr(attr.name); }}
+                              >
+                                Wijzig
+                              </Button>
+                              {isManual && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                                  onClick={(e) => { e.stopPropagation(); removeMapping(attr.name); }}
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs text-muted-foreground"
+                            onClick={(e) => { e.stopPropagation(); setEditingAttr(attr.name); }}
+                          >
+                            + Map naar WooCommerce
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
                     <CollapsibleContent>
                       <div className="ml-7 mt-1 mb-2 px-4 py-3 bg-muted/30 rounded-lg border border-border/50 space-y-3">
-                        {/* Modis values */}
                         <div>
                           <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
                             Modis waarden ({attr.values.length})
@@ -247,7 +396,6 @@ export function WooAttributeSync() {
                           </div>
                         </div>
 
-                        {/* WC terms comparison */}
                         {wooMatch && wooMatch.terms.length > 0 && (
                           <div>
                             <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
@@ -280,7 +428,6 @@ export function WooAttributeSync() {
                           </div>
                         )}
 
-                        {/* Value diff summary */}
                         {wooMatch && (
                           <div className="text-xs text-muted-foreground">
                             {(() => {
@@ -315,8 +462,7 @@ export function WooAttributeSync() {
               })}
             </div>
 
-            {/* Unmatched WC attributes */}
-            {unmatchedWoo && unmatchedWoo.length > 0 && (
+            {unmatchedWoo.length > 0 && (
               <div className="space-y-1">
                 <h3 className="text-sm font-medium text-muted-foreground mb-2">
                   WooCommerce attributen zonder Modis bron
