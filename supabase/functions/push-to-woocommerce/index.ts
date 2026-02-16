@@ -263,9 +263,9 @@ interface VariationAudit {
 }
 
 // --- Ensure global attribute terms exist ---
-async function ensureMaatTerms(
-  wooUrl: string, wooAuth: string, maatAttrId: number,
-  sizeLabels: string[], rateLimiter: AdaptiveRateLimiter
+async function ensureAttributeTerms(
+  wooUrl: string, wooAuth: string, attrId: number, attrName: string,
+  values: string[], rateLimiter: AdaptiveRateLimiter
 ): Promise<Map<string, number>> {
   const termMap = new Map<string, number>();
 
@@ -273,7 +273,7 @@ async function ensureMaatTerms(
   let page = 1;
   let hasMore = true;
   while (hasMore) {
-    const url = `${wooUrl}/wp-json/wc/v3/products/attributes/${maatAttrId}/terms?per_page=100&page=${page}&${wooAuth}`;
+    const url = `${wooUrl}/wp-json/wc/v3/products/attributes/${attrId}/terms?per_page=100&page=${page}&${wooAuth}`;
     const res = await fetchWithRetry(url, { method: 'GET' }, rateLimiter);
     if (res.blocked || !res.json || !Array.isArray(res.json)) break;
     for (const t of res.json) {
@@ -285,9 +285,9 @@ async function ensureMaatTerms(
   }
 
   // Register missing terms
-  const missing = sizeLabels.filter(s => !termMap.has(s.toLowerCase()));
+  const missing = values.filter(s => !termMap.has(s.toLowerCase()));
   for (const label of missing) {
-    const url = `${wooUrl}/wp-json/wc/v3/products/attributes/${maatAttrId}/terms?${wooAuth}`;
+    const url = `${wooUrl}/wp-json/wc/v3/products/attributes/${attrId}/terms?${wooAuth}`;
     const res = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -296,22 +296,30 @@ async function ensureMaatTerms(
 
     if (!res.blocked && res.json?.id) {
       termMap.set(label.toLowerCase(), res.json.id);
-      console.log(`✓ Registered Maat term: "${label}" (ID ${res.json.id})`);
+      console.log(`✓ Registered ${attrName} term: "${label}" (ID ${res.json.id})`);
     } else if (res.json?.code === 'term_exists') {
-      // Term exists but wasn't found — extract ID from error data
       const existingId = res.json?.data?.resource_id;
       if (existingId) termMap.set(label.toLowerCase(), existingId);
     } else {
-      console.warn(`Could not register Maat term "${label}": ${res.text?.substring(0, 150)}`);
+      console.warn(`Could not register ${attrName} term "${label}": ${res.text?.substring(0, 150)}`);
     }
     await rateLimiter.wait();
   }
 
   if (missing.length > 0) {
-    console.log(`Maat terms: ${missing.length} registered, ${termMap.size} total`);
+    console.log(`${attrName} terms: ${missing.length} registered, ${termMap.size} total`);
   }
 
   return termMap;
+}
+
+// Helper: slugify attribute name to match WooCommerce pa_ prefix convention
+function toWooSlug(name: string): string {
+  return name.toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9\-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 // --- Variation sync helper ---
@@ -339,7 +347,7 @@ async function createOrUpdateVariations(
   const sizeLabels = activeVariants.map((v: any) => v.size_label);
   let termMap = new Map<string, number>();
   if (maatAttrId) {
-    termMap = await ensureMaatTerms(wooUrl, wooAuth, maatAttrId, sizeLabels, rateLimiter);
+    termMap = await ensureAttributeTerms(wooUrl, wooAuth, maatAttrId, 'Maat', sizeLabels, rateLimiter);
   }
 
   // --- PASS 2: Fetch existing WooCommerce variations ---
@@ -552,19 +560,29 @@ Deno.serve(async (req) => {
     const catMap = new Map<string, string>();
     if (catMappings) catMappings.forEach(m => catMap.set(m.source_category, m.woo_category));
 
-    // Fetch global "Maat" attribute ID from WooCommerce
+    // Fetch ALL global product attributes from WooCommerce
     let maatAttrId: number | null = null;
+    const globalAttrMap = new Map<string, { id: number; name: string; slug: string }>(); // slug → {id, name, slug}
     try {
       const attrsUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/attributes?${wooAuth}`;
       const attrsResult = await fetchWithRetry(attrsUrl, { method: 'GET' }, new AdaptiveRateLimiter(800, 5000));
       if (!attrsResult.blocked && attrsResult.json && Array.isArray(attrsResult.json)) {
-        const maatAttr = attrsResult.json.find((a: any) => a.slug === 'pa_maat' || a.name === 'Maat');
-        if (maatAttr && maatAttr.id > 0) {
-          maatAttrId = maatAttr.id;
+        for (const attr of attrsResult.json) {
+          if (attr.id > 0) {
+            // Store by multiple keys for matching: slug (without pa_), name lowercase
+            const cleanSlug = (attr.slug || '').replace(/^pa_/, '');
+            globalAttrMap.set(cleanSlug.toLowerCase(), { id: attr.id, name: attr.name, slug: attr.slug });
+            globalAttrMap.set(attr.name.toLowerCase(), { id: attr.id, name: attr.name, slug: attr.slug });
+          }
+        }
+        const maatEntry = globalAttrMap.get('maat');
+        if (maatEntry) {
+          maatAttrId = maatEntry.id;
           console.log(`Found global Maat attribute ID: ${maatAttrId}`);
         } else {
           console.warn('Global Maat attribute not found — attempting to create it');
         }
+        console.log(`Found ${globalAttrMap.size / 2} global WC attributes: ${[...new Set([...globalAttrMap.values()].map(v => v.name))].join(', ')}`);
       }
 
       // Fallback: auto-create the global pa_maat attribute if missing
@@ -585,20 +603,19 @@ Deno.serve(async (req) => {
         if (!createResult.blocked && createResult.json) {
           if (createResult.json.id && createResult.json.id > 0) {
             maatAttrId = createResult.json.id;
+            globalAttrMap.set('maat', { id: maatAttrId, name: 'Maat', slug: 'pa_maat' });
             console.log(`✓ Created global Maat attribute with ID: ${maatAttrId}`);
           } else if (createResult.json.code === 'woocommerce_rest_cannot_create') {
-            // Already exists but we couldn't find it — try to extract ID from error
             console.warn('Maat attribute already exists but ID could not be resolved from listing');
           }
         }
 
-        // Log a warning to changelog if we still don't have a global ID
         if (!maatAttrId) {
-          console.error('⚠️ CRITICAL: Could not resolve global pa_maat attribute ID. Variations will use slug-based fallback which may cause "all sizes" display bug.');
+          console.error('⚠️ CRITICAL: Could not resolve global pa_maat attribute ID.');
           await supabase.from('changelog').insert({
             tenant_id: tenantId,
             event_type: 'WOO_MAAT_ATTR_MISSING',
-            description: 'Globaal pa_maat attribuut niet gevonden en kon niet worden aangemaakt. Variaties kunnen foutief alle maten tonen.',
+            description: 'Globaal pa_maat attribuut niet gevonden en kon niet worden aangemaakt.',
             metadata: { attempted_create: true, fallback: 'slug-based pa_maat reference' },
           });
         }
@@ -720,6 +737,8 @@ Deno.serve(async (req) => {
           const maatAttrDef: any = { position: 0, visible: true, variation: true, options: sizeOptions };
           if (maatAttrId) {
             maatAttrDef.id = maatAttrId;
+            // Register size terms as saved global values
+            await ensureAttributeTerms(config.woocommerce_url, wooAuth, maatAttrId, 'Maat', sizeOptions, rateLimiter);
           } else {
             maatAttrDef.name = 'Maat';
           }
@@ -729,13 +748,30 @@ Deno.serve(async (req) => {
           const pimAttrs = pim.attributes as Record<string, any>;
           let pos = 1;
           for (const [key, val] of Object.entries(pimAttrs)) {
-            if (val) {
-              attrs.push({ name: key, position: pos++, visible: true, variation: false, options: [String(val)] });
+            if (!val) continue;
+            const valStr = String(val);
+            const lookupKey = toWooSlug(key);
+            const globalAttr = globalAttrMap.get(lookupKey) || globalAttrMap.get(key.toLowerCase());
+            if (globalAttr) {
+              // Use global attribute ID so the value is "saved" and works as a filter
+              await ensureAttributeTerms(config.woocommerce_url, wooAuth, globalAttr.id, globalAttr.name, [valStr], rateLimiter);
+              attrs.push({ id: globalAttr.id, position: pos++, visible: true, variation: false, options: [valStr] });
+              console.log(`  Attr "${key}" → global ID ${globalAttr.id} (${globalAttr.name}), value="${valStr}"`);
+            } else {
+              // Fallback: push as local attribute (won't work as filter but preserves data)
+              attrs.push({ name: key, position: pos++, visible: true, variation: false, options: [valStr] });
+              console.warn(`  Attr "${key}" has no matching global WC attribute — pushed as local (won't filter)`);
             }
           }
         }
         if (brand) {
-          attrs.push({ name: 'Merk', position: attrs.length, visible: true, variation: false, options: [brand] });
+          const merkAttr = globalAttrMap.get('merk');
+          if (merkAttr) {
+            await ensureAttributeTerms(config.woocommerce_url, wooAuth, merkAttr.id, 'Merk', [brand], rateLimiter);
+            attrs.push({ id: merkAttr.id, position: attrs.length, visible: true, variation: false, options: [brand] });
+          } else {
+            attrs.push({ name: 'Merk', position: attrs.length, visible: true, variation: false, options: [brand] });
+          }
         }
         if (attrs.length > 0) desiredData.attributes = attrs;
 
@@ -880,10 +916,10 @@ Deno.serve(async (req) => {
             changes.push({ field: 'images', old_value: `${wooImgCount} afbeeldingen`, new_value: `${pimImgCount} afbeeldingen` });
           }
 
-          const wooAttrNames = (woo.attributes || []).map((a: any) => a.name).sort().join(',');
-          const pimAttrNames = (desiredData.attributes || []).map((a: any) => a.name).sort().join(',');
-          if (wooAttrNames !== pimAttrNames) {
-            changes.push({ field: 'attributes', old_value: wooAttrNames || 'geen', new_value: pimAttrNames || 'geen' });
+          const wooAttrKey = (woo.attributes || []).map((a: any) => `${a.id || a.name}:${(a.options || []).sort().join(',')}`).sort().join('|');
+          const pimAttrKey = (desiredData.attributes || []).map((a: any) => `${a.id || a.name}:${(a.options || []).sort().join(',')}`).sort().join('|');
+          if (wooAttrKey !== pimAttrKey) {
+            changes.push({ field: 'attributes', old_value: wooAttrKey.substring(0, 100) || 'geen', new_value: pimAttrKey.substring(0, 100) || 'geen' });
           }
 
           if (changes.length === 0) {
