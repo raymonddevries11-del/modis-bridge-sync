@@ -775,6 +775,31 @@ Deno.serve(async (req) => {
         }
         if (attrs.length > 0) desiredData.attributes = attrs;
 
+        // Helper: merge PIM attributes with existing WooCommerce attributes (additive model)
+        function mergeAttributes(pimAttrs: any[], existingWooAttrs: any[]): any[] {
+          const merged = new Map<string, any>();
+
+          // First, add all existing WooCommerce attributes (preserves manually added ones)
+          for (const a of existingWooAttrs) {
+            const key = a.id > 0 ? `id:${a.id}` : `name:${(a.name || '').toLowerCase()}`;
+            merged.set(key, { ...a });
+          }
+
+          // Then overlay PIM attributes — PIM wins on conflict
+          for (const a of pimAttrs) {
+            const key = a.id ? `id:${a.id}` : `name:${(a.name || '').toLowerCase()}`;
+            merged.set(key, a);
+          }
+
+          // Re-assign positions
+          let pos = 0;
+          const result: any[] = [];
+          for (const attr of merged.values()) {
+            result.push({ ...attr, position: pos++ });
+          }
+          return result;
+        }
+
         if (!wooProducts || wooProducts.length === 0) {
           // CREATE new product
           desiredData.type = sizeOptions.length > 0 ? 'variable' : 'simple';
@@ -916,10 +941,16 @@ Deno.serve(async (req) => {
             changes.push({ field: 'images', old_value: `${wooImgCount} afbeeldingen`, new_value: `${pimImgCount} afbeeldingen` });
           }
 
-          const wooAttrKey = (woo.attributes || []).map((a: any) => `${a.id || a.name}:${(a.options || []).sort().join(',')}`).sort().join('|');
-          const pimAttrKey = (desiredData.attributes || []).map((a: any) => `${a.id || a.name}:${(a.options || []).sort().join(',')}`).sort().join('|');
-          if (wooAttrKey !== pimAttrKey) {
-            changes.push({ field: 'attributes', old_value: wooAttrKey.substring(0, 100) || 'geen', new_value: pimAttrKey.substring(0, 100) || 'geen' });
+          // Merge PIM attributes with existing WooCommerce attributes (additive model)
+          const existingWooAttrs = woo.attributes || [];
+          const pimAttrs = desiredData.attributes || [];
+          const mergedAttrs = mergeAttributes(pimAttrs, existingWooAttrs);
+          desiredData.attributes = mergedAttrs;
+
+          const wooAttrKey = existingWooAttrs.map((a: any) => `${a.id || a.name}:${(a.options || []).sort().join(',')}`).sort().join('|');
+          const mergedAttrKey = mergedAttrs.map((a: any) => `${a.id || a.name}:${(a.options || []).sort().join(',')}`).sort().join('|');
+          if (wooAttrKey !== mergedAttrKey) {
+            changes.push({ field: 'attributes', old_value: wooAttrKey.substring(0, 100) || 'geen', new_value: mergedAttrKey.substring(0, 100) || 'geen' });
           }
 
           if (changes.length === 0) {
