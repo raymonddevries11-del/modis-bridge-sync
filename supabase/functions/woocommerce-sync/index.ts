@@ -349,6 +349,10 @@ async function processJob(
         variants(
           *,
           stock_totals(*)
+        ),
+        product_ai_content!product_ai_content_product_id_fkey (
+          status, ai_title, ai_short_description, ai_long_description,
+          ai_meta_title, ai_meta_description
         )
       `)
       .eq('tenant_id', job.tenant_id);
@@ -531,7 +535,18 @@ async function createProductInWooCommerce(
   supabase?: any,
   tenantId?: string
 ) {
-  const { sku, title, product_prices, variants, images, color, brands, tax_code, webshop_text, meta_description, categories, attributes } = product;
+  const { sku, product_prices, variants, images, color, brands, tax_code, webshop_text, meta_description, categories, attributes, product_ai_content } = product;
+
+  // Use approved AI content if available
+  const aiContent = product_ai_content as any;
+  const hasApprovedAi = aiContent?.status === 'approved';
+  const title = (hasApprovedAi && aiContent.ai_title) || product.title;
+  const description = (hasApprovedAi && aiContent.ai_long_description) || webshop_text || '';
+  const shortDescription = (hasApprovedAi && aiContent.ai_short_description) || meta_description || '';
+
+  if (hasApprovedAi) {
+    console.log(`Using approved AI content for new product ${sku}: title="${title}"`);
+  }
 
   // Prepare product images - skip images that don't have full URLs
   const productImages = (images || [])
@@ -727,8 +742,8 @@ async function createProductInWooCommerce(
     sku: sku,
     status: 'publish',
     catalog_visibility: 'visible',
-    description: webshop_text || '',
-    short_description: meta_description || '',
+    description: description,
+    short_description: shortDescription,
     images: productImages,
     attributes: productAttributes,
     tax_class: tax_code || '',
@@ -1029,7 +1044,18 @@ async function updateProductInWooCommerce(
   supabase?: any,
   tenantId?: string
 ) {
-  const { sku, title, variants, images, product_prices, webshop_text, meta_description, categories, brands, attributes, color } = product;
+  const { sku, variants, images, product_prices, webshop_text, meta_description, categories, brands, attributes, color, product_ai_content } = product;
+
+  // Use approved AI content if available
+  const aiContent = product_ai_content as any;
+  const hasApprovedAi = aiContent?.status === 'approved';
+  const title = (hasApprovedAi && aiContent.ai_title) || product.title;
+  const description = (hasApprovedAi && aiContent.ai_long_description) || webshop_text;
+  const shortDescription = (hasApprovedAi && aiContent.ai_short_description) || meta_description;
+
+  if (hasApprovedAi) {
+    console.log(`Using approved AI content for update ${sku}: title="${title}"`);
+  }
 
   console.log(`Updating product ${sku}, will set prices on variations`);
 
@@ -1130,15 +1156,18 @@ async function updateProductInWooCommerce(
     console.log(`Product ${sku} has no new images to add (${existingImages.length} existing)`);
   }
 
-  // Prepare product update data with descriptions and categories
+  // Prepare product update data with descriptions, title, and categories
   const updateData: any = {};
+
+  // Always push title (AI or PIM)
+  updateData.name = title;
   
-  if (webshop_text) {
-    updateData.description = webshop_text;
+  if (description) {
+    updateData.description = description;
   }
   
-  if (meta_description) {
-    updateData.short_description = meta_description;
+  if (shortDescription) {
+    updateData.short_description = shortDescription;
   }
   
   // Update categories - MERGE with existing WooCommerce categories (don't replace)
