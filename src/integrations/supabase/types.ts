@@ -1015,10 +1015,68 @@ export type Database = {
           },
         ]
       }
+      woo_product_changes: {
+        Row: {
+          change_type: string
+          detected_at: string
+          field_name: string
+          id: string
+          new_value: string | null
+          old_value: string | null
+          product_name: string | null
+          sku: string | null
+          tenant_id: string
+          woo_id: number
+          woo_product_id: string
+        }
+        Insert: {
+          change_type: string
+          detected_at?: string
+          field_name: string
+          id?: string
+          new_value?: string | null
+          old_value?: string | null
+          product_name?: string | null
+          sku?: string | null
+          tenant_id: string
+          woo_id: number
+          woo_product_id: string
+        }
+        Update: {
+          change_type?: string
+          detected_at?: string
+          field_name?: string
+          id?: string
+          new_value?: string | null
+          old_value?: string | null
+          product_name?: string | null
+          sku?: string | null
+          tenant_id?: string
+          woo_id?: number
+          woo_product_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "woo_product_changes_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "woo_product_changes_woo_product_id_fkey"
+            columns: ["woo_product_id"]
+            isOneToOne: false
+            referencedRelation: "woo_products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       woo_products: {
         Row: {
           categories: Json | null
           created_at: string
+          fetch_diff: Json | null
           id: string
           images: Json | null
           last_fetched_at: string | null
@@ -1026,6 +1084,7 @@ export type Database = {
           last_pushed_at: string | null
           name: string
           permalink: string | null
+          previous_data: Json | null
           product_id: string | null
           regular_price: string | null
           sale_price: string | null
@@ -1043,6 +1102,7 @@ export type Database = {
         Insert: {
           categories?: Json | null
           created_at?: string
+          fetch_diff?: Json | null
           id?: string
           images?: Json | null
           last_fetched_at?: string | null
@@ -1050,6 +1110,7 @@ export type Database = {
           last_pushed_at?: string | null
           name: string
           permalink?: string | null
+          previous_data?: Json | null
           product_id?: string | null
           regular_price?: string | null
           sale_price?: string | null
@@ -1067,6 +1128,7 @@ export type Database = {
         Update: {
           categories?: Json | null
           created_at?: string
+          fetch_diff?: Json | null
           id?: string
           images?: Json | null
           last_fetched_at?: string | null
@@ -1074,6 +1136,7 @@ export type Database = {
           last_pushed_at?: string | null
           name?: string
           permalink?: string | null
+          previous_data?: Json | null
           product_id?: string | null
           regular_price?: string | null
           sale_price?: string | null
