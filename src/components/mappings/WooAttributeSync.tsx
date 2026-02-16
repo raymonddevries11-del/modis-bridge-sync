@@ -138,6 +138,33 @@ export function WooAttributeSync() {
     saveMappingMutation.mutate(updated);
   };
 
+  // Auto-match all unmatched Modis attributes by name/slug
+  const autoMatchAll = () => {
+    if (!wooAttrs || !modisAttrs) return;
+    const updated = { ...manualMappings };
+    let newMatches = 0;
+    for (const ma of modisAttrs) {
+      if (updated[ma.name]) continue; // already manually mapped
+      const lower = ma.name.toLowerCase().replace(/\s+/g, "-");
+      const match = wooAttrs.find(
+        (wa) =>
+          wa.name.toLowerCase() === ma.name.toLowerCase() ||
+          wa.slug === lower ||
+          wa.slug === `pa_${lower}`
+      );
+      if (match) {
+        updated[ma.name] = match.slug;
+        newMatches++;
+      }
+    }
+    if (newMatches > 0) {
+      saveMappingMutation.mutate(updated);
+      toast.success(`${newMatches} attributen automatisch gematcht`);
+    } else {
+      toast.info("Geen nieuwe matches gevonden");
+    }
+  };
+
   const toggleAttr = (key: string) => {
     setOpenAttrs((prev) => {
       const next = new Set(prev);
@@ -225,6 +252,18 @@ export function WooAttributeSync() {
             <Badge variant="secondary" className="text-[10px]">
               {wooAttrs.length} WC attributen
             </Badge>
+          )}
+          {wooAttrs && modisAttrs && unmatchedCount > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={autoMatchAll}
+              disabled={saveMappingMutation.isPending}
+              className="text-xs"
+            >
+              <Link2 className="h-3.5 w-3.5 mr-1" />
+              Auto-match alle
+            </Button>
           )}
         </div>
 
