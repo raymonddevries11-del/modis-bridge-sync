@@ -1,18 +1,17 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Layout } from "@/components/Layout";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, Tag, Layers, Package, ExternalLink } from "lucide-react";
+import { Layers, Tag, Link2, BookOpen } from "lucide-react";
 import { AttributeManager } from "@/components/catalog/AttributeManager";
 import { CategoryManager } from "@/components/catalog/CategoryManager";
 import { CategoryMappingManager } from "@/components/catalog/CategoryMappingManager";
 import { WooAttributeSync } from "@/components/mappings/WooAttributeSync";
 import { WooAttributeCatalog } from "@/components/catalog/WooAttributeCatalog";
+import { CatalogHealthBar } from "@/components/catalog/CatalogHealthBar";
 import { TenantSelector } from "@/components/TenantSelector";
+import { useCategoryMappings } from "@/hooks/useCategoryMappings";
 
 interface AttrInfo {
   name: string;
@@ -22,10 +21,7 @@ interface AttrInfo {
 }
 
 const CatalogData = () => {
-  const navigate = useNavigate();
-  const [catSearch, setCatSearch] = useState("");
-  const [catSubTab, setCatSubTab] = useState<"overview" | "mapping">("overview");
-  const [attrSubTab, setAttrSubTab] = useState<"overview" | "woo-sync" | "woo-catalog">("overview");
+  const [activeTab, setActiveTab] = useState("attr-source");
   const [tenantId, setTenantId] = useState("");
 
   // Fetch tenants to auto-select first one
@@ -133,78 +129,105 @@ const CatalogData = () => {
     },
   });
 
+  // Fetch WC attribute mappings count for health bar
+  const configKey = `woo_attribute_mappings_${tenantId}`;
+  const { data: attrMappings } = useQuery({
+    queryKey: ["woo-attr-mappings-config", tenantId],
+    enabled: !!tenantId,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("config")
+        .select("value")
+        .eq("key", configKey)
+        .maybeSingle();
+      return (data?.value as Record<string, string>) ?? {};
+    },
+  });
+
+  // Fetch category mappings count for health bar
+  const { mappings: catMappings } = useCategoryMappings(tenantId);
+
+  // Compute health stats
+  const healthStats = tenantId ? {
+    totalAttributes: attrData?.length ?? 0,
+    mappedAttributes: attrMappings ? Object.keys(attrMappings).length : 0,
+    totalCategories: catData?.length ?? 0,
+    mappedCategories: catMappings?.length ?? 0,
+  } : null;
+
   return (
     <Layout>
       <div className="space-y-6">
+        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold">Catalogus Data</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Overzicht van alle attributen, waarden en categorieën in gebruik
+              Beheer attributen, categorieën en hun mappings naar WooCommerce
             </p>
           </div>
-          {tenants && tenants.length > 1 && (
-            <TenantSelector value={tenantId} onChange={setTenantId} />
-          )}
+          <TenantSelector value={tenantId} onChange={setTenantId} />
         </div>
 
-        <Tabs defaultValue="attributes">
-          <TabsList>
-            <TabsTrigger value="attributes" className="gap-2">
-              <Layers className="h-4 w-4" />
-              Attributen ({attrData?.length ?? "..."})
+        {/* Health Dashboard */}
+        {tenantId && (
+          <CatalogHealthBar
+            stats={healthStats}
+            isLoading={attrLoading || catLoading}
+          />
+        )}
+
+        {/* Flat single-level navigation */}
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="w-full justify-start overflow-x-auto">
+            <TabsTrigger value="attr-source" className="gap-1.5">
+              <Layers className="h-3.5 w-3.5" />
+              Attributen
             </TabsTrigger>
-            <TabsTrigger value="categories" className="gap-2">
-              <Tag className="h-4 w-4" />
-              Categorieën ({catData?.length ?? "..."})
+            <TabsTrigger value="attr-mapping" className="gap-1.5">
+              <Link2 className="h-3.5 w-3.5" />
+              Attribuut Mapping
+            </TabsTrigger>
+            <TabsTrigger value="cat-source" className="gap-1.5">
+              <Tag className="h-3.5 w-3.5" />
+              Categorieën
+            </TabsTrigger>
+            <TabsTrigger value="cat-mapping" className="gap-1.5">
+              <Link2 className="h-3.5 w-3.5" />
+              Categorie Mapping
+            </TabsTrigger>
+            <TabsTrigger value="wc-catalog" className="gap-1.5">
+              <BookOpen className="h-3.5 w-3.5" />
+              WC Catalogus
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="attributes" className="mt-4">
-            <Tabs value={attrSubTab} onValueChange={(v) => setAttrSubTab(v as any)}>
-              <TabsList className="mb-4">
-                <TabsTrigger value="overview">Bron (Modis)</TabsTrigger>
-                <TabsTrigger value="woo-catalog">WooCommerce Catalogus</TabsTrigger>
-                <TabsTrigger value="woo-sync">Mapping & Sync</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="overview">
-                <AttributeManager usage={attrData} isLoading={attrLoading} />
-              </TabsContent>
-
-              <TabsContent value="woo-catalog">
-                <WooAttributeCatalog />
-              </TabsContent>
-
-              <TabsContent value="woo-sync">
-                <WooAttributeSync />
-              </TabsContent>
-            </Tabs>
+          <TabsContent value="attr-source" className="mt-4">
+            <AttributeManager usage={attrData} isLoading={attrLoading} />
           </TabsContent>
 
-          <TabsContent value="categories" className="mt-4">
-            <Tabs value={catSubTab} onValueChange={(v) => setCatSubTab(v as any)}>
-              <TabsList className="mb-4">
-                <TabsTrigger value="overview">Bron (Modis)</TabsTrigger>
-                <TabsTrigger value="mapping">WooCommerce Mapping</TabsTrigger>
-              </TabsList>
+          <TabsContent value="attr-mapping" className="mt-4">
+            <WooAttributeSync tenantId={tenantId} />
+          </TabsContent>
 
-              <TabsContent value="overview">
-                <CategoryManager categories={catData} isLoading={catLoading} />
-              </TabsContent>
+          <TabsContent value="cat-source" className="mt-4">
+            <CategoryManager categories={catData} isLoading={catLoading} />
+          </TabsContent>
 
-              <TabsContent value="mapping">
-                {tenantId ? (
-                  <CategoryMappingManager
-                    categories={catData}
-                    isLoading={catLoading}
-                    tenantId={tenantId}
-                  />
-                ) : (
-                  <p className="text-sm text-muted-foreground">Selecteer eerst een tenant.</p>
-                )}
-              </TabsContent>
-            </Tabs>
+          <TabsContent value="cat-mapping" className="mt-4">
+            {tenantId ? (
+              <CategoryMappingManager
+                categories={catData}
+                isLoading={catLoading}
+                tenantId={tenantId}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground py-8 text-center">Selecteer eerst een tenant.</p>
+            )}
+          </TabsContent>
+
+          <TabsContent value="wc-catalog" className="mt-4">
+            <WooAttributeCatalog tenantId={tenantId} />
           </TabsContent>
         </Tabs>
       </div>

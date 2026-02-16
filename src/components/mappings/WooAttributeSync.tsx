@@ -15,7 +15,7 @@ import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
 import { RefreshCw, Loader2, Search, ChevronDown, ChevronRight, Check, Link2, Unlink, X, ArrowRight, AlertTriangle, ShieldCheck, ClipboardList, Undo2, Trash2 } from "lucide-react";
-import { TenantSelector } from "@/components/TenantSelector";
+
 import { toast } from "sonner";
 
 interface WooAttribute {
@@ -35,9 +35,12 @@ interface ModisAttribute {
 
 type AttrMappings = Record<string, string>; // modisName -> wooSlug
 
-export function WooAttributeSync() {
+interface WooAttributeSyncProps {
+  tenantId: string;
+}
+
+export function WooAttributeSync({ tenantId }: WooAttributeSyncProps) {
   const queryClient = useQueryClient();
-  const [tenantId, setTenantId] = useState("");
   const [search, setSearch] = useState("");
   const [openAttrs, setOpenAttrs] = useState<Set<string>>(new Set());
   const [editingAttr, setEditingAttr] = useState<string | null>(null);
@@ -289,7 +292,6 @@ export function WooAttributeSync() {
       <CardContent className="space-y-4">
         {/* Controls */}
         <div className="flex flex-wrap items-center gap-3">
-          <TenantSelector value={tenantId} onChange={setTenantId} />
           <div className="relative flex-1 min-w-[200px] max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
