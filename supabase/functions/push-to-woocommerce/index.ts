@@ -5,19 +5,61 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
+function isHtmlResponse(text: string): boolean {
+  const lower = text.trimStart().toLowerCase();
+  return lower.startsWith('<html') || lower.startsWith('<!doctype') || lower.includes('sgcapt') || lower.includes('captcha');
+}
+
+interface FetchResult {
+  response: Response;
+  text: string;
+  json: any | null;
+  blocked: boolean;
+}
+
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 4): Promise<FetchResult> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    if (attempt > 0) await new Promise(r => setTimeout(r, Math.min(1000 * Math.pow(2, attempt), 5000)));
+    // Exponential backoff: 0, 2s, 4s, 8s — longer gaps help bypass rate-based bot triggers
+    if (attempt > 0) {
+      const delay = Math.min(2000 * Math.pow(2, attempt - 1), 10000);
+      console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
     try {
-      const res = await fetch(url, options);
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          ...options.headers as Record<string, string>,
+          'User-Agent': 'ModisPIM/1.0 (WooCommerce Sync)',
+          'Accept': 'application/json',
+        },
+      });
+
       if (res.status === 429) {
-        const delay = parseInt(res.headers.get('Retry-After') || '5') * 1000;
-        await new Promise(r => setTimeout(r, delay));
+        const retryAfter = parseInt(res.headers.get('Retry-After') || '5') * 1000;
+        console.log(`Rate limited (429), waiting ${retryAfter}ms`);
+        await new Promise(r => setTimeout(r, retryAfter));
         continue;
       }
-      return res;
-    } catch (e) { lastError = e as Error; }
+
+      const text = await res.text();
+
+      // Bot protection returns 200 with HTML — retry with backoff
+      if (isHtmlResponse(text)) {
+        console.warn(`Attempt ${attempt + 1}: Got HTML/bot-protection response (${text.length} bytes)`);
+        if (attempt < maxRetries - 1) continue; // retry
+        return { response: res, text, json: null, blocked: true };
+      }
+
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* not json */ }
+
+      return { response: res, text, json, blocked: false };
+    } catch (e) {
+      lastError = e as Error;
+      console.error(`Fetch attempt ${attempt + 1} failed:`, lastError.message);
+    }
   }
   throw lastError || new Error('All fetch attempts failed');
 }
@@ -89,26 +131,22 @@ Deno.serve(async (req) => {
       try {
         // Search WooCommerce for this SKU
         const searchUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?sku=${encodeURIComponent(pim.sku)}&${wooAuth}`;
-        const searchRes = await fetchWithRetry(searchUrl, { headers: { 'Content-Type': 'application/json' } });
+        const searchResult = await fetchWithRetry(searchUrl, { method: 'GET' });
 
-        if (!searchRes.ok) {
-          const text = await searchRes.text();
-          if (text.includes('sgcapt') || text.includes('<html')) {
-            results.push({ sku: pim.sku, action: 'error', changes: [], message: 'Blocked by hosting bot protection' });
-            continue;
-          }
-          results.push({ sku: pim.sku, action: 'error', changes: [], message: `Search failed: ${searchRes.status}` });
+        if (searchResult.blocked) {
+          results.push({ sku: pim.sku, action: 'error', changes: [], message: 'Blocked by hosting bot protection (all retries exhausted)' });
+          continue;
+        }
+        if (!searchResult.response.ok) {
+          results.push({ sku: pim.sku, action: 'error', changes: [], message: `Search failed: ${searchResult.response.status}` });
+          continue;
+        }
+        if (!searchResult.json) {
+          results.push({ sku: pim.sku, action: 'error', changes: [], message: 'WooCommerce returned non-JSON response' });
           continue;
         }
 
-        const searchText = await searchRes.text();
-        let wooProducts;
-        try {
-          wooProducts = JSON.parse(searchText);
-        } catch {
-          results.push({ sku: pim.sku, action: 'error', changes: [], message: 'WooCommerce returned HTML instead of JSON (bot protection)' });
-          continue;
-        }
+        const wooProducts = searchResult.json;
         const prices = pim.product_prices as any;
         const brand = (pim.brands as any)?.name || null;
         const regularPrice = prices?.regular?.toString() || '';
@@ -188,17 +226,18 @@ Deno.serve(async (req) => {
           desiredData.status = 'publish';
 
           const createUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?${wooAuth}`;
-          const createRes = await fetchWithRetry(createUrl, {
+          const createResult = await fetchWithRetry(createUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(desiredData),
           });
 
-          if (!createRes.ok) {
-            const errBody = await createRes.text();
-            results.push({ sku: pim.sku, action: 'error', changes: [], message: `Create failed: ${errBody.substring(0, 200)}` });
+          if (createResult.blocked) {
+            results.push({ sku: pim.sku, action: 'error', changes: [], message: 'Create blocked by hosting bot protection (all retries exhausted)' });
+          } else if (!createResult.response.ok || !createResult.json) {
+            results.push({ sku: pim.sku, action: 'error', changes: [], message: `Create failed: ${(createResult.text || '').substring(0, 200)}` });
           } else {
-            const created = await createRes.json();
+            const created = createResult.json;
             const allChanges: FieldChange[] = [
               { field: 'name', old_value: null, new_value: pim.title },
               { field: 'regular_price', old_value: null, new_value: regularPrice },
@@ -310,27 +349,18 @@ Deno.serve(async (req) => {
 
           // Apply update
           const updateUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/${woo.id}?${wooAuth}`;
-          const updateRes = await fetchWithRetry(updateUrl, {
+          const updateResult = await fetchWithRetry(updateUrl, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(desiredData),
           });
 
-          const updateText = await updateRes.text();
-
-          if (!updateRes.ok) {
-            const errMsg = updateText.includes('<html') || updateText.includes('sgcapt')
-              ? 'Blocked by hosting bot protection'
-              : `Update failed: ${updateRes.status}`;
-            results.push({ sku: pim.sku, action: 'error', changes, message: errMsg });
+          if (updateResult.blocked) {
+            results.push({ sku: pim.sku, action: 'error', changes, message: 'Update blocked by hosting bot protection (all retries exhausted)' });
+          } else if (!updateResult.response.ok || !updateResult.json) {
+            results.push({ sku: pim.sku, action: 'error', changes, message: `Update failed: ${updateResult.response.status} - ${(updateResult.text || '').substring(0, 150)}` });
           } else {
-            let updated;
-            try {
-              updated = JSON.parse(updateText);
-            } catch {
-              results.push({ sku: pim.sku, action: 'error', changes, message: 'WooCommerce returned HTML instead of JSON (bot protection)' });
-              continue;
-            }
+            const updated = updateResult.json;
 
             await supabase.from('woo_products').upsert({
               tenant_id: tenantId,
