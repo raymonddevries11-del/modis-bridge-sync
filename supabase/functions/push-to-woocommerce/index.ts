@@ -5,6 +5,52 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// --- SiteGround bot-protection hardening ---
+
+// SiteGround triggers on rapid requests, missing browser-like headers, and non-standard User-Agents.
+// We mitigate by: adaptive rate cap, realistic headers, exponential backoff on HTML blocks.
+
+const SG_SAFE_HEADERS: Record<string, string> = {
+  'User-Agent': 'ModisPIM/1.0 (WooCommerce Sync; +https://modis-bridge-sync.lovable.app)',
+  'Accept': 'application/json, text/plain, */*',
+  'Accept-Language': 'nl-NL,nl;q=0.9,en;q=0.8',
+  'Cache-Control': 'no-cache',
+};
+
+// Adaptive rate limiter — increases delay when blocks are detected
+class AdaptiveRateLimiter {
+  private baseDelay: number;
+  private currentDelay: number;
+  private consecutiveBlocks = 0;
+  private readonly maxDelay: number;
+
+  constructor(baseDelayMs = 800, maxDelayMs = 5000) {
+    this.baseDelay = baseDelayMs;
+    this.currentDelay = baseDelayMs;
+    this.maxDelay = maxDelayMs;
+  }
+
+  async wait() {
+    await new Promise(r => setTimeout(r, this.currentDelay));
+  }
+
+  onSuccess() {
+    this.consecutiveBlocks = 0;
+    // Gradually ramp down to base delay
+    this.currentDelay = Math.max(this.baseDelay, this.currentDelay * 0.8);
+  }
+
+  onBlock() {
+    this.consecutiveBlocks++;
+    // Double delay on each consecutive block, up to max
+    this.currentDelay = Math.min(this.currentDelay * 2, this.maxDelay);
+    console.warn(`Bot block detected (${this.consecutiveBlocks} consecutive). Delay now ${this.currentDelay}ms`);
+  }
+
+  get delay() { return this.currentDelay; }
+  get isThrottled() { return this.consecutiveBlocks >= 3; }
+}
+
 function isHtmlResponse(text: string): boolean {
   const lower = text.trimStart().toLowerCase();
   return lower.startsWith('<html') || lower.startsWith('<!doctype') || lower.includes('sgcapt') || lower.includes('captcha');
@@ -17,44 +63,44 @@ interface FetchResult {
   blocked: boolean;
 }
 
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 4): Promise<FetchResult> {
+async function fetchWithRetry(url: string, options: RequestInit, rateLimiter: AdaptiveRateLimiter, maxRetries = 4): Promise<FetchResult> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    // Exponential backoff: 0, 2s, 4s, 8s — longer gaps help bypass rate-based bot triggers
     if (attempt > 0) {
       const delay = Math.min(2000 * Math.pow(2, attempt - 1), 10000);
-      console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
+      console.log(`Retry ${attempt + 1}/${maxRetries} after ${delay}ms`);
       await new Promise(r => setTimeout(r, delay));
     }
     try {
       const res = await fetch(url, {
         ...options,
         headers: {
+          ...SG_SAFE_HEADERS,
           ...options.headers as Record<string, string>,
-          'User-Agent': 'ModisPIM/1.0 (WooCommerce Sync)',
-          'Accept': 'application/json',
         },
       });
 
       if (res.status === 429) {
         const retryAfter = parseInt(res.headers.get('Retry-After') || '5') * 1000;
         console.log(`Rate limited (429), waiting ${retryAfter}ms`);
+        rateLimiter.onBlock();
         await new Promise(r => setTimeout(r, retryAfter));
         continue;
       }
 
       const text = await res.text();
 
-      // Bot protection returns 200 with HTML — retry with backoff
       if (isHtmlResponse(text)) {
-        console.warn(`Attempt ${attempt + 1}: Got HTML/bot-protection response (${text.length} bytes)`);
-        if (attempt < maxRetries - 1) continue; // retry
+        console.warn(`Attempt ${attempt + 1}: HTML/bot-protection (${text.length} bytes, status ${res.status})`);
+        rateLimiter.onBlock();
+        if (attempt < maxRetries - 1) continue;
         return { response: res, text, json: null, blocked: true };
       }
 
       let json = null;
       try { json = JSON.parse(text); } catch { /* not json */ }
 
+      rateLimiter.onSuccess();
       return { response: res, text, json, blocked: false };
     } catch (e) {
       lastError = e as Error;
@@ -91,6 +137,7 @@ Deno.serve(async (req) => {
     if (cfgErr || !config) throw new Error(`Config not found: ${cfgErr?.message}`);
 
     const wooAuth = `consumer_key=${config.woocommerce_consumer_key}&consumer_secret=${config.woocommerce_consumer_secret}`;
+    const rateLimiter = new AdaptiveRateLimiter(800, 5000);
 
     // Get PIM products with all related data
     const { data: pimProducts, error: pimErr } = await supabase
@@ -131,7 +178,7 @@ Deno.serve(async (req) => {
       try {
         // Search WooCommerce for this SKU
         const searchUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?sku=${encodeURIComponent(pim.sku)}&${wooAuth}`;
-        const searchResult = await fetchWithRetry(searchUrl, { method: 'GET' });
+        const searchResult = await fetchWithRetry(searchUrl, { method: 'GET' }, rateLimiter);
 
         if (searchResult.blocked) {
           results.push({ sku: pim.sku, action: 'error', changes: [], message: 'Blocked by hosting bot protection (all retries exhausted)' });
@@ -230,7 +277,7 @@ Deno.serve(async (req) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(desiredData),
-          });
+          }, rateLimiter);
 
           if (createResult.blocked) {
             results.push({ sku: pim.sku, action: 'error', changes: [], message: 'Create blocked by hosting bot protection (all retries exhausted)' });
@@ -353,7 +400,7 @@ Deno.serve(async (req) => {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(desiredData),
-          });
+          }, rateLimiter);
 
           if (updateResult.blocked) {
             results.push({ sku: pim.sku, action: 'error', changes, message: 'Update blocked by hosting bot protection (all retries exhausted)' });
@@ -412,8 +459,18 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Rate limit delay
-        await new Promise(r => setTimeout(r, 300));
+        // Adaptive rate limit — slows down when blocks are detected
+        await rateLimiter.wait();
+
+        // Abort early if SiteGround is persistently blocking
+        if (rateLimiter.isThrottled) {
+          console.error('SiteGround bot protection is persistently blocking requests. Aborting remaining products.');
+          results.push(...pimProducts.slice(pimProducts.indexOf(pim) + 1).map((p: any) => ({
+            sku: p.sku, action: 'error' as const, changes: [],
+            message: 'Skipped — SiteGround bot protection persistently blocking',
+          })));
+          break;
+        }
       } catch (e) {
         results.push({ sku: pim.sku, action: 'error', changes: [], message: e instanceof Error ? e.message : 'Unknown error' });
       }
