@@ -6,6 +6,7 @@ import { Send, RefreshCw, CheckCircle2, Link2, Globe, Loader2, Package, ArrowUpD
 import { TenantSelector } from "@/components/TenantSelector";
 import { UrlKeyAudit } from "@/components/woocommerce/UrlKeyAudit";
 import { WooProductTable } from "@/components/woocommerce/WooProductTable";
+import { WooDeltaDashboard } from "@/components/woocommerce/WooDeltaDashboard";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -160,11 +161,29 @@ const ChannelWooCommerce = () => {
         </div>
 
         {/* Tabs */}
-        <Tabs defaultValue="products" className="space-y-4">
+        <Tabs defaultValue="delta" className="space-y-4">
           <TabsList>
+            <TabsTrigger value="delta">Delta Tracking</TabsTrigger>
             <TabsTrigger value="products">WooCommerce Producten</TabsTrigger>
             <TabsTrigger value="actions">Acties & Tools</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="delta">
+            <Card className="card-elevated">
+              <CardHeader>
+                <CardTitle className="text-base">Wijzigingen sinds laatste fetch</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {tenantId ? (
+                  <WooDeltaDashboard tenantId={tenantId} />
+                ) : (
+                  <p className="text-sm text-muted-foreground py-8 text-center">
+                    Selecteer een tenant om delta data te bekijken.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           <TabsContent value="products">
             <Card className="card-elevated">
