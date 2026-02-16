@@ -1015,6 +1015,50 @@ export type Database = {
           },
         ]
       }
+      woo_global_attributes: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          pim_attribute_name: string | null
+          slug: string
+          tenant_id: string
+          terms: Json
+          updated_at: string
+          woo_attr_id: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          pim_attribute_name?: string | null
+          slug: string
+          tenant_id: string
+          terms?: Json
+          updated_at?: string
+          woo_attr_id: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          pim_attribute_name?: string | null
+          slug?: string
+          tenant_id?: string
+          terms?: Json
+          updated_at?: string
+          woo_attr_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "woo_global_attributes_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       woo_product_changes: {
         Row: {
           change_type: string
