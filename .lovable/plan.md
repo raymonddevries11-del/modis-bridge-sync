@@ -1,54 +1,56 @@
 
-## Bulk URL-Key Cleanup Job
 
-Een nieuwe actie toevoegen aan de WooCommerce channel pagina waarmee je in een klik alle producten met foute `url_key` waarden kunt laten corrigeren via WooCommerce. Dit wordt geintegreerd in het bestaande jobs-systeem.
+## URL Key Audit Dashboard
+
+Een nieuw component op de WooCommerce channel pagina dat een live overzicht toont van producten met gebroken `url_key` waarden, inclusief directe reparatie-acties.
 
 ### Wat wordt er gebouwd
 
-1. **Nieuwe job type: `FIX_URL_KEYS`** -- een job die de bestaande `fix-url-keys` edge function aanroept voor een tenant, zodat het asynchroon via de job queue verwerkt wordt.
+Een "URL Key Audit" card op `/channels/woocommerce` die:
 
-2. **UI-knop op de WooCommerce pagina** -- een "Fix URL Keys" button op `/channel/woocommerce` die de job aanmaakt en voortgang toont.
-
-3. **Job scheduler uitbreiding** -- het `FIX_URL_KEYS` job type wordt toegevoegd aan de `job-scheduler` edge function zodat het automatisch opgepakt wordt.
-
-4. **Optioneel: volledige slug-sync knop** -- naast de "fix broken keys" ook een "Sync alle slugs" knop die de `sync-woo-slugs` functie via een job aanroept voor de hele catalogus.
-
----
+1. **Automatisch scant** op producten met `url_key = '-nvt'`, `null`, of leeg bij het selecteren van een tenant
+2. **Overzicht toont** met:
+   - Aantal gebroken URL keys per type (null, leeg, `-nvt`)
+   - Tabel met getroffen producten (SKU, titel, huidige url_key, status-badge)
+3. **Auto-repair knoppen**:
+   - "Fix alle" knop die de bestaande `FIX_URL_KEYS` job aanmaakt
+   - "Dry run" knop die de `fix-url-keys` functie direct aanroept met `dryRun: true` om een preview te tonen van wat er gerepareerd zou worden
 
 ### Technische details
 
-**Bestanden die worden aangepast:**
+**Nieuwe bestanden:**
+
+| Bestand | Beschrijving |
+|---------|-------------|
+| `src/components/woocommerce/UrlKeyAudit.tsx` | Nieuw component met audit tabel en repair-acties |
+
+**Aangepaste bestanden:**
 
 | Bestand | Wijziging |
 |---------|-----------|
-| `src/pages/ChannelWooCommerce.tsx` | Nieuwe "Fix URL Keys" en "Sync Slugs" knoppen met tenant-selectie, loading state en resultaat-feedback |
-| `supabase/functions/job-scheduler/index.ts` | Nieuw case `FIX_URL_KEYS` dat `fix-url-keys` aanroept, en `SYNC_WOO_SLUGS` dat `sync-woo-slugs` aanroept |
-| `supabase/functions/fix-url-keys/index.ts` | Kleine aanpassing: accepteer ook `jobId` parameter zodat het in de job-flow past |
+| `src/pages/ChannelWooCommerce.tsx` | Import en tonen van `UrlKeyAudit` component met tenant doorgifte |
 
-**Nieuwe job types:**
+**UrlKeyAudit.tsx bevat:**
+- Query op `products` tabel: `url_key = '-nvt'` OR `url_key IS NULL` OR `url_key = ''`
+- Samenvatting-badges per type probleem
+- Scrollbare tabel met kolommen: SKU, Titel, Huidige URL Key, Status
+- "Dry Run" knop die `fix-url-keys` edge function aanroept met `dryRun: true` en resultaten inline toont
+- "Auto-repair" knop die een `FIX_URL_KEYS` job insert (hergebruik van bestaande `createJob` logica)
+- Resultaat-sectie die na dry run toont welke producten wel/niet gevonden zijn in WooCommerce
 
-- `FIX_URL_KEYS` -- zoekt producten met `url_key = '-nvt'`, `null`, of leeg, en corrigeert ze via WooCommerce API lookup
-- `SYNC_WOO_SLUGS` -- synchroniseert alle slugs paginagewijs (hergebruikt bestaande `sync-woo-slugs` functie)
-
-**Flow:**
+**Data flow:**
 
 ```text
-Gebruiker klikt "Fix URL Keys"
-  -> Insert in jobs tabel: type=FIX_URL_KEYS, state=ready, payload={tenantId}
-  -> job-scheduler pikt job op
-  -> Roept fix-url-keys edge function aan
-  -> Resultaat wordt opgeslagen in job.result
-  -> UI toont resultaat via realtime subscription (al aanwezig op Jobs pagina)
+Component mount + tenant geselecteerd
+  -> SELECT products WHERE url_key IN ('-nvt', '', NULL)
+  -> Toon tabel met gebroken producten
+
+Dry Run klik
+  -> supabase.functions.invoke('fix-url-keys', { tenantId, dryRun: true })
+  -> Toon resultaten: "would fix" vs "not found in WooCommerce"
+
+Auto-repair klik
+  -> INSERT INTO jobs (type: 'FIX_URL_KEYS', payload: { tenantId })
+  -> Toast + link naar Jobs pagina
 ```
 
-**ChannelWooCommerce.tsx wijzigingen:**
-- Tenant selector toevoegen (hergebruikt `TenantSelector` component)
-- "Fix URL Keys" knop die een job insert in de `jobs` tabel
-- "Sync alle Slugs" knop die een `SYNC_WOO_SLUGS` job insert
-- Toast feedback bij aanmaken van de job
-- Link naar Jobs pagina voor voortgang
-
-**job-scheduler/index.ts wijzigingen:**
-- Toevoegen van twee nieuwe cases in de switch statement:
-  - `case 'FIX_URL_KEYS': functionName = 'fix-url-keys';`
-  - `case 'SYNC_WOO_SLUGS': functionName = 'sync-woo-slugs';`
