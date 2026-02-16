@@ -11,6 +11,7 @@ import { AttributeManager } from "@/components/catalog/AttributeManager";
 import { CategoryManager } from "@/components/catalog/CategoryManager";
 import { CategoryMappingManager } from "@/components/catalog/CategoryMappingManager";
 import { WooAttributeSync } from "@/components/mappings/WooAttributeSync";
+import { WooAttributeCatalog } from "@/components/catalog/WooAttributeCatalog";
 import { TenantSelector } from "@/components/TenantSelector";
 
 interface AttrInfo {
@@ -24,7 +25,7 @@ const CatalogData = () => {
   const navigate = useNavigate();
   const [catSearch, setCatSearch] = useState("");
   const [catSubTab, setCatSubTab] = useState<"overview" | "mapping">("overview");
-  const [attrSubTab, setAttrSubTab] = useState<"overview" | "woo-sync">("overview");
+  const [attrSubTab, setAttrSubTab] = useState<"overview" | "woo-sync" | "woo-catalog">("overview");
   const [tenantId, setTenantId] = useState("");
 
   // Fetch tenants to auto-select first one
@@ -163,11 +164,16 @@ const CatalogData = () => {
             <Tabs value={attrSubTab} onValueChange={(v) => setAttrSubTab(v as any)}>
               <TabsList className="mb-4">
                 <TabsTrigger value="overview">Bron (Modis)</TabsTrigger>
-                <TabsTrigger value="woo-sync">WooCommerce Sync</TabsTrigger>
+                <TabsTrigger value="woo-catalog">WooCommerce Catalogus</TabsTrigger>
+                <TabsTrigger value="woo-sync">Mapping & Sync</TabsTrigger>
               </TabsList>
 
               <TabsContent value="overview">
                 <AttributeManager usage={attrData} isLoading={attrLoading} />
+              </TabsContent>
+
+              <TabsContent value="woo-catalog">
+                <WooAttributeCatalog />
               </TabsContent>
 
               <TabsContent value="woo-sync">
