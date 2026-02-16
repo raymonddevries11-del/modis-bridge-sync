@@ -165,6 +165,114 @@ interface FieldChange {
   new_value: string | null;
 }
 
+// --- Variation sync helper ---
+async function createOrUpdateVariations(
+  wooUrl: string, wooAuth: string, wooProductId: number,
+  pim: any, rateLimiter: AdaptiveRateLimiter, supabase: any, tenantId: string
+): Promise<number> {
+  const activeVariants = (pim.variants || []).filter((v: any) => v.active);
+  if (activeVariants.length === 0) return 0;
+
+  // Fetch existing variations
+  const existingUrl = `${wooUrl}/wp-json/wc/v3/products/${wooProductId}/variations?per_page=100&${wooAuth}`;
+  const existingResult = await fetchWithRetry(existingUrl, { method: 'GET' }, rateLimiter);
+  if (existingResult.blocked || !existingResult.json) {
+    console.warn(`Could not fetch existing variations for WC #${wooProductId}`);
+    return 0;
+  }
+
+  const existingVariations: any[] = existingResult.json;
+  const existingSkuMap = new Map<string, any>();
+  for (const ev of existingVariations) {
+    if (ev.sku) existingSkuMap.set(ev.sku.toLowerCase(), ev);
+  }
+
+  const prices = pim.product_prices as any;
+  const regularPrice = prices?.regular?.toString() || '';
+  const salePrice = prices?.list?.toString() || '';
+
+  const toCreate: any[] = [];
+  const toUpdate: any[] = [];
+
+  for (const variant of activeVariants) {
+    const variantSku = `${pim.sku}-${variant.maat_id}`;
+    const stockQty = variant.stock_totals?.[0]?.qty ?? variant.stock_totals?.qty ?? 0;
+    const existing = existingSkuMap.get(variantSku.toLowerCase());
+
+    const varData: any = {
+      sku: variantSku,
+      regular_price: regularPrice,
+      sale_price: salePrice,
+      manage_stock: true,
+      stock_quantity: stockQty,
+      stock_status: stockQty > 0 ? 'instock' : 'outofstock',
+      attributes: [{ id: 0, name: 'Maat', option: variant.size_label }],
+    };
+
+    if (variant.ean) {
+      varData.meta_data = [{ key: '_ean', value: variant.ean }];
+    }
+
+    if (existing) {
+      // Check if update needed
+      const needsUpdate =
+        existing.stock_quantity !== stockQty ||
+        existing.regular_price !== regularPrice ||
+        (existing.sale_price || '') !== salePrice;
+
+      if (needsUpdate) {
+        toUpdate.push({ id: existing.id, ...varData });
+      }
+    } else {
+      toCreate.push(varData);
+    }
+  }
+
+  let synced = 0;
+
+  // Batch create new variations
+  if (toCreate.length > 0) {
+    const batchUrl = `${wooUrl}/wp-json/wc/v3/products/${wooProductId}/variations/batch?${wooAuth}`;
+    const batchResult = await fetchWithRetry(batchUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ create: toCreate }),
+    }, rateLimiter);
+
+    if (batchResult.blocked) {
+      await recordBlock(supabase, tenantId);
+      console.warn(`Variation batch create blocked for WC #${wooProductId}`);
+    } else if (batchResult.response.ok) {
+      await recordSuccess(supabase);
+      synced += toCreate.length;
+      console.log(`✓ Created ${toCreate.length} variations for WC #${wooProductId}`);
+    } else {
+      console.error(`Variation batch create failed: ${batchResult.response.status} - ${batchResult.text.substring(0, 200)}`);
+    }
+  }
+
+  // Batch update existing variations
+  if (toUpdate.length > 0) {
+    const batchUrl = `${wooUrl}/wp-json/wc/v3/products/${wooProductId}/variations/batch?${wooAuth}`;
+    const batchResult = await fetchWithRetry(batchUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ update: toUpdate }),
+    }, rateLimiter);
+
+    if (batchResult.blocked) {
+      await recordBlock(supabase, tenantId);
+    } else if (batchResult.response.ok) {
+      await recordSuccess(supabase);
+      synced += toUpdate.length;
+      console.log(`✓ Updated ${toUpdate.length} variations for WC #${wooProductId}`);
+    }
+  }
+
+  await rateLimiter.wait();
+  return synced;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
@@ -418,6 +526,14 @@ Deno.serve(async (req) => {
               await supabase.from('woo_product_changes').insert(changeEntries);
             }
 
+            // --- Create variations for variable products ---
+            if (created.type === 'variable' && pim.variants && pim.variants.length > 0) {
+              const varCreated = await createOrUpdateVariations(
+                config.woocommerce_url, wooAuth, created.id, pim, rateLimiter, supabase, tenantId
+              );
+              allChanges.push({ field: 'variations', old_value: null, new_value: `${varCreated} variaties aangemaakt` });
+            }
+
             results.push({ sku: pim.sku, action: 'created', changes: allChanges, message: `Created WC #${created.id}` });
           }
         } else {
@@ -537,6 +653,16 @@ Deno.serve(async (req) => {
                 detected_at: new Date().toISOString(),
               }));
               await supabase.from('woo_product_changes').insert(changeEntries);
+            }
+
+            // --- Sync variations for variable products after update ---
+            if (updated.type === 'variable' && pim.variants && pim.variants.length > 0) {
+              const varSynced = await createOrUpdateVariations(
+                config.woocommerce_url, wooAuth, updated.id, pim, rateLimiter, supabase, tenantId
+              );
+              if (varSynced > 0) {
+                changes.push({ field: 'variations', old_value: null, new_value: `${varSynced} variaties gesynchroniseerd` });
+              }
             }
 
             results.push({ sku: pim.sku, action: 'updated', changes, message: `Updated ${changes.length} fields on WC #${woo.id}` });
