@@ -560,44 +560,63 @@ Deno.serve(async (req) => {
     const catMap = new Map<string, string>();
     if (catMappings) catMappings.forEach(m => catMap.set(m.source_category, m.woo_category));
 
-    // Fetch ALL global product attributes from WooCommerce
+    // Load cached global attributes from DB (populated by sync-woo-attributes)
     let maatAttrId: number | null = null;
-    const globalAttrMap = new Map<string, { id: number; name: string; slug: string }>(); // slug → {id, name, slug}
+    const globalAttrMap = new Map<string, { id: number; name: string; slug: string }>();
+    // pimToWooMap: PIM attribute name → WC global attr info (from explicit mappings)
+    const pimToWooMap = new Map<string, { id: number; name: string; slug: string }>();
+
     try {
-      const attrsUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/attributes?${wooAuth}`;
-      const attrsResult = await fetchWithRetry(attrsUrl, { method: 'GET' }, new AdaptiveRateLimiter(800, 5000));
-      if (!attrsResult.blocked && attrsResult.json && Array.isArray(attrsResult.json)) {
-        for (const attr of attrsResult.json) {
-          if (attr.id > 0) {
-            // Store by multiple keys for matching: slug (without pa_), name lowercase
-            const cleanSlug = (attr.slug || '').replace(/^pa_/, '');
-            globalAttrMap.set(cleanSlug.toLowerCase(), { id: attr.id, name: attr.name, slug: attr.slug });
-            globalAttrMap.set(attr.name.toLowerCase(), { id: attr.id, name: attr.name, slug: attr.slug });
+      const { data: cachedAttrs } = await supabase
+        .from('woo_global_attributes')
+        .select('woo_attr_id, name, slug, pim_attribute_name, terms')
+        .eq('tenant_id', tenantId);
+
+      if (cachedAttrs && cachedAttrs.length > 0) {
+        for (const attr of cachedAttrs) {
+          const entry = { id: attr.woo_attr_id, name: attr.name, slug: attr.slug };
+          const cleanSlug = (attr.slug || '').replace(/^pa_/, '');
+          globalAttrMap.set(cleanSlug.toLowerCase(), entry);
+          globalAttrMap.set(attr.name.toLowerCase(), entry);
+
+          // If there's an explicit PIM mapping, register it
+          if (attr.pim_attribute_name) {
+            pimToWooMap.set(attr.pim_attribute_name.toLowerCase(), entry);
+            pimToWooMap.set(toWooSlug(attr.pim_attribute_name), entry);
           }
         }
         const maatEntry = globalAttrMap.get('maat');
         if (maatEntry) {
           maatAttrId = maatEntry.id;
-          console.log(`Found global Maat attribute ID: ${maatAttrId}`);
-        } else {
-          console.warn('Global Maat attribute not found — attempting to create it');
+          console.log(`Found cached global Maat attribute ID: ${maatAttrId}`);
         }
-        console.log(`Found ${globalAttrMap.size / 2} global WC attributes: ${[...new Set([...globalAttrMap.values()].map(v => v.name))].join(', ')}`);
+        console.log(`Loaded ${cachedAttrs.length} cached WC attributes (${pimToWooMap.size / 2} PIM-mapped)`);
+      } else {
+        // Fallback: fetch from WC API if cache is empty
+        console.warn('No cached WC attributes found, fetching from WC API...');
+        const attrsUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/attributes?${wooAuth}`;
+        const attrsResult = await fetchWithRetry(attrsUrl, { method: 'GET' }, new AdaptiveRateLimiter(800, 5000));
+        if (!attrsResult.blocked && attrsResult.json && Array.isArray(attrsResult.json)) {
+          for (const attr of attrsResult.json) {
+            if (attr.id > 0) {
+              const cleanSlug = (attr.slug || '').replace(/^pa_/, '');
+              globalAttrMap.set(cleanSlug.toLowerCase(), { id: attr.id, name: attr.name, slug: attr.slug });
+              globalAttrMap.set(attr.name.toLowerCase(), { id: attr.id, name: attr.name, slug: attr.slug });
+            }
+          }
+          const maatEntry = globalAttrMap.get('maat');
+          if (maatEntry) maatAttrId = maatEntry.id;
+        }
       }
 
-      // Fallback: auto-create the global pa_maat attribute if missing
+      // Fallback: auto-create pa_maat if missing
       if (!maatAttrId) {
+        console.warn('Global Maat attribute not found — attempting to create it');
         const createAttrUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/attributes?${wooAuth}`;
         const createResult = await fetchWithRetry(createAttrUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: 'Maat',
-            slug: 'pa_maat',
-            type: 'select',
-            order_by: 'menu_order',
-            has_archives: true,
-          }),
+          body: JSON.stringify({ name: 'Maat', slug: 'pa_maat', type: 'select', order_by: 'menu_order', has_archives: true }),
         }, new AdaptiveRateLimiter(800, 5000));
 
         if (!createResult.blocked && createResult.json) {
@@ -605,8 +624,6 @@ Deno.serve(async (req) => {
             maatAttrId = createResult.json.id;
             globalAttrMap.set('maat', { id: maatAttrId, name: 'Maat', slug: 'pa_maat' });
             console.log(`✓ Created global Maat attribute with ID: ${maatAttrId}`);
-          } else if (createResult.json.code === 'woocommerce_rest_cannot_create') {
-            console.warn('Maat attribute already exists but ID could not be resolved from listing');
           }
         }
 
@@ -621,7 +638,7 @@ Deno.serve(async (req) => {
         }
       }
     } catch (e) {
-      console.warn('Could not fetch/create global attributes, falling back to slug-based reference');
+      console.warn('Could not load global attributes, falling back to slug-based reference');
     }
 
     // Final safety: ensure maatAttrId is never 0
@@ -751,7 +768,8 @@ Deno.serve(async (req) => {
             if (!val) continue;
             const valStr = String(val);
             const lookupKey = toWooSlug(key);
-            const globalAttr = globalAttrMap.get(lookupKey) || globalAttrMap.get(key.toLowerCase());
+            // Priority: 1) explicit PIM→WC mapping from DB, 2) slug match, 3) name match
+            const globalAttr = pimToWooMap.get(key.toLowerCase()) || pimToWooMap.get(lookupKey) || globalAttrMap.get(lookupKey) || globalAttrMap.get(key.toLowerCase());
             if (globalAttr) {
               // Use global attribute ID so the value is "saved" and works as a filter
               await ensureAttributeTerms(config.woocommerce_url, wooAuth, globalAttr.id, globalAttr.name, [valStr], rateLimiter);
