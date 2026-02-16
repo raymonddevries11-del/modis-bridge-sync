@@ -120,11 +120,29 @@ serve(async (req) => {
     // De-duplicate: only emit one entry per itemId (aggregate stock across stores)
     const emittedIds = new Set<string>();
 
+    // ── Pre-fetch WooCommerce slugs to determine which products have valid URLs ──
+    const wooSlugProductIds = new Set<string>();
+    let wooOffset = 0;
+    while (true) {
+      const { data: wooProducts } = await supabase
+        .from('woo_products')
+        .select('product_id')
+        .eq('tenant_id', tenantId)
+        .not('product_id', 'is', null)
+        .range(wooOffset, wooOffset + 999);
+      if (!wooProducts || wooProducts.length === 0) break;
+      for (const wp of wooProducts) {
+        if (wp.product_id) wooSlugProductIds.add(wp.product_id);
+      }
+      if (wooProducts.length < 1000) break;
+      wooOffset += 1000;
+    }
+
     while (true) {
       const { data: products, error } = await supabase
         .from('products')
         .select(`
-          sku, images, article_group,
+          id, sku, images, article_group, url_key,
           product_prices(regular, list),
           variants!variants_product_id_fkey(
             id, maat_id, active, allow_backorder
@@ -146,8 +164,21 @@ serve(async (req) => {
         const regularPrice = price?.regular || 0;
         if (regularPrice <= 0) continue;
 
-        const images = (product.images as string[]) || [];
-        if (images.length === 0) continue;
+        // Match primary feed image filtering: must have valid external image URLs
+        const rawImages = (product.images as string[]) || [];
+        const validImages = rawImages.filter((url: string) => {
+          if (!url || typeof url !== 'string') return false;
+          if (!/^https?:\/\//i.test(url)) return false;
+          if (!/\.(jpe?g|png|gif)(\?.*)?$/i.test(url)) return false;
+          if (url.includes('supabase.co/storage')) return false;
+          return true;
+        });
+        if (validImages.length === 0) continue;
+
+        // Match primary feed URL validation: skip products without WooCommerce slug or valid url_key
+        const hasWooSlug = wooSlugProductIds.has(product.id);
+        const cleanUrlKey = product.url_key ? product.url_key.replace(/-+$/, '').replace(/-nvt$/, '') : null;
+        if (!hasWooSlug && (!cleanUrlKey || cleanUrlKey.length <= 2)) continue;
 
         const salePrice = price?.list && price.list < regularPrice ? price.list : null;
 

@@ -309,6 +309,8 @@ serve(async (req) => {
         const rawImages = (product.images as string[]) || [];
         const images = rawImages.filter((url: string) => {
           if (!url || typeof url !== 'string') return false;
+          // Must be an absolute URL starting with http(s)://
+          if (!/^https?:\/\//i.test(url)) return false;
           if (!/\.(jpe?g|png|gif)(\?.*)?$/i.test(url)) return false;
           if (url.includes('supabase.co/storage')) return false;
           return true;
@@ -333,12 +335,20 @@ serve(async (req) => {
         // 1️⃣ Skip products with no real price (price must never be 0)
         if (regularPrice <= 0) continue;
 
-        // 2️⃣ Product URL: prefer WooCommerce slug (actual permalink), fallback to url_key (strip trailing hyphens), then slugified title
+        // 2️⃣ Product URL: prefer WooCommerce slug (actual permalink), fallback to url_key, then slugified title
         const wooSlug = wooSlugMap.get(product.id);
-        const cleanUrlKey = product.url_key ? product.url_key.replace(/-+$/, '') : null;
-        const productSlug = wooSlug || cleanUrlKey || slugify(product.title);
-        const productUrl = productSlug
-          ? `${shopUrl}/product/${productSlug}/`
+        const cleanUrlKey = product.url_key ? product.url_key.replace(/-+$/, '').replace(/-nvt$/, '') : null;
+        // Validate slug is not empty or just hyphens after cleaning
+        const candidateSlug = wooSlug || (cleanUrlKey && cleanUrlKey.length > 2 ? cleanUrlKey : null) || slugify(product.title);
+        
+        // Skip products without a WooCommerce slug — their product page likely doesn't exist
+        if (!wooSlug && !cleanUrlKey) {
+          // No reliable URL available — skip to avoid "page not available" errors
+          continue;
+        }
+        
+        const productUrl = candidateSlug
+          ? `${shopUrl}/product/${candidateSlug}/`
           : `${shopUrl}/shop/`;
 
         // Each active variant = unique product
