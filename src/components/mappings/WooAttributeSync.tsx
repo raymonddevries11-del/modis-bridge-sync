@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,7 +14,7 @@ import {
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
-import { RefreshCw, Loader2, Search, ChevronDown, ChevronRight, Check, Link2, Unlink, X, ArrowRight, AlertTriangle, ShieldCheck, ClipboardList } from "lucide-react";
+import { RefreshCw, Loader2, Search, ChevronDown, ChevronRight, Check, Link2, Unlink, X, ArrowRight, AlertTriangle, ShieldCheck, ClipboardList, Undo2, Trash2 } from "lucide-react";
 import { TenantSelector } from "@/components/TenantSelector";
 import { toast } from "sonner";
 
@@ -111,6 +111,26 @@ export function WooAttributeSync() {
 
   const manualMappings: AttrMappings = savedMappings ?? {};
 
+  // Undo history
+  const undoStack = useRef<AttrMappings[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+
+  const saveMappingsWithUndo = useCallback((newMappings: AttrMappings, silent = false) => {
+    undoStack.current.push({ ...manualMappings });
+    setCanUndo(true);
+    saveMappingMutation.mutate(newMappings);
+    if (!silent) return;
+  }, [manualMappings]);
+
+  const undoLastChange = useCallback(() => {
+    const prev = undoStack.current.pop();
+    if (prev) {
+      saveMappingMutation.mutate(prev);
+      toast.success("Wijziging ongedaan gemaakt");
+    }
+    setCanUndo(undoStack.current.length > 0);
+  }, []);
+
   // Save mapping mutation
   const saveMappingMutation = useMutation({
     mutationFn: async (newMappings: AttrMappings) => {
@@ -121,14 +141,14 @@ export function WooAttributeSync() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["woo-attr-mappings-config", tenantId] });
-      toast.success("Mapping opgeslagen");
     },
     onError: (err: any) => toast.error(`Fout: ${err.message}`),
   });
 
   const setMapping = (modisName: string, wooSlug: string) => {
     const updated = { ...manualMappings, [modisName]: wooSlug };
-    saveMappingMutation.mutate(updated);
+    saveMappingsWithUndo(updated);
+    toast.success("Mapping opgeslagen");
     setEditingAttr(null);
     setPopoverOpen(false);
   };
@@ -136,7 +156,15 @@ export function WooAttributeSync() {
   const removeMapping = (modisName: string) => {
     const updated = { ...manualMappings };
     delete updated[modisName];
-    saveMappingMutation.mutate(updated);
+    saveMappingsWithUndo(updated);
+    toast.success("Mapping verwijderd");
+  };
+
+  // Bulk: remove all manual mappings
+  const clearAllMappings = () => {
+    if (Object.keys(manualMappings).length === 0) return;
+    saveMappingsWithUndo({});
+    toast.success("Alle mappings verwijderd");
   };
 
   // Auto-match all unmatched Modis attributes by name/slug
@@ -145,7 +173,7 @@ export function WooAttributeSync() {
     const updated = { ...manualMappings };
     let newMatches = 0;
     for (const ma of modisAttrs) {
-      if (updated[ma.name]) continue; // already manually mapped
+      if (updated[ma.name]) continue;
       const lower = ma.name.toLowerCase().replace(/\s+/g, "-");
       const match = wooAttrs.find(
         (wa) =>
@@ -159,7 +187,7 @@ export function WooAttributeSync() {
       }
     }
     if (newMatches > 0) {
-      saveMappingMutation.mutate(updated);
+      saveMappingsWithUndo(updated);
       toast.success(`${newMatches} attributen automatisch gematcht`);
     } else {
       toast.info("Geen nieuwe matches gevonden");
@@ -295,6 +323,30 @@ export function WooAttributeSync() {
             >
               <Link2 className="h-3.5 w-3.5 mr-1" />
               Auto-match alle
+            </Button>
+          )}
+          {canUndo && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={undoLastChange}
+              disabled={saveMappingMutation.isPending}
+              className="text-xs"
+            >
+              <Undo2 className="h-3.5 w-3.5 mr-1" />
+              Ongedaan maken
+            </Button>
+          )}
+          {Object.keys(manualMappings).length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={clearAllMappings}
+              disabled={saveMappingMutation.isPending}
+              className="text-xs text-destructive hover:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5 mr-1" />
+              Wis alle ({Object.keys(manualMappings).length})
             </Button>
           )}
         </div>
