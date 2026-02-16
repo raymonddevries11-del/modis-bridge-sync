@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Send, RefreshCw, CheckCircle2, Link2, Globe } from "lucide-react";
 import { TenantSelector } from "@/components/TenantSelector";
+import { UrlKeyAudit } from "@/components/woocommerce/UrlKeyAudit";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -120,6 +121,8 @@ const ChannelWooCommerce = () => {
             </div>
           </CardContent>
         </Card>
+
+        <UrlKeyAudit tenantId={tenantId} />
 
         <div className="rounded-xl border border-border bg-muted/30 p-8 text-center">
           <Send className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
