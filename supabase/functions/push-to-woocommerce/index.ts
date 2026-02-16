@@ -57,7 +57,11 @@ Deno.serve(async (req) => {
         id, sku, title, webshop_text, meta_title, meta_description, images, categories, attributes, url_key,
         brands!products_brand_id_fkey (name),
         product_prices (regular, list),
-        variants (id, size_label, maat_id, ean, active, stock_totals (qty))
+        variants (id, size_label, maat_id, ean, active, stock_totals (qty)),
+        product_ai_content!product_ai_content_product_id_fkey (
+          status, ai_title, ai_short_description, ai_long_description,
+          ai_meta_title, ai_meta_description
+        )
       `)
       .in('id', productIds)
       .eq('tenant_id', tenantId);
@@ -114,16 +118,30 @@ Deno.serve(async (req) => {
         // Determine if this is a variable product (has active variants with sizes)
         const isVariable = sizeOptions.length > 0;
 
+        // Use approved AI content if available, fallback to PIM data
+        const aiContent = (pim.product_ai_content as any);
+        const hasApprovedAi = aiContent?.status === 'approved';
+
+        const productName = (hasApprovedAi && aiContent.ai_title) || pim.title;
+        const longDescription = (hasApprovedAi && aiContent.ai_long_description) || pim.webshop_text || '';
+        const shortDescription = (hasApprovedAi && aiContent.ai_short_description) || '';
+        const metaTitle = (hasApprovedAi && aiContent.ai_meta_title) || pim.meta_title;
+        const metaDescription = (hasApprovedAi && aiContent.ai_meta_description) || pim.meta_description;
+
+        if (hasApprovedAi) {
+          console.log(`Using approved AI content for ${pim.sku}: title="${productName}"`);
+        }
+
         // Build desired WooCommerce data
         const desiredData: Record<string, any> = {
-          name: pim.title,
-          description: pim.webshop_text || '',
-          short_description: '',
+          name: productName,
+          description: longDescription,
+          short_description: shortDescription,
           sku: pim.sku,
           slug: pim.url_key || undefined,
           meta_data: [
-            ...(pim.meta_title ? [{ key: '_yoast_wpseo_title', value: pim.meta_title }] : []),
-            ...(pim.meta_description ? [{ key: '_yoast_wpseo_metadesc', value: pim.meta_description }] : []),
+            ...(metaTitle ? [{ key: '_yoast_wpseo_title', value: metaTitle }] : []),
+            ...(metaDescription ? [{ key: '_yoast_wpseo_metadesc', value: metaDescription }] : []),
           ],
         };
 
