@@ -659,15 +659,18 @@ async function createProductInWooCommerce(
     }
   }
   
-  // Build product attributes array using global IDs
-  const productAttributes: any[] = [{
-    id: globalMaatId,
+  // Build product attributes array using global IDs — NEVER use id: 0 for Maat
+  const maatAttrDef: any = {
     name: 'Maat',
     position: 0,
     visible: true,
     variation: true,
     options: sizeOptions
-  }];
+  };
+  if (globalMaatId > 0) {
+    maatAttrDef.id = globalMaatId;
+  }
+  const productAttributes: any[] = [maatAttrDef];
 
   // Add color attribute if available
   if (color?.label) {
@@ -877,9 +880,9 @@ async function createProductInWooCommerce(
     );
   }
 
-  // Create variations
+  // Create variations — pass globalMaatId for proper attribute linking
   if (variantsToCreate && variantsToCreate.length > 0) {
-    await createVariationsInWooCommerce(createdProduct.id, variantsToCreate, product_prices, wooConfig, sku);
+    await createVariationsInWooCommerce(createdProduct.id, variantsToCreate, product_prices, wooConfig, sku, globalMaatId);
   }
 }
 
@@ -888,10 +891,14 @@ async function createVariationsInWooCommerce(
   variants: any[],
   product_prices: any,
   wooConfig: WooCommerceConfig,
-  parentSku: string
+  parentSku: string,
+  globalMaatId: number = 0
 ) {
-  console.log(`Creating ${variants.length} variations for product ${wooProductId} with parent SKU ${parentSku}`);
+  console.log(`Creating ${variants.length} variations for product ${wooProductId} with parent SKU ${parentSku}, globalMaatId=${globalMaatId}`);
   
+  // Build attribute reference — use global ID when available, NEVER id: 0
+  const attrRef = globalMaatId > 0 ? { id: globalMaatId } : { name: 'pa_maat' };
+
   for (const variant of variants) {
     // Build variation SKU in format: productSku-suffix (e.g., "101069102000-071041")
     // maat_id may already contain the parent SKU prefix, so extract only the suffix
@@ -900,10 +907,7 @@ async function createVariationsInWooCommerce(
     
     const variationData: any = {
       attributes: [
-        {
-          name: 'Maat',
-          option: variant.size_label
-        }
+        { ...attrRef, option: variant.size_label }
       ],
       sku: variationSku,
       manage_stock: true,
@@ -957,18 +961,19 @@ async function createMissingVariation(
   parentSku?: string,
   supabase?: any,
   tenantId?: string,
-  productTitle?: string
+  productTitle?: string,
+  globalMaatId: number = 0
 ): Promise<any | null> {
   // Build variation SKU - extract suffix from maat_id to avoid double-prefixing
   const maatSuffix = variant.maat_id && variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id;
   const variationSku = parentSku && maatSuffix ? `${parentSku}-${maatSuffix}` : (variant.ean || '');
+
+  // Build attribute reference — use global ID when available, NEVER id: 0
+  const attrRef = globalMaatId > 0 ? { id: globalMaatId } : { name: 'pa_maat' };
   
   const variationData: any = {
     attributes: [
-      {
-        name: 'Maat',
-        option: variant.size_label
-      }
+      { ...attrRef, option: variant.size_label }
     ],
     sku: variationSku,
     manage_stock: true,
@@ -1534,7 +1539,8 @@ async function updateProductInWooCommerce(
         supabase,
         tenantId,
         sku,
-        title
+        title,
+        globalMaatId
       );
     }
   }
@@ -1548,7 +1554,8 @@ async function syncVariantToWooCommerce(
   supabase?: any,
   tenantId?: string,
   productSku?: string,
-  productTitle?: string
+  productTitle?: string,
+  globalMaatId: number = 0
 ) {
   // Find WooCommerce variation by size attribute
   const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
@@ -1675,7 +1682,8 @@ async function syncVariantToWooCommerce(
       productSku,
       supabase,
       tenantId,
-      productTitle
+      productTitle,
+      globalMaatId
     );
     
     if (createdVariation) {
@@ -1713,11 +1721,15 @@ async function syncVariantToWooCommerce(
     attr.name?.toLowerCase() === 'pa_maat'
   );
   
-  // For variations, we MUST use the attribute slug (pa_maat) not the display name
-  // This is how WooCommerce links variations to global attribute terms
+  // For variations, use global attribute ID when available — NEVER use id: 0
+  // id: 0 causes WooCommerce to show ALL sizes for every variation
+  const attrRef: any = (globalMaatId > 0)
+    ? { id: globalMaatId }
+    : (currentSizeAttr?.id && currentSizeAttr.id > 0)
+      ? { id: currentSizeAttr.id }
+      : { name: 'pa_maat' };
   updateData.attributes = [{
-    id: currentSizeAttr?.id || 0,
-    name: 'pa_maat', // Use slug format for proper global attribute linking
+    ...attrRef,
     option: variant.size_label
   }];
   
