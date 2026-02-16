@@ -1231,6 +1231,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      housekeep_jobs: { Args: never; Returns: undefined }
     }
     Enums: {
       ai_content_status: "pending" | "generated" | "approved" | "rejected"
