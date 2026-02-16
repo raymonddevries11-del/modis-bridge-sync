@@ -104,13 +104,14 @@ Deno.serve(async (req) => {
         const salePrice = prices?.list?.toString() || '';
         const sizeOptions = (pim.variants || []).filter((v: any) => v.active).map((v: any) => v.size_label);
 
+        // Determine if this is a variable product (has active variants with sizes)
+        const isVariable = sizeOptions.length > 0;
+
         // Build desired WooCommerce data
         const desiredData: Record<string, any> = {
           name: pim.title,
           description: pim.webshop_text || '',
           short_description: '',
-          regular_price: regularPrice,
-          sale_price: salePrice,
           sku: pim.sku,
           slug: pim.url_key || undefined,
           meta_data: [
@@ -119,13 +120,22 @@ Deno.serve(async (req) => {
           ],
         };
 
-        // Build images array
+        // Only set prices on simple products — variable products get prices on variations
+        if (!isVariable) {
+          desiredData.regular_price = regularPrice;
+          desiredData.sale_price = salePrice;
+        }
+
+        // Build images array — only include valid full URLs
         const pimImages = Array.isArray(pim.images) ? pim.images : [];
-        if (pimImages.length > 0) {
-          desiredData.images = pimImages.map((img: any, idx: number) => ({
-            src: typeof img === 'string' ? img : img.url || img.src,
+        const validImages = pimImages
+          .map((img: any) => typeof img === 'string' ? img : img.url || img.src)
+          .filter((src: string) => src && (src.startsWith('http://') || src.startsWith('https://')));
+        if (validImages.length > 0) {
+          desiredData.images = validImages.map((src: string, idx: number) => ({
+            src,
             position: idx,
-          })).filter((img: any) => img.src);
+          }));
         }
 
         // Build attributes
@@ -227,8 +237,8 @@ Deno.serve(async (req) => {
           // Compare core fields
           if (woo.name !== desiredData.name) changes.push({ field: 'name', old_value: woo.name, new_value: desiredData.name });
           if ((woo.description || '') !== (desiredData.description || '')) changes.push({ field: 'description', old_value: (woo.description || '').substring(0, 50), new_value: (desiredData.description || '').substring(0, 50) });
-          if ((woo.regular_price || '') !== regularPrice) changes.push({ field: 'regular_price', old_value: woo.regular_price || '', new_value: regularPrice });
-          if ((woo.sale_price || '') !== salePrice) changes.push({ field: 'sale_price', old_value: woo.sale_price || '', new_value: salePrice });
+          if (!isVariable && (woo.regular_price || '') !== regularPrice) changes.push({ field: 'regular_price', old_value: woo.regular_price || '', new_value: regularPrice });
+          if (!isVariable && (woo.sale_price || '') !== salePrice) changes.push({ field: 'sale_price', old_value: woo.sale_price || '', new_value: salePrice });
           if (woo.slug !== desiredData.slug && desiredData.slug) changes.push({ field: 'slug', old_value: woo.slug, new_value: desiredData.slug });
 
           // Compare images count
