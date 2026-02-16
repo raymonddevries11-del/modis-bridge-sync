@@ -263,13 +263,32 @@ interface VariationAudit {
 }
 
 // --- Ensure global attribute terms exist ---
+// Uses cached terms from DB first, then fetches/creates via WC API only for missing ones
 async function ensureAttributeTerms(
   wooUrl: string, wooAuth: string, attrId: number, attrName: string,
-  values: string[], rateLimiter: AdaptiveRateLimiter
+  values: string[], rateLimiter: AdaptiveRateLimiter,
+  cachedTerms?: Array<{ id: number; name: string; slug: string }> | null,
+  supabase?: any, tenantId?: string
 ): Promise<Map<string, number>> {
   const termMap = new Map<string, number>();
 
-  // Fetch existing terms (paginate up to 200)
+  // 1. Pre-populate from cached terms (from woo_global_attributes table)
+  if (cachedTerms && cachedTerms.length > 0) {
+    for (const t of cachedTerms) {
+      termMap.set(t.name.toLowerCase(), t.id);
+      if (t.slug) termMap.set(t.slug.toLowerCase(), t.id);
+    }
+  }
+
+  // 2. Check which values still need resolution
+  const unresolved = values.filter(s => !termMap.has(s.toLowerCase()));
+
+  // 3. If all resolved from cache, skip API calls entirely
+  if (unresolved.length === 0) {
+    return termMap;
+  }
+
+  // 4. Fetch existing terms from WC API only if we have unresolved values
   let page = 1;
   let hasMore = true;
   while (hasMore) {
@@ -278,15 +297,18 @@ async function ensureAttributeTerms(
     if (res.blocked || !res.json || !Array.isArray(res.json)) break;
     for (const t of res.json) {
       termMap.set(t.name.toLowerCase(), t.id);
+      if (t.slug) termMap.set(t.slug.toLowerCase(), t.id);
     }
     hasMore = res.json.length === 100;
     page++;
     await rateLimiter.wait();
   }
 
-  // Register missing terms
-  const missing = values.filter(s => !termMap.has(s.toLowerCase()));
-  for (const label of missing) {
+  // 5. Register any still-missing terms
+  const stillMissing = values.filter(s => !termMap.has(s.toLowerCase()));
+  const newTerms: Array<{ id: number; name: string; slug: string }> = [];
+
+  for (const label of stillMissing) {
     const url = `${wooUrl}/wp-json/wc/v3/products/attributes/${attrId}/terms?${wooAuth}`;
     const res = await fetchWithRetry(url, {
       method: 'POST',
@@ -296,6 +318,7 @@ async function ensureAttributeTerms(
 
     if (!res.blocked && res.json?.id) {
       termMap.set(label.toLowerCase(), res.json.id);
+      newTerms.push({ id: res.json.id, name: res.json.name || label, slug: res.json.slug || '' });
       console.log(`✓ Registered ${attrName} term: "${label}" (ID ${res.json.id})`);
     } else if (res.json?.code === 'term_exists') {
       const existingId = res.json?.data?.resource_id;
@@ -306,8 +329,33 @@ async function ensureAttributeTerms(
     await rateLimiter.wait();
   }
 
-  if (missing.length > 0) {
-    console.log(`${attrName} terms: ${missing.length} registered, ${termMap.size} total`);
+  // 6. Update the DB cache with newly created terms
+  if (newTerms.length > 0 && supabase && tenantId) {
+    try {
+      const { data: existing } = await supabase
+        .from('woo_global_attributes')
+        .select('terms')
+        .eq('tenant_id', tenantId)
+        .eq('woo_attr_id', attrId)
+        .single();
+
+      if (existing) {
+        const currentTerms: any[] = existing.terms || [];
+        const existingIds = new Set(currentTerms.map((t: any) => t.id));
+        const merged = [...currentTerms, ...newTerms.filter(t => !existingIds.has(t.id))];
+        await supabase
+          .from('woo_global_attributes')
+          .update({ terms: merged, updated_at: new Date().toISOString() })
+          .eq('tenant_id', tenantId)
+          .eq('woo_attr_id', attrId);
+      }
+    } catch (e) {
+      // Non-critical — cache update failure shouldn't block the push
+    }
+  }
+
+  if (stillMissing.length > 0) {
+    console.log(`${attrName} terms: ${stillMissing.length} registered, ${termMap.size} total`);
   }
 
   return termMap;
@@ -326,7 +374,8 @@ function toWooSlug(name: string): string {
 async function createOrUpdateVariations(
   wooUrl: string, wooAuth: string, wooProductId: number,
   pim: any, rateLimiter: AdaptiveRateLimiter, supabase: any, tenantId: string,
-  maatAttrId: number | null = null
+  maatAttrId: number | null = null,
+  cachedTermsByAttrId: Map<number, Array<{ id: number; name: string; slug: string }>> = new Map()
 ): Promise<{ synced: number; audit: VariationAudit }> {
   const audit: VariationAudit = {
     product_sku: pim.sku,
@@ -347,7 +396,7 @@ async function createOrUpdateVariations(
   const sizeLabels = activeVariants.map((v: any) => v.size_label);
   let termMap = new Map<string, number>();
   if (maatAttrId) {
-    termMap = await ensureAttributeTerms(wooUrl, wooAuth, maatAttrId, 'Maat', sizeLabels, rateLimiter);
+    termMap = await ensureAttributeTerms(wooUrl, wooAuth, maatAttrId, 'Maat', sizeLabels, rateLimiter, cachedTermsByAttrId.get(maatAttrId) || null, supabase, tenantId);
   }
 
   // --- PASS 2: Fetch existing WooCommerce variations ---
@@ -565,6 +614,8 @@ Deno.serve(async (req) => {
     const globalAttrMap = new Map<string, { id: number; name: string; slug: string }>();
     // pimToWooMap: PIM attribute name → WC global attr info (from explicit mappings)
     const pimToWooMap = new Map<string, { id: number; name: string; slug: string }>();
+    // Cached terms by WC attribute ID → array of {id, name, slug}
+    const cachedTermsByAttrId = new Map<number, Array<{ id: number; name: string; slug: string }>>();
 
     try {
       const { data: cachedAttrs } = await supabase
@@ -578,6 +629,11 @@ Deno.serve(async (req) => {
           const cleanSlug = (attr.slug || '').replace(/^pa_/, '');
           globalAttrMap.set(cleanSlug.toLowerCase(), entry);
           globalAttrMap.set(attr.name.toLowerCase(), entry);
+
+          // Cache terms for fast lookup during ensureAttributeTerms
+          if (Array.isArray(attr.terms) && attr.terms.length > 0) {
+            cachedTermsByAttrId.set(attr.woo_attr_id, attr.terms);
+          }
 
           // If there's an explicit PIM mapping, register it
           if (attr.pim_attribute_name) {
@@ -755,7 +811,7 @@ Deno.serve(async (req) => {
           if (maatAttrId) {
             maatAttrDef.id = maatAttrId;
             // Register size terms as saved global values
-            await ensureAttributeTerms(config.woocommerce_url, wooAuth, maatAttrId, 'Maat', sizeOptions, rateLimiter);
+            await ensureAttributeTerms(config.woocommerce_url, wooAuth, maatAttrId, 'Maat', sizeOptions, rateLimiter, cachedTermsByAttrId.get(maatAttrId) || null, supabase, tenantId);
           } else {
             maatAttrDef.name = 'Maat';
           }
@@ -772,7 +828,8 @@ Deno.serve(async (req) => {
             const globalAttr = pimToWooMap.get(key.toLowerCase()) || pimToWooMap.get(lookupKey) || globalAttrMap.get(lookupKey) || globalAttrMap.get(key.toLowerCase());
             if (globalAttr) {
               // Use global attribute ID so the value is "saved" and works as a filter
-              await ensureAttributeTerms(config.woocommerce_url, wooAuth, globalAttr.id, globalAttr.name, [valStr], rateLimiter);
+              const termResult = await ensureAttributeTerms(config.woocommerce_url, wooAuth, globalAttr.id, globalAttr.name, [valStr], rateLimiter, cachedTermsByAttrId.get(globalAttr.id) || null, supabase, tenantId);
+              const termId = termResult.get(valStr.toLowerCase());
               attrs.push({ id: globalAttr.id, position: pos++, visible: true, variation: false, options: [valStr] });
               console.log(`  Attr "${key}" → global ID ${globalAttr.id} (${globalAttr.name}), value="${valStr}"`);
             } else {
@@ -785,7 +842,7 @@ Deno.serve(async (req) => {
         if (brand) {
           const merkAttr = globalAttrMap.get('merk');
           if (merkAttr) {
-            await ensureAttributeTerms(config.woocommerce_url, wooAuth, merkAttr.id, 'Merk', [brand], rateLimiter);
+            await ensureAttributeTerms(config.woocommerce_url, wooAuth, merkAttr.id, 'Merk', [brand], rateLimiter, cachedTermsByAttrId.get(merkAttr.id) || null, supabase, tenantId);
             attrs.push({ id: merkAttr.id, position: attrs.length, visible: true, variation: false, options: [brand] });
           } else {
             attrs.push({ name: 'Merk', position: attrs.length, visible: true, variation: false, options: [brand] });
@@ -867,7 +924,7 @@ Deno.serve(async (req) => {
                 // Still create variations
                 if (isVariable) {
                   const varResult = await createOrUpdateVariations(
-                    config.woocommerce_url, wooAuth, created.id, pim, rateLimiter, supabase, tenantId, maatAttrId
+                    config.woocommerce_url, wooAuth, created.id, pim, rateLimiter, supabase, tenantId, maatAttrId, cachedTermsByAttrId
                   );
                   totalVariationAudit.created += varResult.audit.created;
                 }
@@ -934,7 +991,7 @@ Deno.serve(async (req) => {
             // --- Create variations for variable products ---
             if (created.type === 'variable' && pim.variants && pim.variants.length > 0) {
               const varResult = await createOrUpdateVariations(
-                config.woocommerce_url, wooAuth, created.id, pim, rateLimiter, supabase, tenantId, maatAttrId
+                config.woocommerce_url, wooAuth, created.id, pim, rateLimiter, supabase, tenantId, maatAttrId, cachedTermsByAttrId
               );
               allChanges.push({ field: 'variations', old_value: null, new_value: `${varResult.synced} variaties aangemaakt` });
               variationAudits.push(varResult.audit);
@@ -1057,7 +1114,7 @@ Deno.serve(async (req) => {
                 // Still sync variations
                 if (isVariable) {
                   const varResult = await createOrUpdateVariations(
-                    config.woocommerce_url, wooAuth, updated.id, pim, rateLimiter, supabase, tenantId, maatAttrId
+                    config.woocommerce_url, wooAuth, updated.id, pim, rateLimiter, supabase, tenantId, maatAttrId, cachedTermsByAttrId
                   );
                   variationAudits.push(varResult.audit);
                 }
@@ -1119,7 +1176,7 @@ Deno.serve(async (req) => {
             // --- Sync variations for variable products after update ---
             if (updated.type === 'variable' && pim.variants && pim.variants.length > 0) {
               const varResult = await createOrUpdateVariations(
-                config.woocommerce_url, wooAuth, updated.id, pim, rateLimiter, supabase, tenantId, maatAttrId
+                config.woocommerce_url, wooAuth, updated.id, pim, rateLimiter, supabase, tenantId, maatAttrId, cachedTermsByAttrId
               );
               variationAudits.push(varResult.audit);
               if (varResult.synced > 0) {
