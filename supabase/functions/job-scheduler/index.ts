@@ -30,16 +30,32 @@ serve(async (req) => {
       .lt('updated_at', fifteenMinutesAgo);
     
     if (stuckJobs && stuckJobs.length > 0) {
-      console.log(`Found ${stuckJobs.length} stuck jobs, resetting to ready`);
+      console.log(`Found ${stuckJobs.length} stuck jobs, checking attempts`);
+      const maxAttempts = 3;
       for (const stuckJob of stuckJobs) {
-        await supabase
-          .from('jobs')
-          .update({
-            state: 'ready',
-            error: `Reset from stuck processing state (attempt ${stuckJob.attempts})`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', stuckJob.id);
+        if (stuckJob.attempts >= maxAttempts) {
+          // Max attempts exceeded — move to error permanently
+          await supabase
+            .from('jobs')
+            .update({
+              state: 'error',
+              error: `Failed after ${stuckJob.attempts} attempts (stuck in processing)`,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', stuckJob.id);
+          console.log(`Job ${stuckJob.id} moved to error after ${stuckJob.attempts} attempts`);
+        } else {
+          // Still has retries left — reset to ready
+          await supabase
+            .from('jobs')
+            .update({
+              state: 'ready',
+              error: `Reset from stuck processing state (attempt ${stuckJob.attempts})`,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', stuckJob.id);
+          console.log(`Job ${stuckJob.id} reset to ready (attempt ${stuckJob.attempts}/${maxAttempts})`);
+        }
       }
     }
 
