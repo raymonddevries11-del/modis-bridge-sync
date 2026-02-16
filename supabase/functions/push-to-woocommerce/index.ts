@@ -168,7 +168,8 @@ interface FieldChange {
 // --- Variation sync helper ---
 async function createOrUpdateVariations(
   wooUrl: string, wooAuth: string, wooProductId: number,
-  pim: any, rateLimiter: AdaptiveRateLimiter, supabase: any, tenantId: string
+  pim: any, rateLimiter: AdaptiveRateLimiter, supabase: any, tenantId: string,
+  maatAttrId: number | null = null
 ): Promise<number> {
   const activeVariants = (pim.variants || []).filter((v: any) => v.active);
   if (activeVariants.length === 0) return 0;
@@ -194,6 +195,11 @@ async function createOrUpdateVariations(
   const toCreate: any[] = [];
   const toUpdate: any[] = [];
 
+  // Build attribute reference: use global attribute ID if available, otherwise slug
+  const attrRef = maatAttrId
+    ? { id: maatAttrId }
+    : { name: 'pa_maat' };
+
   for (const variant of activeVariants) {
     const variantSku = `${pim.sku}-${variant.maat_id}`;
     const stockQty = variant.stock_totals?.[0]?.qty ?? variant.stock_totals?.qty ?? 0;
@@ -206,7 +212,7 @@ async function createOrUpdateVariations(
       manage_stock: true,
       stock_quantity: stockQty,
       stock_status: stockQty > 0 ? 'instock' : 'outofstock',
-      attributes: [{ id: 0, name: 'Maat', option: variant.size_label }],
+      attributes: [{ ...attrRef, option: variant.size_label }],
     };
 
     if (variant.ean) {
@@ -336,6 +342,22 @@ Deno.serve(async (req) => {
     const catMap = new Map<string, string>();
     if (catMappings) catMappings.forEach(m => catMap.set(m.source_category, m.woo_category));
 
+    // Fetch global "Maat" attribute ID from WooCommerce
+    let maatAttrId: number | null = null;
+    try {
+      const attrsUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/attributes?${wooAuth}`;
+      const attrsResult = await fetchWithRetry(attrsUrl, { method: 'GET' }, new AdaptiveRateLimiter(800, 5000));
+      if (!attrsResult.blocked && attrsResult.json && Array.isArray(attrsResult.json)) {
+        const maatAttr = attrsResult.json.find((a: any) => a.slug === 'pa_maat' || a.name === 'Maat');
+        if (maatAttr) {
+          maatAttrId = maatAttr.id;
+          console.log(`Found global Maat attribute ID: ${maatAttrId}`);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch global attributes, falling back to slug-based reference');
+    }
+
     const results: Array<{
       sku: string;
       action: 'created' | 'updated' | 'skipped' | 'error';
@@ -431,7 +453,13 @@ Deno.serve(async (req) => {
 
         const attrs: any[] = [];
         if (sizeOptions.length > 0) {
-          attrs.push({ name: 'Maat', position: 0, visible: true, variation: true, options: sizeOptions });
+          const maatAttrDef: any = { position: 0, visible: true, variation: true, options: sizeOptions };
+          if (maatAttrId) {
+            maatAttrDef.id = maatAttrId;
+          } else {
+            maatAttrDef.name = 'Maat';
+          }
+          attrs.push(maatAttrDef);
         }
         if (pim.attributes && typeof pim.attributes === 'object') {
           const pimAttrs = pim.attributes as Record<string, any>;
@@ -529,7 +557,7 @@ Deno.serve(async (req) => {
             // --- Create variations for variable products ---
             if (created.type === 'variable' && pim.variants && pim.variants.length > 0) {
               const varCreated = await createOrUpdateVariations(
-                config.woocommerce_url, wooAuth, created.id, pim, rateLimiter, supabase, tenantId
+                config.woocommerce_url, wooAuth, created.id, pim, rateLimiter, supabase, tenantId, maatAttrId
               );
               allChanges.push({ field: 'variations', old_value: null, new_value: `${varCreated} variaties aangemaakt` });
             }
@@ -658,7 +686,7 @@ Deno.serve(async (req) => {
             // --- Sync variations for variable products after update ---
             if (updated.type === 'variable' && pim.variants && pim.variants.length > 0) {
               const varSynced = await createOrUpdateVariations(
-                config.woocommerce_url, wooAuth, updated.id, pim, rateLimiter, supabase, tenantId
+                config.woocommerce_url, wooAuth, updated.id, pim, rateLimiter, supabase, tenantId, maatAttrId
               );
               if (varSynced > 0) {
                 changes.push({ field: 'variations', old_value: null, new_value: `${varSynced} variaties gesynchroniseerd` });
