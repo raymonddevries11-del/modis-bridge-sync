@@ -1,11 +1,21 @@
 name: SFTP Image Sync
 
 on:
-  workflow_dispatch: # Manual trigger only
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: 'Number of images per batch (default 200)'
+        required: false
+        default: '200'
+      start_offset:
+        description: 'Skip first N images (for resuming)'
+        required: false
+        default: '0'
 
 jobs:
   sync-images:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     
     steps:
       - name: Checkout code
@@ -21,7 +31,7 @@ jobs:
           npm init -y
           npm install ssh2-sftp-client node-fetch
 
-      - name: Sync Images from SFTP to Storage
+      - name: Sync ALL Images from SFTP to Storage
         env:
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
           SFTP_PORT: ${{ secrets.SFTP_PORT }}
@@ -30,74 +40,53 @@ jobs:
           SFTP_PASSPHRASE: ${{ secrets.SFTP_PASSPHRASE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BATCH_SIZE: ${{ inputs.batch_size || '200' }}
+          START_OFFSET: ${{ inputs.start_offset || '0' }}
         run: |
-          node << 'EOF'
+          node << 'SCRIPT'
           const SftpClient = require('ssh2-sftp-client');
-          const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+          const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
+
+          const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 200;
+          const START_OFFSET = parseInt(process.env.START_OFFSET) || 0;
 
           async function syncImages() {
             const sftp = new SftpClient();
-            
+
             try {
-              console.log('=== SFTP Image Sync ===');
-              
-              // Step 1: Fix image URLs in database
-              console.log('Step 1: Fixing image URLs in database...');
-              const fixResponse = await fetch(
-                `${process.env.SUPABASE_URL}/functions/v1/fix-image-urls`,
-                {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-                  },
-                  body: JSON.stringify({}),
-                }
-              );
-              
-              if (!fixResponse.ok) {
-                console.error('Fix image URLs failed:', await fixResponse.text());
-              } else {
-                const fixResult = await fixResponse.json();
-                console.log(`✓ Fixed ${fixResult.fixedProducts} products`);
-                console.log(`  ${fixResult.alreadyInStorage} images already in storage`);
-                console.log(`  ${fixResult.missingFromStorage} images need uploading`);
-              }
-              
-              // Step 2: Get list of all image filenames needed
-              console.log('\nStep 2: Getting list of needed images...');
-              const productsResponse = await fetch(
-                `${process.env.SUPABASE_URL}/rest/v1/products?images=not.is.null&select=images&limit=5000`,
-                {
-                  headers: {
-                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
-                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+              console.log('=== SFTP Image Sync (Full Directory) ===');
+              console.log(`Batch size: ${BATCH_SIZE}, Start offset: ${START_OFFSET}`);
+
+              // Step 1: Fix image URLs in database (normalize paths)
+              console.log('\nStep 1: Fixing image URLs in database...');
+              try {
+                const fixResponse = await fetch(
+                  `${process.env.SUPABASE_URL}/functions/v1/fix-image-urls`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                    },
+                    body: JSON.stringify({}),
                   }
+                );
+                if (fixResponse.ok) {
+                  const fixResult = await fixResponse.json();
+                  console.log(`✓ Fixed ${fixResult.fixedProducts || 0} products`);
+                } else {
+                  console.warn('⚠ Fix image URLs returned:', fixResponse.status);
                 }
-              );
-              
-              const products = await productsResponse.json();
-              const neededImages = new Set();
-              
-              for (const p of products) {
-                if (p.images && Array.isArray(p.images)) {
-                  for (const url of p.images) {
-                    if (typeof url === 'string' && url.includes('/product-images/')) {
-                      const filename = url.split('/product-images/').pop();
-                      if (filename) neededImages.add(filename);
-                    }
-                  }
-                }
+              } catch (e) {
+                console.warn('⚠ Fix image URLs failed (continuing):', e.message);
               }
-              
-              console.log(`Found ${neededImages.size} unique image filenames needed`);
-              
-              // Step 3: Check which already exist in Storage
-              console.log('\nStep 3: Checking existing images in Storage...');
+
+              // Step 2: Get list of existing files in Storage bucket
+              console.log('\nStep 2: Getting existing images in Storage...');
               const existingImages = new Set();
               let offset = 0;
               const limit = 1000;
-              
+
               while (true) {
                 const listResponse = await fetch(
                   `${process.env.SUPABASE_URL}/storage/v1/object/list/product-images`,
@@ -111,27 +100,22 @@ jobs:
                     body: JSON.stringify({ limit, offset, prefix: '' }),
                   }
                 );
-                
-                if (!listResponse.ok) break;
+
+                if (!listResponse.ok) {
+                  console.warn('⚠ Storage list failed at offset', offset);
+                  break;
+                }
                 const files = await listResponse.json();
                 if (!files || files.length === 0) break;
                 files.forEach(f => { if (f.name) existingImages.add(f.name); });
                 if (files.length < limit) break;
                 offset += limit;
               }
-              
+
               console.log(`Found ${existingImages.size} existing images in Storage`);
-              
-              const missingImages = Array.from(neededImages).filter(img => !existingImages.has(img));
-              console.log(`Need to upload ${missingImages.length} missing images`);
-              
-              if (missingImages.length === 0) {
-                console.log('✓ All images are already in Storage!');
-                return;
-              }
-              
-              // Step 4: Connect to SFTP and upload missing images
-              console.log('\nStep 4: Connecting to SFTP...');
+
+              // Step 3: Connect to SFTP and list ALL files in webfoto
+              console.log('\nStep 3: Connecting to SFTP and listing webfoto...');
               await sftp.connect({
                 host: process.env.SFTP_HOST,
                 port: parseInt(process.env.SFTP_PORT),
@@ -141,15 +125,13 @@ jobs:
                 readyTimeout: 30000,
               });
               console.log('✓ Connected to SFTP');
-              
-              // Find webfoto directory
+
               const basePath = '/home/customer/www/modisbridge.nl/public_html/kosterschoenmode';
               const possiblePaths = [
                 `${basePath}/webfoto`,
                 `${basePath}/Webfoto`,
-                `${basePath}/modis-to-wp/../webfoto`,
               ];
-              
+
               let webfotoPath = null;
               for (const path of possiblePaths) {
                 const exists = await sftp.exists(path);
@@ -159,34 +141,51 @@ jobs:
                   break;
                 }
               }
-              
+
               if (!webfotoPath) {
                 console.error('✗ Webfoto directory not found!');
                 await sftp.end();
                 return;
               }
-              
-              // Upload missing images
+
+              // List all files in the directory
+              const allFiles = await sftp.list(webfotoPath);
+              const imageFiles = allFiles
+                .filter(f => f.type === '-' && /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i.test(f.name))
+                .map(f => f.name)
+                .sort();
+
+              console.log(`Found ${imageFiles.length} image files on SFTP`);
+
+              // Filter out already existing
+              const missingImages = imageFiles.filter(name => !existingImages.has(name));
+              console.log(`Missing in Storage: ${missingImages.length}`);
+              console.log(`Already in Storage: ${imageFiles.length - missingImages.length}`);
+
+              if (missingImages.length === 0) {
+                console.log('✓ All images are already in Storage!');
+                await sftp.end();
+                return;
+              }
+
+              // Apply offset for resuming
+              const toProcess = missingImages.slice(START_OFFSET);
+              console.log(`\nStep 4: Uploading ${toProcess.length} images (offset: ${START_OFFSET})...`);
+
               let uploaded = 0;
               let notFound = 0;
               let errors = 0;
-              
-              for (const imageName of missingImages) {
+              let skipped = 0;
+
+              for (let i = 0; i < toProcess.length; i++) {
+                const imageName = toProcess[i];
+
                 try {
                   const imagePath = `${webfotoPath}/${imageName}`;
-                  const exists = await sftp.exists(imagePath);
-                  
-                  if (!exists) {
-                    notFound++;
-                    if (notFound <= 10) console.log(`⚠ Not found: ${imageName}`);
-                    continue;
-                  }
-                  
                   const imageBuffer = await sftp.get(imagePath);
-                  
-                  // Upload directly to Storage via REST API
+
                   const uploadResponse = await fetch(
-                    `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${imageName}`,
+                    `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${encodeURIComponent(imageName)}`,
                     {
                       method: 'POST',
                       headers: {
@@ -197,30 +196,62 @@ jobs:
                       body: imageBuffer,
                     }
                   );
-                  
-                  if (uploadResponse.ok || uploadResponse.status === 409) {
+
+                  if (uploadResponse.ok) {
                     uploaded++;
-                    if (uploaded % 50 === 0) console.log(`  Progress: ${uploaded}/${missingImages.length}`);
+                  } else if (uploadResponse.status === 409) {
+                    skipped++; // already exists
                   } else {
                     errors++;
-                    if (errors <= 5) {
-                      console.error(`✗ Upload failed for ${imageName}: ${uploadResponse.status}`);
+                    if (errors <= 10) {
+                      const errText = await uploadResponse.text();
+                      console.error(`✗ Upload failed ${imageName}: ${uploadResponse.status} - ${errText}`);
                     }
                   }
                 } catch (error) {
                   errors++;
-                  if (errors <= 5) console.error(`Error with ${imageName}:`, error.message);
+                  if (errors <= 10) console.error(`✗ Error ${imageName}: ${error.message}`);
+                }
+
+                // Progress every 100 files
+                if ((i + 1) % 100 === 0 || i === toProcess.length - 1) {
+                  console.log(`Progress: ${i + 1}/${toProcess.length} (uploaded: ${uploaded}, skipped: ${skipped}, errors: ${errors})`);
                 }
               }
-              
-              console.log(`\n=== Results ===`);
+
+              console.log(`\n=== Final Results ===`);
+              console.log(`Total on SFTP: ${imageFiles.length}`);
+              console.log(`Already in Storage: ${imageFiles.length - missingImages.length}`);
               console.log(`Uploaded: ${uploaded}`);
-              console.log(`Not found on SFTP: ${notFound}`);
+              console.log(`Skipped (409): ${skipped}`);
               console.log(`Errors: ${errors}`);
-              
+
               await sftp.end();
-              console.log('✓ Image sync complete');
-              
+
+              // Step 5: Update product image paths to full storage URLs
+              console.log('\nStep 5: Updating product image paths...');
+              try {
+                const fixResponse2 = await fetch(
+                  `${process.env.SUPABASE_URL}/functions/v1/fix-image-urls`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                    },
+                    body: JSON.stringify({}),
+                  }
+                );
+                if (fixResponse2.ok) {
+                  const result = await fixResponse2.json();
+                  console.log(`✓ Updated ${result.fixedProducts || 0} product image paths`);
+                }
+              } catch (e) {
+                console.warn('⚠ Post-fix failed:', e.message);
+              }
+
+              console.log('\n✓ Image sync complete');
+
             } catch (error) {
               console.error('Fatal error:', error);
               try { await sftp.end(); } catch(e) {}
@@ -232,4 +263,4 @@ jobs:
             console.error('Sync failed:', err);
             process.exit(1);
           });
-          EOF
+          SCRIPT
