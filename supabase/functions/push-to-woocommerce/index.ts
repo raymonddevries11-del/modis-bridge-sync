@@ -277,10 +277,13 @@ async function createOrUpdateVariations(
   const toCreate: any[] = [];
   const toUpdate: any[] = [];
 
-  // Build attribute reference using global ID
-  const attrRef = maatAttrId
+  // Build attribute reference using global ID — NEVER use id: 0
+  const attrRef = (maatAttrId && maatAttrId > 0)
     ? { id: maatAttrId }
     : { name: 'pa_maat' };
+  if (!maatAttrId || maatAttrId <= 0) {
+    console.warn(`[variations] No valid global Maat ID for ${pim.sku} — using slug fallback. Risk of "all sizes" bug.`);
+  }
 
   // --- PASS 3: Build create/update lists with per-variation attribute + stock ---
   for (const variant of activeVariants) {
@@ -470,13 +473,58 @@ Deno.serve(async (req) => {
       const attrsResult = await fetchWithRetry(attrsUrl, { method: 'GET' }, new AdaptiveRateLimiter(800, 5000));
       if (!attrsResult.blocked && attrsResult.json && Array.isArray(attrsResult.json)) {
         const maatAttr = attrsResult.json.find((a: any) => a.slug === 'pa_maat' || a.name === 'Maat');
-        if (maatAttr) {
+        if (maatAttr && maatAttr.id > 0) {
           maatAttrId = maatAttr.id;
           console.log(`Found global Maat attribute ID: ${maatAttrId}`);
+        } else {
+          console.warn('Global Maat attribute not found — attempting to create it');
+        }
+      }
+
+      // Fallback: auto-create the global pa_maat attribute if missing
+      if (!maatAttrId) {
+        const createAttrUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/attributes?${wooAuth}`;
+        const createResult = await fetchWithRetry(createAttrUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: 'Maat',
+            slug: 'pa_maat',
+            type: 'select',
+            order_by: 'menu_order',
+            has_archives: true,
+          }),
+        }, new AdaptiveRateLimiter(800, 5000));
+
+        if (!createResult.blocked && createResult.json) {
+          if (createResult.json.id && createResult.json.id > 0) {
+            maatAttrId = createResult.json.id;
+            console.log(`✓ Created global Maat attribute with ID: ${maatAttrId}`);
+          } else if (createResult.json.code === 'woocommerce_rest_cannot_create') {
+            // Already exists but we couldn't find it — try to extract ID from error
+            console.warn('Maat attribute already exists but ID could not be resolved from listing');
+          }
+        }
+
+        // Log a warning to changelog if we still don't have a global ID
+        if (!maatAttrId) {
+          console.error('⚠️ CRITICAL: Could not resolve global pa_maat attribute ID. Variations will use slug-based fallback which may cause "all sizes" display bug.');
+          await supabase.from('changelog').insert({
+            tenant_id: tenantId,
+            event_type: 'WOO_MAAT_ATTR_MISSING',
+            description: 'Globaal pa_maat attribuut niet gevonden en kon niet worden aangemaakt. Variaties kunnen foutief alle maten tonen.',
+            metadata: { attempted_create: true, fallback: 'slug-based pa_maat reference' },
+          });
         }
       }
     } catch (e) {
-      console.warn('Could not fetch global attributes, falling back to slug-based reference');
+      console.warn('Could not fetch/create global attributes, falling back to slug-based reference');
+    }
+
+    // Final safety: ensure maatAttrId is never 0
+    if (maatAttrId === 0) {
+      console.error('⚠️ maatAttrId resolved to 0 — resetting to null to prevent WC default behaviour');
+      maatAttrId = null;
     }
 
     const results: Array<{
