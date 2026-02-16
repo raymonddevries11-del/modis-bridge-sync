@@ -2,11 +2,34 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, ArrowRight, Check, X, AlertTriangle } from "lucide-react";
+import { Search, ArrowRight, Check, X, AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import { useCategoryMappings } from "@/hooks/useCategoryMappings";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 interface CategoryInfo {
   name: string;
+  count: number;
+}
+
+interface WooCategory {
+  id: number;
+  name: string;
+  slug: string;
+  fullName: string;
   count: number;
 }
 
@@ -21,6 +44,21 @@ export const CategoryMappingManager = ({ categories, isLoading, tenantId }: Prop
   const [search, setSearch] = useState("");
   const [editingSource, setEditingSource] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [popoverOpen, setPopoverOpen] = useState(false);
+
+  // Fetch WooCommerce categories
+  const { data: wooCategories, isLoading: wooCatsLoading, refetch: refetchWooCats } = useQuery({
+    queryKey: ["woo-categories", tenantId],
+    enabled: !!tenantId,
+    staleTime: 5 * 60 * 1000, // cache 5 min
+    queryFn: async () => {
+      const { data, error } = await supabase.functions.invoke("fetch-woo-categories", {
+        body: { tenantId },
+      });
+      if (error) throw error;
+      return (data?.categories ?? []) as WooCategory[];
+    },
+  });
 
   const mappingMap = new Map(mappings?.map((m) => [m.source_category, m]) || []);
 
@@ -33,6 +71,7 @@ export const CategoryMappingManager = ({ categories, isLoading, tenantId }: Prop
   const startEdit = (sourceCat: string) => {
     setEditingSource(sourceCat);
     setEditValue(mappingMap.get(sourceCat)?.woo_category || "");
+    setPopoverOpen(false);
   };
 
   const saveEdit = () => {
@@ -43,6 +82,12 @@ export const CategoryMappingManager = ({ categories, isLoading, tenantId }: Prop
       tenant_id: tenantId,
     });
     setEditingSource(null);
+    setPopoverOpen(false);
+  };
+
+  const selectWooCategory = (fullName: string) => {
+    setEditValue(fullName);
+    setPopoverOpen(false);
   };
 
   const removeMapping = (sourceCat: string) => {
@@ -72,6 +117,24 @@ export const CategoryMappingManager = ({ categories, isLoading, tenantId }: Prop
             {unmappedCount} ongemapped
           </Badge>
         )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => refetchWooCats()}
+          disabled={wooCatsLoading}
+          title="WooCommerce categorieën herladen"
+        >
+          {wooCatsLoading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="h-4 w-4" />
+          )}
+        </Button>
+        {wooCategories && (
+          <Badge variant="secondary" className="text-[10px]">
+            {wooCategories.length} WC categorieën
+          </Badge>
+        )}
       </div>
 
       <div className="grid gap-1">
@@ -98,17 +161,53 @@ export const CategoryMappingManager = ({ categories, isLoading, tenantId }: Prop
               <div className="flex items-center gap-2 flex-1 min-w-0">
                 {isEditing ? (
                   <div className="flex items-center gap-1 flex-1">
-                    <Input
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      placeholder="WooCommerce categorie..."
-                      className="h-8 text-sm"
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") saveEdit();
-                        if (e.key === "Escape") setEditingSource(null);
-                      }}
-                    />
+                    {wooCategories && wooCategories.length > 0 ? (
+                      <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 text-sm justify-start flex-1 font-normal truncate"
+                          >
+                            {editValue || "Kies WooCommerce categorie..."}
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-[350px] p-0 z-50 bg-popover" align="start">
+                          <Command>
+                            <CommandInput placeholder="Zoek WC categorie..." />
+                            <CommandList>
+                              <CommandEmpty>Geen categorieën gevonden</CommandEmpty>
+                              <CommandGroup>
+                                {wooCategories.map((wc) => (
+                                  <CommandItem
+                                    key={wc.id}
+                                    value={wc.fullName}
+                                    onSelect={() => selectWooCategory(wc.fullName)}
+                                  >
+                                    <span className="truncate">{wc.fullName}</span>
+                                    <Badge variant="secondary" className="ml-auto text-[10px] shrink-0">
+                                      {wc.count}
+                                    </Badge>
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                    ) : (
+                      <Input
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        placeholder="WooCommerce categorie..."
+                        className="h-8 text-sm"
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveEdit();
+                          if (e.key === "Escape") setEditingSource(null);
+                        }}
+                      />
+                    )}
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={saveEdit}>
                       <Check className="h-3.5 w-3.5 text-green-600" />
                     </Button>
