@@ -111,16 +111,47 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
   const [fetching, setFetching] = useState(false);
   const [pushingId, setPushingId] = useState<string | null>(null);
   const [pushingAll, setPushingAll] = useState(false);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
+
+  // Reset page when filters change
+  const resetPage = () => setPage(0);
+
+  // Get total count
+  const { data: totalCount } = useQuery({
+    queryKey: ["woo-products-count", tenantId, search, syncFilter],
+    queryFn: async () => {
+      let query = supabase
+        .from("woo_products")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId);
+
+      if (search) {
+        query = query.or(`sku.ilike.%${search}%,name.ilike.%${search}%`);
+      }
+      if (syncFilter === "synced") query = query.not("product_id", "is", null);
+      else if (syncFilter === "unsynced") query = query.is("product_id", null);
+      else if (syncFilter === "recently_pushed") query = query.not("last_pushed_at", "is", null);
+
+      const { count, error } = await query;
+      if (error) throw error;
+      return count ?? 0;
+    },
+    enabled: !!tenantId,
+  });
 
   const { data: wooProducts, isLoading, refetch } = useQuery({
-    queryKey: ["woo-products", tenantId, search, syncFilter, sortBy],
+    queryKey: ["woo-products", tenantId, search, syncFilter, sortBy, page],
     queryFn: async () => {
+      const from = page * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
       let query = supabase
         .from("woo_products")
         .select("*")
         .eq("tenant_id", tenantId)
         .order(sortBy, { ascending: false, nullsFirst: false })
-        .limit(200);
+        .range(from, to);
 
       if (search) {
         query = query.or(`sku.ilike.%${search}%,name.ilike.%${search}%`);
@@ -223,9 +254,9 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Zoek op SKU of naam..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+          <Input placeholder="Zoek op SKU of naam..." value={search} onChange={(e) => { setSearch(e.target.value); resetPage(); }} className="pl-9" />
         </div>
-        <Select value={syncFilter} onValueChange={(v) => setSyncFilter(v as SyncFilter)}>
+        <Select value={syncFilter} onValueChange={(v) => { setSyncFilter(v as SyncFilter); resetPage(); }}>
           <SelectTrigger className="w-[180px]"><SelectValue placeholder="Filter" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Alle producten</SelectItem>
@@ -266,7 +297,10 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
         </div>
       ) : (
         <>
-          <p className="text-sm text-muted-foreground">{wooProducts.length} producten</p>
+          <p className="text-sm text-muted-foreground">
+            {totalCount != null ? `${totalCount} producten totaal` : `${wooProducts.length} producten`}
+            {totalCount != null && totalCount > PAGE_SIZE && ` — pagina ${page + 1} van ${Math.ceil(totalCount / PAGE_SIZE)}`}
+          </p>
           <div className="border rounded-lg">
             <Table>
               <TableHeader>
@@ -361,6 +395,22 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
               </TableBody>
             </Table>
           </div>
+          {/* Pagination */}
+          {totalCount != null && totalCount > PAGE_SIZE && (
+            <div className="flex items-center justify-between pt-3">
+              <p className="text-xs text-muted-foreground">
+                {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalCount)} van {totalCount}
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
+                  Vorige
+                </Button>
+                <Button variant="outline" size="sm" disabled={(page + 1) * PAGE_SIZE >= totalCount} onClick={() => setPage(p => p + 1)}>
+                  Volgende
+                </Button>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
