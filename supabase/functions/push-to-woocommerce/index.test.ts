@@ -118,3 +118,101 @@ Deno.test("no variation ever gets id: 0", () => {
     }
   }
 });
+
+// --- Tests for attribute mismatch detection (PASS 3b logic) ---
+
+Deno.test("detects attribute mismatch when existing variation has wrong size", () => {
+  const maatAttrId = 7;
+  const variant = { size_label: "42 = 8", maat_id: "071042" };
+
+  // Simulate existing WC variation with "Any Maat" or wrong option
+  const existing = {
+    id: 999,
+    sku: "TEST-071042",
+    stock_quantity: 5,
+    regular_price: "89.95",
+    sale_price: "",
+    attributes: [{ id: 7, name: "Maat", option: "" }], // empty = "Any Maat"
+  };
+
+  const existingMaatAttr = (existing.attributes || []).find(
+    (a: any) => a.name === "Maat" || a.name === "pa_maat" || (maatAttrId && a.id === maatAttrId)
+  );
+  const attrMismatch = !existingMaatAttr || existingMaatAttr.option !== variant.size_label;
+
+  assertEquals(attrMismatch, true, "Should detect mismatch when option is empty");
+});
+
+Deno.test("detects attribute mismatch when existing variation has different size", () => {
+  const maatAttrId = 7;
+  const variant = { size_label: "42 = 8" };
+
+  const existing = {
+    attributes: [{ id: 7, name: "Maat", option: "40 = 6½" }],
+  };
+
+  const existingMaatAttr = existing.attributes.find(
+    (a: any) => a.name === "Maat" || (maatAttrId && a.id === maatAttrId)
+  );
+  const attrMismatch = !existingMaatAttr || existingMaatAttr.option !== variant.size_label;
+
+  assertEquals(attrMismatch, true, "Should detect mismatch when option is wrong size");
+});
+
+Deno.test("no mismatch when existing variation has correct size", () => {
+  const maatAttrId = 7;
+  const variant = { size_label: "42 = 8" };
+
+  const existing = {
+    attributes: [{ id: 7, name: "Maat", option: "42 = 8" }],
+  };
+
+  const existingMaatAttr = existing.attributes.find(
+    (a: any) => a.name === "Maat" || (maatAttrId && a.id === maatAttrId)
+  );
+  const attrMismatch = !existingMaatAttr || existingMaatAttr.option !== variant.size_label;
+
+  assertEquals(attrMismatch, false, "Should not detect mismatch when option is correct");
+});
+
+Deno.test("detects mismatch when variation has no attributes at all", () => {
+  const maatAttrId = 7;
+  const variant = { size_label: "43 = 9" };
+
+  const existing = { attributes: [] as any[] };
+
+  const existingMaatAttr = existing.attributes.find(
+    (a: any) => a.name === "Maat" || (maatAttrId && a.id === maatAttrId)
+  );
+  const attrMismatch = !existingMaatAttr || existingMaatAttr.option !== variant.size_label;
+
+  assertEquals(attrMismatch, true, "Should detect mismatch when no attributes exist");
+});
+
+Deno.test("each variation in batch gets its own unique size option", () => {
+  const maatAttrId = 7;
+  const attrRef = { id: maatAttrId };
+
+  const variants = [
+    { size_label: "40 = 6½", maat_id: "071040" },
+    { size_label: "41 = 7½", maat_id: "071041" },
+    { size_label: "42 = 8", maat_id: "071042" },
+    { size_label: "43 = 9", maat_id: "071043" },
+  ];
+
+  const batch = variants.map(v => ({
+    sku: `TEST-${v.maat_id}`,
+    attributes: [{ ...attrRef, option: v.size_label }],
+  }));
+
+  // Verify each variation has its own unique size
+  const options = batch.map(b => b.attributes[0].option);
+  const unique = new Set(options);
+  assertEquals(unique.size, variants.length, "Each variation must have a unique size option");
+
+  // Verify no variation shares another's size
+  for (let i = 0; i < batch.length; i++) {
+    assertEquals(batch[i].attributes[0].option, variants[i].size_label);
+    assertEquals(batch[i].attributes[0].id, maatAttrId);
+  }
+});
