@@ -10,6 +10,7 @@ import { Search, Tag, Layers, Package, ExternalLink } from "lucide-react";
 import { AttributeManager } from "@/components/catalog/AttributeManager";
 import { CategoryManager } from "@/components/catalog/CategoryManager";
 import { CategoryMappingManager } from "@/components/catalog/CategoryMappingManager";
+import { WooAttributeSync } from "@/components/mappings/WooAttributeSync";
 import { TenantSelector } from "@/components/TenantSelector";
 
 interface AttrInfo {
@@ -23,6 +24,7 @@ const CatalogData = () => {
   const navigate = useNavigate();
   const [catSearch, setCatSearch] = useState("");
   const [catSubTab, setCatSubTab] = useState<"overview" | "mapping">("overview");
+  const [attrSubTab, setAttrSubTab] = useState<"overview" | "woo-sync">("overview");
   const [tenantId, setTenantId] = useState("");
 
   // Fetch tenants to auto-select first one
@@ -158,7 +160,20 @@ const CatalogData = () => {
           </TabsList>
 
           <TabsContent value="attributes" className="mt-4">
-            <AttributeManager usage={attrData} isLoading={attrLoading} />
+            <Tabs value={attrSubTab} onValueChange={(v) => setAttrSubTab(v as any)}>
+              <TabsList className="mb-4">
+                <TabsTrigger value="overview">Bron (Modis)</TabsTrigger>
+                <TabsTrigger value="woo-sync">WooCommerce Sync</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="overview">
+                <AttributeManager usage={attrData} isLoading={attrLoading} />
+              </TabsContent>
+
+              <TabsContent value="woo-sync">
+                <WooAttributeSync />
+              </TabsContent>
+            </Tabs>
           </TabsContent>
 
           <TabsContent value="categories" className="mt-4">
