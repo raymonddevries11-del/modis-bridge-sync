@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   RefreshCw, Loader2, ExternalLink, Search, Image as ImageIcon, Send, CheckCircle2, XCircle, ArrowRight, Clock,
+  ArrowUp, ArrowDown, ArrowUpDown,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -107,7 +108,8 @@ const ChangeBadges = ({ pushData }: { pushData: any }) => {
 export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
   const [search, setSearch] = useState("");
   const [syncFilter, setSyncFilter] = useState<SyncFilter>("all");
-  const [sortBy, setSortBy] = useState<"last_fetched_at" | "last_pushed_at" | "name">("last_fetched_at");
+  const [sortBy, setSortBy] = useState<string>("last_fetched_at");
+  const [sortAsc, setSortAsc] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [pushingId, setPushingId] = useState<string | null>(null);
   const [pushingAll, setPushingAll] = useState(false);
@@ -141,7 +143,7 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
   });
 
   const { data: wooProducts, isLoading, refetch } = useQuery({
-    queryKey: ["woo-products", tenantId, search, syncFilter, sortBy, page],
+    queryKey: ["woo-products", tenantId, search, syncFilter, sortBy, sortAsc, page],
     queryFn: async () => {
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
@@ -150,7 +152,7 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
         .from("woo_products")
         .select("*")
         .eq("tenant_id", tenantId)
-        .order(sortBy, { ascending: false, nullsFirst: false })
+        .order(sortBy, { ascending: sortAsc, nullsFirst: false })
         .range(from, to);
 
       if (search) {
@@ -248,6 +250,21 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
 
   const linkedCount = wooProducts?.filter((wp: any) => wp.product_id).length || 0;
 
+  const toggleSort = (col: string) => {
+    if (sortBy === col) {
+      setSortAsc(!sortAsc);
+    } else {
+      setSortBy(col);
+      setSortAsc(col === "name" || col === "sku"); // text cols default asc
+    }
+    resetPage();
+  };
+
+  const SortIcon = ({ col }: { col: string }) => {
+    if (sortBy !== col) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />;
+    return sortAsc ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />;
+  };
+
   return (
     <div className="space-y-4">
       {/* Controls */}
@@ -263,14 +280,6 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
             <SelectItem value="synced">Gekoppeld aan PIM</SelectItem>
             <SelectItem value="unsynced">Niet gekoppeld</SelectItem>
             <SelectItem value="recently_pushed">Recent gepusht</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={sortBy} onValueChange={(v) => setSortBy(v as any)}>
-          <SelectTrigger className="w-[180px]"><SelectValue placeholder="Sorteren" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="last_fetched_at">Laatst opgehaald</SelectItem>
-            <SelectItem value="last_pushed_at">Laatst gepusht</SelectItem>
-            <SelectItem value="name">Naam</SelectItem>
           </SelectContent>
         </Select>
         <Button variant="outline" size="sm" disabled={fetching} onClick={handleFetchAll}>
@@ -306,13 +315,25 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-[50px]">Img</TableHead>
-                  <TableHead className="w-[110px]">SKU</TableHead>
-                  <TableHead>Naam</TableHead>
-                  <TableHead className="w-[80px]">Status</TableHead>
-                  <TableHead className="w-[100px]">Voorraad</TableHead>
-                  <TableHead className="w-[90px]">Prijs</TableHead>
+                  <TableHead className="w-[110px] cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort("sku")}>
+                    <span className="inline-flex items-center">SKU<SortIcon col="sku" /></span>
+                  </TableHead>
+                  <TableHead className="cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort("name")}>
+                    <span className="inline-flex items-center">Naam<SortIcon col="name" /></span>
+                  </TableHead>
+                  <TableHead className="w-[80px] cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort("status")}>
+                    <span className="inline-flex items-center">Status<SortIcon col="status" /></span>
+                  </TableHead>
+                  <TableHead className="w-[100px] cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort("stock_quantity")}>
+                    <span className="inline-flex items-center">Voorraad<SortIcon col="stock_quantity" /></span>
+                  </TableHead>
+                  <TableHead className="w-[90px] cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort("regular_price")}>
+                    <span className="inline-flex items-center">Prijs<SortIcon col="regular_price" /></span>
+                  </TableHead>
                   <TableHead className="w-[90px]">PIM</TableHead>
-                  <TableHead className="w-[120px]">Laatste push</TableHead>
+                  <TableHead className="w-[120px] cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort("last_pushed_at")}>
+                    <span className="inline-flex items-center">Laatste push<SortIcon col="last_pushed_at" /></span>
+                  </TableHead>
                   <TableHead className="w-[180px]">Wijzigingen</TableHead>
                   <TableHead className="w-[50px]">Push</TableHead>
                 </TableRow>
