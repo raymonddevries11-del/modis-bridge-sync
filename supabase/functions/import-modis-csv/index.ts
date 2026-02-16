@@ -85,7 +85,7 @@ function parseAllRows(rows: string[][], headers: string[]) {
   const colorWebshopIdx = col('Color-webshop');
   const maatAlfaIdx = col('Maat-alfa');
 
-  const parents: ParentProduct[] = [];
+  const parentMap = new Map<string, ParentProduct>();
   const variations: VariationRow[] = [];
 
   for (let i = 1; i < rows.length; i++) {
@@ -109,7 +109,7 @@ function parseAllRows(rows: string[][], headers: string[]) {
       const cats = row[categoriesIdx]?.trim() || '';
       const imgs = row[imagesIdx]?.trim() || '';
 
-      parents.push({
+      const parent: ParentProduct = {
         sku,
         title: row[nameIdx]?.trim() || sku,
         shortDescription: row[shortDescIdx]?.trim() || '',
@@ -121,7 +121,20 @@ function parseAllRows(rows: string[][], headers: string[]) {
         attributes,
         colorArticle: colorArticleIdx >= 0 ? (row[colorArticleIdx]?.trim() || '') : '',
         colorWebshop: colorWebshopIdx >= 0 ? (row[colorWebshopIdx]?.trim() || '') : '',
-      });
+      };
+
+      // Deduplicate: merge attributes, keep longest images/categories
+      const existing = parentMap.get(sku);
+      if (existing) {
+        existing.attributes = { ...existing.attributes, ...parent.attributes };
+        if (parent.images.length > existing.images.length) existing.images = parent.images;
+        if (parent.categories.length > existing.categories.length) existing.categories = parent.categories;
+        if (!existing.shortDescription && parent.shortDescription) existing.shortDescription = parent.shortDescription;
+        if (!existing.regularPrice && parent.regularPrice) existing.regularPrice = parent.regularPrice;
+        if (!existing.salePrice && parent.salePrice) existing.salePrice = parent.salePrice;
+      } else {
+        parentMap.set(sku, parent);
+      }
     } else if (type === 'variation') {
       const maat = maatAlfaIdx >= 0 ? (row[maatAlfaIdx]?.trim() || '') : '';
       // Extract short maat_id from full variation SKU (e.g. "109609003000-011390" -> "011390")
@@ -139,6 +152,8 @@ function parseAllRows(rows: string[][], headers: string[]) {
     }
   }
 
+  const parents = Array.from(parentMap.values());
+  console.log(`[parseAllRows] Deduplicated ${parentMap.size} unique parents from CSV rows`);
   return { parents, variations };
 }
 
@@ -334,7 +349,18 @@ Deno.serve(async (req) => {
       const batch = toInsert.slice(i, i + BATCH);
       const { data: inserted, error } = await supabase
         .from('products').insert(batch).select('id, sku');
-      if (error) { console.error('Insert products error:', error.message); continue; }
+      if (error) {
+        console.error('Insert products batch error:', error.message, '- retrying individually');
+        // Retry individually to salvage what we can
+        for (const item of batch) {
+          const { data: single, error: singleErr } = await supabase
+            .from('products').insert(item).select('id, sku');
+          if (singleErr) { console.error(`Insert product ${item.sku} failed:`, singleErr.message); continue; }
+          single?.forEach((p: any) => skuToProductId.set(p.sku, p.id));
+          stats.productsInserted += single?.length || 0;
+        }
+        continue;
+      }
       inserted?.forEach((p: any) => skuToProductId.set(p.sku, p.id));
       stats.productsInserted += inserted?.length || 0;
     }
