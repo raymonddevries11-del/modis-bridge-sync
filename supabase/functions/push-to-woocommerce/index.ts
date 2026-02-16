@@ -193,6 +193,30 @@ Deno.serve(async (req) => {
               last_push_changes: { action: 'created', fields: allChanges, pushed_at: new Date().toISOString() },
             }, { onConflict: 'tenant_id,woo_id' });
 
+            // Log field-level changes to woo_product_changes
+            const { data: upsertedWoo } = await supabase
+              .from('woo_products')
+              .select('id')
+              .eq('tenant_id', tenantId)
+              .eq('woo_id', created.id)
+              .single();
+
+            if (upsertedWoo) {
+              const changeEntries = allChanges.map(c => ({
+                tenant_id: tenantId,
+                woo_product_id: upsertedWoo.id,
+                woo_id: created.id,
+                sku: pim.sku,
+                product_name: pim.title,
+                change_type: 'push_create',
+                field_name: c.field,
+                old_value: c.old_value,
+                new_value: c.new_value,
+                detected_at: new Date().toISOString(),
+              }));
+              await supabase.from('woo_product_changes').insert(changeEntries);
+            }
+
             results.push({ sku: pim.sku, action: 'created', changes: allChanges, message: `Created WC #${created.id}` });
           }
         } else {
@@ -283,6 +307,30 @@ Deno.serve(async (req) => {
               last_pushed_at: new Date().toISOString(),
               last_push_changes: { action: 'updated', fields: changes, pushed_at: new Date().toISOString() },
             }, { onConflict: 'tenant_id,woo_id' });
+
+            // Log field-level changes to woo_product_changes
+            const { data: upsertedWooUpdate } = await supabase
+              .from('woo_products')
+              .select('id')
+              .eq('tenant_id', tenantId)
+              .eq('woo_id', updated.id)
+              .single();
+
+            if (upsertedWooUpdate) {
+              const changeEntries = changes.map(c => ({
+                tenant_id: tenantId,
+                woo_product_id: upsertedWooUpdate.id,
+                woo_id: updated.id,
+                sku: pim.sku,
+                product_name: pim.title,
+                change_type: 'push_update',
+                field_name: c.field,
+                old_value: c.old_value,
+                new_value: c.new_value,
+                detected_at: new Date().toISOString(),
+              }));
+              await supabase.from('woo_product_changes').insert(changeEntries);
+            }
 
             results.push({ sku: pim.sku, action: 'updated', changes, message: `Updated ${changes.length} fields on WC #${woo.id}` });
           }
