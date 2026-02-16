@@ -1,11 +1,27 @@
-// Batch WooCommerce Sync v1 — processes pending_product_syncs queue
-// Designed to run every minute via pg_cron. Groups by product, uses WC batch API.
+// Batch WooCommerce Sync v2 — with circuit breaker support
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+// --- Circuit Breaker ---
+const CIRCUIT_BREAKER_KEY = 'woo_sync_circuit_breaker';
+
+interface CircuitBreakerState {
+  paused: boolean;
+  consecutive_blocks: number;
+  paused_at: string | null;
+  last_block_at: string | null;
+  total_blocks_24h: number;
+}
+
+async function getCircuitBreaker(supabase: any): Promise<CircuitBreakerState> {
+  const { data } = await supabase.from('config').select('value').eq('key', CIRCUIT_BREAKER_KEY).single();
+  if (data?.value) return data.value as CircuitBreakerState;
+  return { paused: false, consecutive_blocks: 0, paused_at: null, last_block_at: null, total_blocks_24h: 0 };
+}
 
 interface WooConfig {
   url: string;
@@ -54,7 +70,20 @@ Deno.serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    // ── 1. Fetch pending syncs (oldest first, max 50 products per run) ──
+    // --- Circuit breaker check ---
+    const cbState = await getCircuitBreaker(supabase);
+    if (cbState.paused) {
+      console.warn('🛑 Circuit breaker is ACTIVE — batch sync skipped.');
+      return new Response(JSON.stringify({ 
+        message: 'Sync paused by circuit breaker', 
+        paused: true, 
+        processed: 0 
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // ── 1. Fetch pending syncs ──
     const { data: pendingSyncs, error: fetchErr } = await supabase
       .from('pending_product_syncs')
       .select('product_id, tenant_id, reason, created_at')
@@ -100,11 +129,10 @@ Deno.serve(async (req) => {
         consumerSecret: tenantConfig.woocommerce_consumer_secret,
       };
 
-      // Deduplicate product IDs
       const productIds = [...new Set(syncs.map(s => s.product_id))];
       const reasons = [...new Set(syncs.map(s => s.reason))];
 
-      // ── 3. Bulk fetch product data + variants + stock + prices ──
+      // ── 3. Bulk fetch product data ──
       const { data: products } = await supabase
         .from('products')
         .select(`
@@ -118,7 +146,6 @@ Deno.serve(async (req) => {
         .in('id', productIds);
 
       if (!products || products.length === 0) {
-        // Clean up orphaned syncs
         await supabase.from('pending_product_syncs').delete().in('product_id', productIds);
         continue;
       }
@@ -129,7 +156,6 @@ Deno.serve(async (req) => {
         const syncReasons = syncs.filter(s => s.product_id === product.id).map(s => s.reason);
 
         try {
-          // Find WooCommerce product
           const searchResp = await fetchWithRetry(
             wooUrl(wooConfig.url, `products?sku=${encodeURIComponent(productSku)}&per_page=1`, wooConfig),
             { headers: { 'Content-Type': 'application/json' } }
@@ -166,9 +192,8 @@ Deno.serve(async (req) => {
           const priceData = product.product_prices as any;
           const price = Array.isArray(priceData) ? priceData[0] : priceData;
 
-          // ── 4a. Stock updates via batch API ──
+          // ── 4a. Stock updates ──
           if (syncReasons.includes('stock') && variants.length > 0) {
-            // Fetch WooCommerce variations
             const varResp = await fetchWithRetry(
               wooUrl(wooConfig.url, `products/${wooProductId}/variations?per_page=100`, wooConfig),
               { headers: { 'Content-Type': 'application/json' } }
@@ -183,7 +208,6 @@ Deno.serve(async (req) => {
                 const expectedSku = `${productSku}-${variant.maat_id}`;
                 const legacySku = `${productSku}-${variant.size_label}`;
 
-                // Find matching WC variation
                 const match = wooVariations.find((wv: any) => {
                   if (!wv.sku) return false;
                   const norm = normalizeSize(wv.sku);
@@ -193,7 +217,6 @@ Deno.serve(async (req) => {
                 });
 
                 if (match) {
-                  // Only push if stock actually differs
                   if (match.stock_quantity !== stockQty) {
                     updates.push({
                       id: match.id,
@@ -222,12 +245,12 @@ Deno.serve(async (req) => {
                   totalFailed++;
                 }
               } else {
-                totalSuccess++; // No changes needed
+                totalSuccess++;
               }
             }
           }
 
-          // ── 4b. Price updates via batch API ──
+          // ── 4b. Price updates ──
           if (syncReasons.includes('price') && price) {
             const regularPrice = price.regular || 0;
             const salePrice = price.list || null;
@@ -263,7 +286,6 @@ Deno.serve(async (req) => {
                 }
               }
             } else {
-              // Simple product
               const updateResp = await fetchWithRetry(
                 wooUrl(wooConfig.url, `products/${wooProductId}`, wooConfig),
                 {
@@ -285,8 +307,6 @@ Deno.serve(async (req) => {
           }
 
           totalProcessed++;
-
-          // Rate limit buffer: ~200ms between products
           await new Promise(r => setTimeout(r, 200));
 
         } catch (err: any) {
@@ -296,7 +316,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      // ── 5. Clear processed items from queue ──
+      // ── 5. Clear processed items ──
       for (const sync of syncs) {
         await supabase
           .from('pending_product_syncs')
