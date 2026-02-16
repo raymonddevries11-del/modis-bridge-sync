@@ -363,7 +363,15 @@ const ProductDetail = () => {
   }
 
   const totalStock = product.variants?.reduce((sum: number, v: any) => sum + (v.stock_totals?.qty ?? 0), 0) ?? 0;
-  const images = Array.isArray(product.images) ? (product.images as string[]) : [];
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const storageBaseUrl = `${supabaseUrl}/storage/v1/object/public/product-images/`;
+  const images = Array.isArray(product.images)
+    ? (product.images as string[]).map((img) => {
+        if (typeof img !== 'string' || !img) return '';
+        if (img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:')) return img;
+        return `${storageBaseUrl}${img}`;
+      }).filter(Boolean)
+    : [];
   const imageCount = images.length;
   const variantCount = product.variants?.length ?? 0;
   const price = Number(product.product_prices?.regular || 0);
