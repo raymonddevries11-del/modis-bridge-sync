@@ -872,7 +872,51 @@ async function createProductInWooCommerce(
       throw new Error(`Failed to create product ${sku}: ${createResponse.status} - ${errorText}`);
     }
     
-    // If product already exists or image error, try to find and update it instead
+    // If image upload error, retry WITHOUT images so the product still gets created
+    if (errorData.code === 'woocommerce_product_image_upload_error') {
+      console.warn(`Product ${sku}: image upload failed, retrying create WITHOUT images`);
+      
+      // Log the image failure
+      if (supabase && tenantId) {
+        await logChangeToChangelog(supabase, tenantId, 'WOO_IMAGE_UPLOAD_FAILED',
+          `Afbeeldingen konden niet worden geüpload voor ${sku} — product wordt zonder afbeeldingen aangemaakt`,
+          { sku, imageCount: productImages.length, error: errorData.message?.substring(0, 200) }
+        );
+      }
+
+      const retryData = { ...productData, images: [] };
+      const retryResponse = await fetchWithRetry(createUrl.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(retryData),
+      });
+
+      if (retryResponse.ok) {
+        const createdProduct = await retryResponse.json();
+        console.log(`Created product ${sku} (without images) with ID ${createdProduct.id}`);
+
+        if (supabase && tenantId) {
+          await logChangeToChangelog(supabase, tenantId, 'WOO_PRODUCT_CREATED',
+            `Nieuw product aangemaakt in WooCommerce (zonder afbeeldingen): ${title} (${sku})`,
+            { productId: product.id, sku, title, wooProductId: createdProduct.id, variantCount: variantsToCreate?.length || 0, imagesSkipped: true }
+          );
+        }
+
+        if (variantsToCreate && variantsToCreate.length > 0) {
+          await createVariationsInWooCommerce(createdProduct.id, variantsToCreate, product_prices, wooConfig, sku, globalMaatId);
+        }
+        return;
+      }
+      // If retry also failed, check if SKU already exists
+      const retryErrorText = await retryResponse.text();
+      let retryErrorData;
+      try { retryErrorData = JSON.parse(retryErrorText); } catch { /* ignore */ }
+      if (retryErrorData?.code !== 'woocommerce_rest_product_not_created') {
+        throw new Error(`Failed to create product ${sku} (no images): ${retryResponse.status} - ${retryErrorText.substring(0, 300)}`);
+      }
+    }
+
+    // If product already exists (SKU duplicate), find and update it
     if ((errorData.code === 'woocommerce_rest_product_not_created' && errorData.message?.includes('SKU')) ||
         errorData.code === 'woocommerce_product_image_upload_error') {
       
