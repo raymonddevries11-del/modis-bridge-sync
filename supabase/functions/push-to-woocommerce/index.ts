@@ -7,9 +7,6 @@ const corsHeaders = {
 
 // --- SiteGround bot-protection hardening ---
 
-// SiteGround triggers on rapid requests, missing browser-like headers, and non-standard User-Agents.
-// We mitigate by: adaptive rate cap, realistic headers, exponential backoff on HTML blocks.
-
 const SG_SAFE_HEADERS: Record<string, string> = {
   'User-Agent': 'ModisPIM/1.0 (WooCommerce Sync; +https://modis-bridge-sync.lovable.app)',
   'Accept': 'application/json, text/plain, */*',
@@ -17,7 +14,61 @@ const SG_SAFE_HEADERS: Record<string, string> = {
   'Cache-Control': 'no-cache',
 };
 
-// Adaptive rate limiter — increases delay when blocks are detected
+// --- Circuit Breaker ---
+const CIRCUIT_BREAKER_KEY = 'woo_sync_circuit_breaker';
+const BLOCK_THRESHOLD = 5; // consecutive blocks before pausing
+
+interface CircuitBreakerState {
+  paused: boolean;
+  consecutive_blocks: number;
+  paused_at: string | null;
+  last_block_at: string | null;
+  total_blocks_24h: number;
+}
+
+async function getCircuitBreaker(supabase: any): Promise<CircuitBreakerState> {
+  const { data } = await supabase.from('config').select('value').eq('key', CIRCUIT_BREAKER_KEY).single();
+  if (data?.value) return data.value as CircuitBreakerState;
+  return { paused: false, consecutive_blocks: 0, paused_at: null, last_block_at: null, total_blocks_24h: 0 };
+}
+
+async function updateCircuitBreaker(supabase: any, state: CircuitBreakerState) {
+  await supabase.from('config').upsert({ key: CIRCUIT_BREAKER_KEY, value: state, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+}
+
+async function recordBlock(supabase: any, tenantId: string): Promise<CircuitBreakerState> {
+  const state = await getCircuitBreaker(supabase);
+  state.consecutive_blocks++;
+  state.last_block_at = new Date().toISOString();
+  state.total_blocks_24h++;
+
+  if (state.consecutive_blocks >= BLOCK_THRESHOLD) {
+    state.paused = true;
+    state.paused_at = new Date().toISOString();
+    console.error(`🛑 Circuit breaker TRIPPED: ${state.consecutive_blocks} consecutive blocks. Sync paused.`);
+
+    // Log alert to changelog
+    await supabase.from('changelog').insert({
+      tenant_id: tenantId,
+      event_type: 'WOO_SYNC_PAUSED',
+      description: `Sync automatisch gepauzeerd: ${state.consecutive_blocks} opeenvolgende bot-blocks gedetecteerd`,
+      metadata: { circuit_breaker: state },
+    });
+  }
+
+  await updateCircuitBreaker(supabase, state);
+  return state;
+}
+
+async function recordSuccess(supabase: any) {
+  const state = await getCircuitBreaker(supabase);
+  if (state.consecutive_blocks > 0) {
+    state.consecutive_blocks = 0;
+    await updateCircuitBreaker(supabase, state);
+  }
+}
+
+// Adaptive rate limiter
 class AdaptiveRateLimiter {
   private baseDelay: number;
   private currentDelay: number;
@@ -36,13 +87,11 @@ class AdaptiveRateLimiter {
 
   onSuccess() {
     this.consecutiveBlocks = 0;
-    // Gradually ramp down to base delay
     this.currentDelay = Math.max(this.baseDelay, this.currentDelay * 0.8);
   }
 
   onBlock() {
     this.consecutiveBlocks++;
-    // Double delay on each consecutive block, up to max
     this.currentDelay = Math.min(this.currentDelay * 2, this.maxDelay);
     console.warn(`Bot block detected (${this.consecutiveBlocks} consecutive). Delay now ${this.currentDelay}ms`);
   }
@@ -128,6 +177,18 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
+    // --- Circuit breaker check ---
+    const cbState = await getCircuitBreaker(supabase);
+    if (cbState.paused) {
+      console.warn('🛑 Circuit breaker is ACTIVE — sync paused due to bot protection.');
+      return new Response(JSON.stringify({
+        success: false,
+        paused: true,
+        message: 'Sync gepauzeerd: te veel opeenvolgende bot-blocks. Hervat handmatig via het dashboard.',
+        circuit_breaker: cbState,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
     // Get WooCommerce config
     const { data: config, error: cfgErr } = await supabase
       .from('tenant_config')
@@ -174,6 +235,8 @@ Deno.serve(async (req) => {
       message: string;
     }> = [];
 
+    let sessionBlocks = 0;
+
     for (const pim of pimProducts) {
       try {
         // Search WooCommerce for this SKU
@@ -181,9 +244,24 @@ Deno.serve(async (req) => {
         const searchResult = await fetchWithRetry(searchUrl, { method: 'GET' }, rateLimiter);
 
         if (searchResult.blocked) {
+          sessionBlocks++;
+          const updatedCb = await recordBlock(supabase, tenantId);
           results.push({ sku: pim.sku, action: 'error', changes: [], message: 'Blocked by hosting bot protection (all retries exhausted)' });
+
+          if (updatedCb.paused) {
+            // Circuit breaker tripped — abort remaining
+            results.push(...pimProducts.slice(pimProducts.indexOf(pim) + 1).map((p: any) => ({
+              sku: p.sku, action: 'error' as const, changes: [],
+              message: 'Skipped — circuit breaker tripped, sync paused',
+            })));
+            break;
+          }
           continue;
         }
+
+        // Successful request — reset persistent counter
+        await recordSuccess(supabase);
+
         if (!searchResult.response.ok) {
           results.push({ sku: pim.sku, action: 'error', changes: [], message: `Search failed: ${searchResult.response.status}` });
           continue;
@@ -200,10 +278,8 @@ Deno.serve(async (req) => {
         const salePrice = prices?.list?.toString() || '';
         const sizeOptions = (pim.variants || []).filter((v: any) => v.active).map((v: any) => v.size_label);
 
-        // Determine if this is a variable product (has active variants with sizes)
         const isVariable = sizeOptions.length > 0;
 
-        // Use approved AI content if available, fallback to PIM data
         const aiContent = (pim.product_ai_content as any);
         const hasApprovedAi = aiContent?.status === 'approved';
 
@@ -217,7 +293,6 @@ Deno.serve(async (req) => {
           console.log(`Using approved AI content for ${pim.sku}: title="${productName}"`);
         }
 
-        // Build desired WooCommerce data
         const desiredData: Record<string, any> = {
           name: productName,
           description: longDescription,
@@ -230,13 +305,11 @@ Deno.serve(async (req) => {
           ],
         };
 
-        // Only set prices on simple products — variable products get prices on variations
         if (!isVariable) {
           desiredData.regular_price = regularPrice;
           desiredData.sale_price = salePrice;
         }
 
-        // Build images array — only include valid full URLs
         const pimImages = Array.isArray(pim.images) ? pim.images : [];
         const validImages = pimImages
           .map((img: any) => typeof img === 'string' ? img : img.url || img.src)
@@ -248,7 +321,6 @@ Deno.serve(async (req) => {
           }));
         }
 
-        // Build attributes
         const attrs: any[] = [];
         if (sizeOptions.length > 0) {
           attrs.push({ name: 'Maat', position: 0, visible: true, variation: true, options: sizeOptions });
@@ -280,10 +352,20 @@ Deno.serve(async (req) => {
           }, rateLimiter);
 
           if (createResult.blocked) {
+            sessionBlocks++;
+            const updatedCb = await recordBlock(supabase, tenantId);
             results.push({ sku: pim.sku, action: 'error', changes: [], message: 'Create blocked by hosting bot protection (all retries exhausted)' });
+            if (updatedCb.paused) {
+              results.push(...pimProducts.slice(pimProducts.indexOf(pim) + 1).map((p: any) => ({
+                sku: p.sku, action: 'error' as const, changes: [],
+                message: 'Skipped — circuit breaker tripped, sync paused',
+              })));
+              break;
+            }
           } else if (!createResult.response.ok || !createResult.json) {
             results.push({ sku: pim.sku, action: 'error', changes: [], message: `Create failed: ${(createResult.text || '').substring(0, 200)}` });
           } else {
+            await recordSuccess(supabase);
             const created = createResult.json;
             const allChanges: FieldChange[] = [
               { field: 'name', old_value: null, new_value: pim.title },
@@ -292,7 +374,6 @@ Deno.serve(async (req) => {
               ...(pimImages.length > 0 ? [{ field: 'images', old_value: null, new_value: `${pimImages.length} afbeeldingen` }] : []),
             ];
 
-            // Update woo_products table
             await supabase.from('woo_products').upsert({
               tenant_id: tenantId,
               woo_id: created.id,
@@ -314,7 +395,6 @@ Deno.serve(async (req) => {
               last_push_changes: { action: 'created', fields: allChanges, pushed_at: new Date().toISOString() },
             }, { onConflict: 'tenant_id,woo_id' });
 
-            // Log field-level changes to woo_product_changes
             const { data: upsertedWoo } = await supabase
               .from('woo_products')
               .select('id')
@@ -341,25 +421,22 @@ Deno.serve(async (req) => {
             results.push({ sku: pim.sku, action: 'created', changes: allChanges, message: `Created WC #${created.id}` });
           }
         } else {
-          // UPDATE existing product — compare fields
+          // UPDATE existing product
           const woo = wooProducts[0];
           const changes: FieldChange[] = [];
 
-          // Compare core fields
           if (woo.name !== desiredData.name) changes.push({ field: 'name', old_value: woo.name, new_value: desiredData.name });
           if ((woo.description || '') !== (desiredData.description || '')) changes.push({ field: 'description', old_value: (woo.description || '').substring(0, 50), new_value: (desiredData.description || '').substring(0, 50) });
           if (!isVariable && (woo.regular_price || '') !== regularPrice) changes.push({ field: 'regular_price', old_value: woo.regular_price || '', new_value: regularPrice });
           if (!isVariable && (woo.sale_price || '') !== salePrice) changes.push({ field: 'sale_price', old_value: woo.sale_price || '', new_value: salePrice });
           if (woo.slug !== desiredData.slug && desiredData.slug) changes.push({ field: 'slug', old_value: woo.slug, new_value: desiredData.slug });
 
-          // Compare images count
           const wooImgCount = (woo.images || []).length;
           const pimImgCount = desiredData.images?.length || 0;
           if (pimImgCount > 0 && wooImgCount !== pimImgCount) {
             changes.push({ field: 'images', old_value: `${wooImgCount} afbeeldingen`, new_value: `${pimImgCount} afbeeldingen` });
           }
 
-          // Compare attributes
           const wooAttrNames = (woo.attributes || []).map((a: any) => a.name).sort().join(',');
           const pimAttrNames = (desiredData.attributes || []).map((a: any) => a.name).sort().join(',');
           if (wooAttrNames !== pimAttrNames) {
@@ -367,7 +444,6 @@ Deno.serve(async (req) => {
           }
 
           if (changes.length === 0) {
-            // Update woo_products record even if no changes (to track last check)
             await supabase.from('woo_products').upsert({
               tenant_id: tenantId,
               woo_id: woo.id,
@@ -394,7 +470,6 @@ Deno.serve(async (req) => {
             continue;
           }
 
-          // Apply update
           const updateUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/${woo.id}?${wooAuth}`;
           const updateResult = await fetchWithRetry(updateUrl, {
             method: 'PUT',
@@ -403,10 +478,20 @@ Deno.serve(async (req) => {
           }, rateLimiter);
 
           if (updateResult.blocked) {
+            sessionBlocks++;
+            const updatedCb = await recordBlock(supabase, tenantId);
             results.push({ sku: pim.sku, action: 'error', changes, message: 'Update blocked by hosting bot protection (all retries exhausted)' });
+            if (updatedCb.paused) {
+              results.push(...pimProducts.slice(pimProducts.indexOf(pim) + 1).map((p: any) => ({
+                sku: p.sku, action: 'error' as const, changes: [],
+                message: 'Skipped — circuit breaker tripped, sync paused',
+              })));
+              break;
+            }
           } else if (!updateResult.response.ok || !updateResult.json) {
             results.push({ sku: pim.sku, action: 'error', changes, message: `Update failed: ${updateResult.response.status} - ${(updateResult.text || '').substring(0, 150)}` });
           } else {
+            await recordSuccess(supabase);
             const updated = updateResult.json;
 
             await supabase.from('woo_products').upsert({
@@ -431,7 +516,6 @@ Deno.serve(async (req) => {
               last_push_changes: { action: 'updated', fields: changes, pushed_at: new Date().toISOString() },
             }, { onConflict: 'tenant_id,woo_id' });
 
-            // Log field-level changes to woo_product_changes
             const { data: upsertedWooUpdate } = await supabase
               .from('woo_products')
               .select('id')
@@ -459,10 +543,10 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Adaptive rate limit — slows down when blocks are detected
+        // Adaptive rate limit
         await rateLimiter.wait();
 
-        // Abort early if SiteGround is persistently blocking
+        // Abort early if session-level throttle
         if (rateLimiter.isThrottled) {
           console.error('SiteGround bot protection is persistently blocking requests. Aborting remaining products.');
           results.push(...pimProducts.slice(pimProducts.indexOf(pim) + 1).map((p: any) => ({
@@ -486,7 +570,7 @@ Deno.serve(async (req) => {
       tenant_id: tenantId,
       event_type: 'WOO_PRODUCT_PUSH',
       description: `Push naar WooCommerce: ${created} aangemaakt, ${updated} bijgewerkt, ${skipped} ongewijzigd, ${errors} fouten`,
-      metadata: { results: results.slice(0, 50), totals: { created, updated, skipped, errors } },
+      metadata: { results: results.slice(0, 50), totals: { created, updated, skipped, errors }, session_blocks: sessionBlocks },
     });
 
     console.log(`Push complete: ${created} created, ${updated} updated, ${skipped} skipped, ${errors} errors`);
