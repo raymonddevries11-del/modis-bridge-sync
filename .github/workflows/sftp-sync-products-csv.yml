@@ -240,6 +240,38 @@ jobs:
 
                   } catch (error) {
                     console.error(`✗ Error processing ${fileName}:`, error.message);
+
+                    // Log error to changelog for visibility in the UI
+                    try {
+                      const errorChangelogBody = {
+                        tenant_id: tenant.id,
+                        event_type: 'PRODUCT_IMPORT_ERROR',
+                        description: `Import mislukt voor ${fileName}: ${error.message}`,
+                        metadata: {
+                          filename: fileName,
+                          error_message: error.message,
+                          error_count: 1,
+                          stage: offset > 0 ? `chunk offset=${offset}` : 'initialisatie',
+                        }
+                      };
+                      await fetch(
+                        `${process.env.SUPABASE_URL}/rest/v1/changelog`,
+                        {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                            'Prefer': 'return=minimal'
+                          },
+                          body: JSON.stringify(errorChangelogBody)
+                        }
+                      );
+                      console.log(`✓ Error logged to changelog for ${fileName}`);
+                    } catch (logError) {
+                      console.error(`Could not log error to changelog: ${logError.message}`);
+                    }
+
                     try {
                       const inProcessing = await sftp.exists(processingFilePath);
                       if (inProcessing) {

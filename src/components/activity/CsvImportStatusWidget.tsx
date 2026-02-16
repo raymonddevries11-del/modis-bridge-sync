@@ -28,6 +28,10 @@ function deriveOutcome(entry: Record<string, any>): { outcome: ImportFileStatus[
     return { outcome: "success", details: `${count} nieuwe SKU('s) gedetecteerd` };
   }
 
+  if (eventType === "PRODUCT_IMPORT_ERROR") {
+    return { outcome: "error", details: meta.error_message || "Import mislukt" };
+  }
+
   if (eventType === "PRODUCT_CSV_IMPORT") {
     const inserted = meta.productsInserted || 0;
     const updated = meta.productsUpdated || 0;
@@ -66,7 +70,7 @@ export function CsvImportStatusWidget() {
       const { data, error } = await supabase
         .from("changelog")
         .select("event_type, description, metadata, created_at")
-        .in("event_type", ["PRODUCT_CSV_IMPORT", "STOCK_CSV_IMPORT", "STOCK_IMPORT", "NEW_PRODUCTS_DETECTED"])
+        .in("event_type", ["PRODUCT_CSV_IMPORT", "STOCK_CSV_IMPORT", "STOCK_IMPORT", "NEW_PRODUCTS_DETECTED", "PRODUCT_IMPORT_ERROR"])
         .order("created_at", { ascending: false })
         .limit(100);
       if (error) throw error;
