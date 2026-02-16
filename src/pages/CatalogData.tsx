@@ -43,9 +43,14 @@ const CatalogData = () => {
     setTenantId(tenants[0].id);
   }
 
-  // Fetch all attributes with values
+  const needsAttrData = activeTab === "attr-source" || activeTab === "attr-mapping";
+  const needsCatData = activeTab === "cat-source" || activeTab === "cat-mapping";
+
+  // Fetch all attributes with values — only when attr tabs are active
   const { data: attrData, isLoading: attrLoading } = useQuery({
     queryKey: ["catalog-attributes"],
+    enabled: needsAttrData,
+    staleTime: 5 * 60 * 1000, // 5 min cache
     queryFn: async () => {
       const attrMap = new Map<string, AttrInfo>();
       let offset = 0;
@@ -91,9 +96,11 @@ const CatalogData = () => {
     },
   });
 
-  // Fetch all categories
+  // Fetch all categories — only when cat tabs are active
   const { data: catData, isLoading: catLoading } = useQuery({
     queryKey: ["catalog-categories"],
+    enabled: needsCatData,
+    staleTime: 5 * 60 * 1000,
     queryFn: async () => {
       const catCount = new Map<string, number>();
       let offset = 0;
@@ -134,6 +141,7 @@ const CatalogData = () => {
   const { data: attrMappings } = useQuery({
     queryKey: ["woo-attr-mappings-config", tenantId],
     enabled: !!tenantId,
+    staleTime: 5 * 60 * 1000,
     queryFn: async () => {
       const { data } = await supabase
         .from("config")
@@ -147,11 +155,11 @@ const CatalogData = () => {
   // Fetch category mappings count for health bar
   const { mappings: catMappings } = useCategoryMappings(tenantId);
 
-  // Compute health stats
+  // Compute health stats — show partial data as it becomes available
   const healthStats = tenantId ? {
-    totalAttributes: attrData?.length ?? 0,
+    totalAttributes: attrData?.length ?? null,
     mappedAttributes: attrMappings ? Object.keys(attrMappings).length : 0,
-    totalCategories: catData?.length ?? 0,
+    totalCategories: catData?.length ?? null,
     mappedCategories: catMappings?.length ?? 0,
   } : null;
 
@@ -173,7 +181,7 @@ const CatalogData = () => {
         {tenantId && (
           <CatalogHealthBar
             stats={healthStats}
-            isLoading={attrLoading || catLoading}
+            isLoading={false}
           />
         )}
 
