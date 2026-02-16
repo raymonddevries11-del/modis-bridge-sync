@@ -6,6 +6,7 @@ import { Map, Tag, Layers, ShoppingCart } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { WooCategoryMappingsPanel } from "@/components/mappings/WooCategoryMappingsPanel";
+import { WooAttributeSync } from "@/components/mappings/WooAttributeSync";
 
 const Mappings = () => {
   const { data: attributeMappings } = useQuery({
@@ -89,8 +90,18 @@ const Mappings = () => {
           </Card>
         </div>
 
-        {/* WooCommerce Category Mappings Panel */}
-        <WooCategoryMappingsPanel />
+        <Tabs defaultValue="categories" className="space-y-4">
+          <TabsList>
+            <TabsTrigger value="categories">Categorie Mappings</TabsTrigger>
+            <TabsTrigger value="attributes">Attribuut Sync</TabsTrigger>
+          </TabsList>
+          <TabsContent value="categories">
+            <WooCategoryMappingsPanel />
+          </TabsContent>
+          <TabsContent value="attributes">
+            <WooAttributeSync />
+          </TabsContent>
+        </Tabs>
       </div>
     </Layout>
   );
