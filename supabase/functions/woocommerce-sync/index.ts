@@ -548,17 +548,17 @@ async function createProductInWooCommerce(
     console.log(`Using approved AI content for new product ${sku}: title="${title}"`);
   }
 
-  // Prepare product images - skip images that don't have full URLs
+  // Prepare product images - convert relative storage paths to absolute URLs
+  const storageBaseUrl = `${Deno.env.get('SUPABASE_URL')}/storage/v1/object/public/product-images/`;
   const productImages = (images || [])
     .filter((img: string) => img && img.trim().length > 0)
     .map((img: string) => {
-      // Only include images if they're full URLs, otherwise skip them
       if (img.startsWith('http://') || img.startsWith('https://')) {
         return { src: img };
       }
-      return null;
-    })
-    .filter((img: any) => img !== null);
+      // Relative storage path (e.g. "modis/foto/W-1_233761001.JPG") — convert to public URL
+      return { src: `${storageBaseUrl}${img}` };
+    });
 
   // Prepare size attribute values from variants
   const variantsToCreate = variantIdsFilter 
@@ -1100,14 +1100,17 @@ async function updateProductInWooCommerce(
   console.log(`Product ${sku} has ${existingImages.length} existing images with base filenames:`, Array.from(existingImageFilenames));
 
   // Prepare images from our database and filter out ones that already exist
+  const storageBaseUrlUpdate = `${Deno.env.get('SUPABASE_URL')}/storage/v1/object/public/product-images/`;
   const newImagesToAdd = (images || [])
     .filter((img: string) => img && img.trim().length > 0)
-    .filter((img: string) => {
-      // Only process valid URLs
+    .map((img: string) => {
+      // Convert relative storage paths to absolute URLs
       if (!img.startsWith('http://') && !img.startsWith('https://')) {
-        return false;
+        return `${storageBaseUrlUpdate}${img}`;
       }
-      
+      return img;
+    })
+    .filter((img: string) => {
       // Check if base filename already exists in WooCommerce
       try {
         const url = new URL(img);
