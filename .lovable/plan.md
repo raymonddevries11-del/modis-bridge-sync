@@ -1,85 +1,54 @@
 
+## Bulk URL-Key Cleanup Job
 
-## Bron-overzicht, WooCommerce-mapping en "toevoegen in plaats van overschrijven"
+Een nieuwe actie toevoegen aan de WooCommerce channel pagina waarmee je in een klik alle producten met foute `url_key` waarden kunt laten corrigeren via WooCommerce. Dit wordt geintegreerd in het bestaande jobs-systeem.
 
-Dit plan bevat drie onderdelen:
+### Wat wordt er gebouwd
 
-### 1. Bron-overzicht: Modis-data vs. WooCommerce-data
+1. **Nieuwe job type: `FIX_URL_KEYS`** -- een job die de bestaande `fix-url-keys` edge function aanroept voor een tenant, zodat het asynchroon via de job queue verwerkt wordt.
 
-Op de Catalogus Data pagina (`/catalog-data`) worden twee nieuwe sub-tabs toegevoegd per sectie (attributen en categorieeen):
+2. **UI-knop op de WooCommerce pagina** -- een "Fix URL Keys" button op `/channel/woocommerce` die de job aanmaakt en voortgang toont.
 
-- **Bron (Modis)**: toont alle attributen/categorieeen zoals ze binnenkomen uit de Modis CSV-import (de huidige "in gebruik" data, gebaseerd op `field_sources` = `woocommerce-csv` of `modis`)
-- **WooCommerce (gewenst)**: toont de gewenste attributen/categorieeen voor WooCommerce -- beheerd via een nieuwe database-tabel
+3. **Job scheduler uitbreiding** -- het `FIX_URL_KEYS` job type wordt toegevoegd aan de `job-scheduler` edge function zodat het automatisch opgepakt wordt.
 
-### 2. Nieuwe tabel: `woo_category_mappings`
-
-Een nieuwe database-tabel die Modis-broncategorieen koppelt aan gewenste WooCommerce-categorieen:
-
-```text
-woo_category_mappings
----------------------
-id              uuid PK
-tenant_id       uuid
-source_category text       -- De categorie zoals die uit Modis binnenkomt
-woo_category    text       -- De gewenste categorie in WooCommerce
-created_at      timestamptz
-updated_at      timestamptz
-```
-
-Met RLS-policies voor admin-beheer en authenticated-lezen.
-
-### 3. UI voor matching
-
-Op de Catalogus Data pagina komt per tab (Attributen / Categorieen) een extra sectie:
-
-- **Categorieen-tab**: Een tabel met alle unieke Modis-broncategorieen links, en rechts een bewerkbaar dropdown/input-veld voor de gewenste WooCommerce-categorie. Ongematchte bronnen worden gemarkeerd met een waarschuwing. Bulk-actie om meerdere bronnen aan dezelfde WooCommerce-categorie te koppelen.
-
-- **Attributen-tab**: Het bestaande `attribute_mappings`-systeem wordt hergebruikt. Er komt een visueel duidelijker onderscheid tussen "Modis bron" waarden en "WooCommerce doel" waarden.
-
-### 4. WooCommerce sync: toevoegen in plaats van overschrijven
-
-De `woocommerce-sync` edge function wordt aangepast:
-
-**Huidige situatie (probleem):**
-- Bij update wordt `updateData.categories = categoryIds.map(id => ({ id }))` gezet, wat de bestaande WooCommerce-categorieen volledig VERVANGT
-
-**Nieuwe situatie:**
-- Bij update worden de bestaande WooCommerce-categorieen eerst opgehaald (al beschikbaar via de `fetchAttrResponse`)
-- De nieuwe categorieen worden SAMENGEVOEGD (merged) met de bestaande
-- Duplicaten worden gefilterd op basis van category-ID
-- Hetzelfde principe wordt toegepast op attributen
-
-Daarnaast wordt de `woo_category_mappings` tabel geraadpleegd: als een broncategorie een mapping heeft, wordt de WooCommerce-categorie uit de mapping gebruikt in plaats van de broncategorie.
+4. **Optioneel: volledige slug-sync knop** -- naast de "fix broken keys" ook een "Sync alle slugs" knop die de `sync-woo-slugs` functie via een job aanroept voor de hele catalogus.
 
 ---
 
 ### Technische details
 
-**Database migratie:**
-- Nieuwe tabel `woo_category_mappings` met RLS-policies
-- Unieke constraint op `(tenant_id, source_category)`
-
-**Nieuwe/aangepaste bestanden:**
+**Bestanden die worden aangepast:**
 
 | Bestand | Wijziging |
 |---------|-----------|
-| `src/pages/CatalogData.tsx` | Extra tab-structuur voor Bron vs. WooCommerce view |
-| `src/components/catalog/CategoryMappingManager.tsx` | NIEUW - UI voor bron-naar-WooCommerce mapping |
-| `src/components/catalog/CategoryManager.tsx` | Bron-badge toevoegen per categorie |
-| `src/hooks/useCategoryMappings.ts` | NIEUW - CRUD hook voor woo_category_mappings |
-| `supabase/functions/woocommerce-sync/index.ts` | Categories MERGEN i.p.v. vervangen + mapping-lookup |
+| `src/pages/ChannelWooCommerce.tsx` | Nieuwe "Fix URL Keys" en "Sync Slugs" knoppen met tenant-selectie, loading state en resultaat-feedback |
+| `supabase/functions/job-scheduler/index.ts` | Nieuw case `FIX_URL_KEYS` dat `fix-url-keys` aanroept, en `SYNC_WOO_SLUGS` dat `sync-woo-slugs` aanroept |
+| `supabase/functions/fix-url-keys/index.ts` | Kleine aanpassing: accepteer ook `jobId` parameter zodat het in de job-flow past |
 
-**Sync-logica wijziging (pseudocode):**
+**Nieuwe job types:**
+
+- `FIX_URL_KEYS` -- zoekt producten met `url_key = '-nvt'`, `null`, of leeg, en corrigeert ze via WooCommerce API lookup
+- `SYNC_WOO_SLUGS` -- synchroniseert alle slugs paginagewijs (hergebruikt bestaande `sync-woo-slugs` functie)
+
+**Flow:**
 
 ```text
-// VOOR (huidige code):
-updateData.categories = newCategoryIds.map(id => ({ id }))
-
-// NA (nieuwe code):
-1. Haal bestaande WooCommerce categories op (al beschikbaar)
-2. Haal woo_category_mappings op voor tenant
-3. Vertaal broncategorieen naar WooCommerce-categorieen via mappings
-4. Merge: existingWooCats + newMappedCats (deduplicate op id)
-5. updateData.categories = mergedCategoryIds.map(id => ({ id }))
+Gebruiker klikt "Fix URL Keys"
+  -> Insert in jobs tabel: type=FIX_URL_KEYS, state=ready, payload={tenantId}
+  -> job-scheduler pikt job op
+  -> Roept fix-url-keys edge function aan
+  -> Resultaat wordt opgeslagen in job.result
+  -> UI toont resultaat via realtime subscription (al aanwezig op Jobs pagina)
 ```
 
+**ChannelWooCommerce.tsx wijzigingen:**
+- Tenant selector toevoegen (hergebruikt `TenantSelector` component)
+- "Fix URL Keys" knop die een job insert in de `jobs` tabel
+- "Sync alle Slugs" knop die een `SYNC_WOO_SLUGS` job insert
+- Toast feedback bij aanmaken van de job
+- Link naar Jobs pagina voor voortgang
+
+**job-scheduler/index.ts wijzigingen:**
+- Toevoegen van twee nieuwe cases in de switch statement:
+  - `case 'FIX_URL_KEYS': functionName = 'fix-url-keys';`
+  - `case 'SYNC_WOO_SLUGS': functionName = 'sync-woo-slugs';`
