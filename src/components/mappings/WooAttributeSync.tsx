@@ -14,7 +14,7 @@ import {
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
-import { RefreshCw, Loader2, Search, ChevronDown, ChevronRight, Check, Link2, Unlink, X, ArrowRight } from "lucide-react";
+import { RefreshCw, Loader2, Search, ChevronDown, ChevronRight, Check, Link2, Unlink, X, ArrowRight, AlertTriangle, ShieldCheck, ClipboardList } from "lucide-react";
 import { TenantSelector } from "@/components/TenantSelector";
 import { toast } from "sonner";
 
@@ -42,6 +42,7 @@ export function WooAttributeSync() {
   const [openAttrs, setOpenAttrs] = useState<Set<string>>(new Set());
   const [editingAttr, setEditingAttr] = useState<string | null>(null);
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [showValidation, setShowValidation] = useState(false);
 
   // Fetch WooCommerce attributes
   const { data: wooAttrs, isLoading: wooLoading, refetch: refetchWoo } = useQuery({
@@ -205,6 +206,37 @@ export function WooAttributeSync() {
   const matchedCount = modisAttrs?.filter((a) => getWooMatch(a.name) !== null).length ?? 0;
   const unmatchedCount = (modisAttrs?.length ?? 0) - matchedCount;
 
+  // Batch validation: check all mapped attribute values against WC terms
+  const validationReport = useMemo(() => {
+    if (!modisAttrs || !wooAttrs) return null;
+    const issues: { modisAttr: string; wooAttr: string; missingInWoo: string[]; missingInModis: string[]; totalModisValues: number; totalWooTerms: number }[] = [];
+    let totalOk = 0;
+
+    for (const ma of modisAttrs) {
+      const wm = getWooMatch(ma.name);
+      if (!wm) continue;
+      const modisSet = new Set(ma.values.map((v) => v.toLowerCase()));
+      const wooSet = new Set(wm.terms.map((t) => t.name.toLowerCase()));
+      const missingInWoo = ma.values.filter((v) => !wooSet.has(v.toLowerCase()));
+      const missingInModis = wm.terms.filter((t) => !modisSet.has(t.name.toLowerCase())).map((t) => t.name);
+
+      if (missingInWoo.length > 0 || missingInModis.length > 0) {
+        issues.push({
+          modisAttr: ma.name,
+          wooAttr: `${wm.name} (${wm.slug})`,
+          missingInWoo,
+          missingInModis,
+          totalModisValues: ma.values.length,
+          totalWooTerms: wm.terms.length,
+        });
+      } else {
+        totalOk++;
+      }
+    }
+
+    return { issues, totalOk, totalChecked: totalOk + issues.length };
+  }, [modisAttrs, wooAttrs, manualMappings]);
+
   const unmatchedWoo = useMemo(() => {
     if (!wooAttrs || !modisAttrs) return wooAttrs ?? [];
     const mappedSlugs = new Set(Object.values(manualMappings));
@@ -281,6 +313,100 @@ export function WooAttributeSync() {
                 <Unlink className="h-3 w-3 mr-1" />
                 {unmatchedCount} niet gematcht
               </Badge>
+            )}
+          </div>
+        )}
+
+        {/* Batch Validation Report */}
+        {tenantId && validationReport && validationReport.totalChecked > 0 && (
+          <div className="space-y-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowValidation(!showValidation)}
+              className="w-full justify-between"
+            >
+              <div className="flex items-center gap-2">
+                <ClipboardList className="h-4 w-4" />
+                <span className="text-sm font-medium">Pre-sync Validatie</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {validationReport.issues.length === 0 ? (
+                  <Badge variant="outline" className="bg-success/10 text-success border-success/20 text-[10px]">
+                    <ShieldCheck className="h-3 w-3 mr-1" />
+                    {validationReport.totalOk} attributen OK
+                  </Badge>
+                ) : (
+                  <>
+                    <Badge variant="outline" className="bg-success/10 text-success border-success/20 text-[10px]">
+                      {validationReport.totalOk} OK
+                    </Badge>
+                    <Badge variant="outline" className="bg-warning/10 text-warning border-warning/20 text-[10px]">
+                      <AlertTriangle className="h-3 w-3 mr-1" />
+                      {validationReport.issues.length} met afwijkingen
+                    </Badge>
+                  </>
+                )}
+                {showValidation ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              </div>
+            </Button>
+
+            {showValidation && (
+              <div className="rounded-lg border border-border bg-muted/20 divide-y divide-border">
+                {validationReport.issues.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-sm text-success">
+                    <ShieldCheck className="h-5 w-5 mx-auto mb-2" />
+                    Alle {validationReport.totalOk} gematchte attributen hebben consistente waarden.
+                    <br />
+                    <span className="text-muted-foreground text-xs">Sync kan veilig uitgevoerd worden.</span>
+                  </div>
+                ) : (
+                  validationReport.issues.map((issue) => (
+                    <div key={issue.modisAttr} className="px-4 py-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="h-3.5 w-3.5 text-warning shrink-0" />
+                        <span className="text-sm font-medium">{issue.modisAttr}</span>
+                        <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-sm text-muted-foreground">{issue.wooAttr}</span>
+                      </div>
+                      {issue.missingInWoo.length > 0 && (
+                        <div>
+                          <span className="text-[10px] uppercase tracking-wider text-warning font-medium">
+                            Ontbreekt in WooCommerce ({issue.missingInWoo.length} van {issue.totalModisValues})
+                          </span>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {issue.missingInWoo.slice(0, 20).map((v) => (
+                              <Badge key={v} variant="outline" className="text-[10px] font-normal border-warning/30 text-warning">
+                                {v}
+                              </Badge>
+                            ))}
+                            {issue.missingInWoo.length > 20 && (
+                              <Badge variant="secondary" className="text-[10px]">+{issue.missingInWoo.length - 20} meer</Badge>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {issue.missingInModis.length > 0 && (
+                        <div>
+                          <span className="text-[10px] uppercase tracking-wider text-destructive font-medium">
+                            Alleen in WooCommerce ({issue.missingInModis.length} van {issue.totalWooTerms})
+                          </span>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {issue.missingInModis.slice(0, 20).map((v) => (
+                              <Badge key={v} variant="outline" className="text-[10px] font-normal border-destructive/30 text-destructive">
+                                {v}
+                              </Badge>
+                            ))}
+                            {issue.missingInModis.length > 20 && (
+                              <Badge variant="secondary" className="text-[10px]">+{issue.missingInModis.length - 20} meer</Badge>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
             )}
           </div>
         )}
