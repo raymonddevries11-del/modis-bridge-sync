@@ -2,11 +2,12 @@ import { useState } from "react";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Send, RefreshCw, CheckCircle2, Link2, Globe, Loader2, Package, ArrowUpDown } from "lucide-react";
+import { Send, RefreshCw, CheckCircle2, Link2, Globe, Loader2, Package, ArrowUpDown, Unlink } from "lucide-react";
 import { TenantSelector } from "@/components/TenantSelector";
 import { UrlKeyAudit } from "@/components/woocommerce/UrlKeyAudit";
 import { WooProductTable } from "@/components/woocommerce/WooProductTable";
 import { WooDeltaDashboard } from "@/components/woocommerce/WooDeltaDashboard";
+import { WooLinkStatus } from "@/components/woocommerce/WooLinkStatus";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -165,6 +166,10 @@ const ChannelWooCommerce = () => {
           <TabsList>
             <TabsTrigger value="delta">Delta Tracking</TabsTrigger>
             <TabsTrigger value="products">WooCommerce Producten</TabsTrigger>
+            <TabsTrigger value="link-status" className="flex items-center gap-1.5">
+              <Unlink className="h-3.5 w-3.5" />
+              Link Status
+            </TabsTrigger>
             <TabsTrigger value="actions">Acties & Tools</TabsTrigger>
           </TabsList>
 
@@ -196,6 +201,23 @@ const ChannelWooCommerce = () => {
                 ) : (
                   <p className="text-sm text-muted-foreground py-8 text-center">
                     Selecteer een tenant om producten te bekijken.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="link-status">
+            <Card className="card-elevated">
+              <CardHeader>
+                <CardTitle className="text-base">SKU-based Link Status</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {tenantId ? (
+                  <WooLinkStatus tenantId={tenantId} />
+                ) : (
+                  <p className="text-sm text-muted-foreground py-8 text-center">
+                    Selecteer een tenant om de link status te bekijken.
                   </p>
                 )}
               </CardContent>
