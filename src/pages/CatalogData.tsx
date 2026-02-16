@@ -9,6 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search, Tag, Layers, Package, ExternalLink } from "lucide-react";
 import { AttributeManager } from "@/components/catalog/AttributeManager";
 import { CategoryManager } from "@/components/catalog/CategoryManager";
+import { CategoryMappingManager } from "@/components/catalog/CategoryMappingManager";
+import { TenantSelector } from "@/components/TenantSelector";
 
 interface AttrInfo {
   name: string;
@@ -20,6 +22,27 @@ interface AttrInfo {
 const CatalogData = () => {
   const navigate = useNavigate();
   const [catSearch, setCatSearch] = useState("");
+  const [catSubTab, setCatSubTab] = useState<"overview" | "mapping">("overview");
+  const [tenantId, setTenantId] = useState("");
+
+  // Fetch tenants to auto-select first one
+  const { data: tenants } = useQuery({
+    queryKey: ["tenants"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("tenants")
+        .select("id, name")
+        .eq("active", true)
+        .order("name");
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  // Auto-select first tenant
+  if (!tenantId && tenants?.length) {
+    setTenantId(tenants[0].id);
+  }
 
   // Fetch all attributes with values
   const { data: attrData, isLoading: attrLoading } = useQuery({
@@ -50,7 +73,6 @@ const CatalogData = () => {
             const info = attrMap.get(key)!;
             info.count++;
             if (val && typeof val === "string" && val.trim()) {
-              // Split comma-separated values
               val.split(",").forEach((v: string) => {
                 const trimmed = v.trim();
                 if (trimmed) {
@@ -111,11 +133,16 @@ const CatalogData = () => {
   return (
     <Layout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold">Catalogus Data</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Overzicht van alle attributen, waarden en categorieën in gebruik
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Catalogus Data</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Overzicht van alle attributen, waarden en categorieën in gebruik
+            </p>
+          </div>
+          {tenants && tenants.length > 1 && (
+            <TenantSelector value={tenantId} onChange={setTenantId} />
+          )}
         </div>
 
         <Tabs defaultValue="attributes">
@@ -135,7 +162,28 @@ const CatalogData = () => {
           </TabsContent>
 
           <TabsContent value="categories" className="mt-4">
-            <CategoryManager categories={catData} isLoading={catLoading} />
+            <Tabs value={catSubTab} onValueChange={(v) => setCatSubTab(v as any)}>
+              <TabsList className="mb-4">
+                <TabsTrigger value="overview">Bron (Modis)</TabsTrigger>
+                <TabsTrigger value="mapping">WooCommerce Mapping</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="overview">
+                <CategoryManager categories={catData} isLoading={catLoading} />
+              </TabsContent>
+
+              <TabsContent value="mapping">
+                {tenantId ? (
+                  <CategoryMappingManager
+                    categories={catData}
+                    isLoading={catLoading}
+                    tenantId={tenantId}
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">Selecteer eerst een tenant.</p>
+                )}
+              </TabsContent>
+            </Tabs>
           </TabsContent>
         </Tabs>
       </div>
