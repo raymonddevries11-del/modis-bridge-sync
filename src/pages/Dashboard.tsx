@@ -12,6 +12,7 @@ import {
   Clock, Server, Send, Rss, ArrowRight, Zap, TrendingUp,
   AlertTriangle, RefreshCw, ShieldAlert, XCircle,
 } from "lucide-react";
+import { PushHealthWidget } from "@/components/woocommerce/PushHealthWidget";
 
 // --- Helpers ---
 function timeAgo(dateStr: string): string {
@@ -328,6 +329,12 @@ const Dashboard = () => {
               </Button>
             </CardContent>
           </Card>
+        </div>
+
+
+        {/* Push Health Widget */}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <PushHealthWidget />
         </div>
 
         {/* Bottom row: Activity Feed + Job Queue */}
