@@ -108,8 +108,12 @@ serve(async (req) => {
           case 'FIX_URL_KEYS':
             functionName = 'fix-url-keys';
             break;
-          case 'SYNC_WOO_SLUGS':
+        case 'SYNC_WOO_SLUGS':
             functionName = 'sync-woo-slugs';
+            break;
+          case 'DRY_RUN_FIX_URL_KEYS':
+            functionName = 'fix-url-keys';
+            // payload already contains dryRun: true from job insert
             break;
           default:
             throw new Error(`Unknown job type: ${job.type}`);

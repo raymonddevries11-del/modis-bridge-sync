@@ -92,6 +92,20 @@ Deno.serve(async (req) => {
     }
 
     const fixed = results.filter(r => r.status === 'fixed' || r.status === 'would fix').length;
+    const notFound = results.filter(r => r.status === 'not found in WooCommerce').length;
+    const errors = results.filter(r => r.status.startsWith('error') || r.status.startsWith('WC API error') || r.status.startsWith('update error')).length;
+
+    // Store dry-run results in the job record if jobId is provided
+    if (jobId && dryRun) {
+      await supabase.from('jobs').update({
+        payload: {
+          tenantId,
+          dryRun: true,
+          dryRunResults: results,
+          dryRunSummary: { total: badProducts.length, fixable: fixed, notFound, errors },
+        },
+      }).eq('id', jobId);
+    }
 
     if (!dryRun && fixed > 0) {
       await supabase.from('changelog').insert({

@@ -8,14 +8,35 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { useState, useEffect } from "react";
-import { RotateCw } from "lucide-react";
+import { RotateCw, FlaskConical, Play } from "lucide-react";
 import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
 
 const Jobs = () => {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [selectedTenant, setSelectedTenant] = useState<string>("all");
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+
+  const applyDryRunMutation = useMutation({
+    mutationFn: async ({ tenantId }: { tenantId: string }) => {
+      const { error } = await supabase.from("jobs").insert({
+        type: "FIX_URL_KEYS",
+        state: "ready",
+        payload: { tenantId },
+        tenant_id: tenantId,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Fix URL Keys job aangemaakt");
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+    onError: (error: any) => {
+      toast.error(`Fout: ${error.message}`);
+    },
+  });
 
   // Auto-select first active tenant
   const { data: tenants } = useQuery({
@@ -296,6 +317,8 @@ const Jobs = () => {
               <SelectItem value="IMPORT_ARTICLES_XML">Article Import</SelectItem>
               <SelectItem value="EXPORT_ORDER_XML">Order Export</SelectItem>
               <SelectItem value="SYNC_TO_WOO">WooCommerce Sync</SelectItem>
+              <SelectItem value="FIX_URL_KEYS">Fix URL Keys</SelectItem>
+              <SelectItem value="DRY_RUN_FIX_URL_KEYS">Dry Run URL Keys</SelectItem>
             </SelectContent>
           </Select>
 
@@ -378,7 +401,15 @@ const Jobs = () => {
                     <div className="grid md:grid-cols-6 gap-4 flex-1">
                       <div>
                         <p className="text-sm font-medium text-muted-foreground">Type</p>
-                        <p className="font-semibold">{job.type}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold">{job.type}</p>
+                          {job.type.startsWith('DRY_RUN_') && (
+                            <Badge className="bg-warning/10 text-warning border-warning/20" variant="outline">
+                              <FlaskConical className="h-3 w-3 mr-1" />
+                              DRY RUN
+                            </Badge>
+                          )}
+                        </div>
                         {job.payload?.filename && (
                           <p className="text-xs text-muted-foreground mt-1">{job.payload.filename}</p>
                         )}
@@ -420,6 +451,38 @@ const Jobs = () => {
                       </Button>
                     )}
                   </div>
+                  {/* Dry run results */}
+                  {job.type.startsWith('DRY_RUN_') && job.state === 'done' && job.payload?.dryRunSummary && (
+                    <div className="mt-4 pt-4 border-t space-y-3">
+                      <p className="text-sm font-medium">Dry Run Resultaat</p>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant="outline" className="bg-success/10 text-success border-success/20">
+                          {job.payload.dryRunSummary.fixable} fixbaar
+                        </Badge>
+                        <Badge variant="outline" className="bg-muted">
+                          {job.payload.dryRunSummary.notFound} niet gevonden
+                        </Badge>
+                        {job.payload.dryRunSummary.errors > 0 && (
+                          <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20">
+                            {job.payload.dryRunSummary.errors} errors
+                          </Badge>
+                        )}
+                        <Badge variant="outline">
+                          Totaal: {job.payload.dryRunSummary.total}
+                        </Badge>
+                      </div>
+                      {job.payload.dryRunSummary.fixable > 0 && (
+                        <Button
+                          size="sm"
+                          onClick={() => applyDryRunMutation.mutate({ tenantId: job.payload.tenantId || job.tenant_id })}
+                          disabled={applyDryRunMutation.isPending}
+                        >
+                          <Play className="h-4 w-4 mr-2" />
+                          Toepassen ({job.payload.dryRunSummary.fixable} fixes)
+                        </Button>
+                      )}
+                    </div>
+                  )}
                   {job.error && (
                     <div className="mt-4 pt-4 border-t">
                       <p className="text-sm font-medium text-destructive mb-2">Error Details</p>

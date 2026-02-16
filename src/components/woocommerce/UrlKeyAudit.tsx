@@ -28,6 +28,7 @@ export function UrlKeyAudit({ tenantId }: UrlKeyAuditProps) {
   const [dryRunResults, setDryRunResults] = useState<DryRunResult[] | null>(null);
   const [runningDryRun, setRunningDryRun] = useState(false);
   const [creatingJob, setCreatingJob] = useState(false);
+  const [schedulingDryRun, setSchedulingDryRun] = useState(false);
 
   const { data: brokenProducts = [], isLoading } = useQuery({
     queryKey: ["url-key-audit", tenantId],
@@ -60,6 +61,26 @@ export function UrlKeyAudit({ tenantId }: UrlKeyAuditProps) {
       toast.error(`Dry run mislukt: ${e.message}`);
     } finally {
       setRunningDryRun(false);
+    }
+  };
+
+  const handleScheduleDryRun = async () => {
+    setSchedulingDryRun(true);
+    try {
+      const { error } = await supabase.from("jobs").insert({
+        type: "DRY_RUN_FIX_URL_KEYS",
+        state: "ready" as const,
+        payload: { tenantId, dryRun: true },
+        tenant_id: tenantId,
+      });
+      if (error) throw error;
+      toast.success("Dry Run job ingepland", {
+        action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") },
+      });
+    } catch (e: any) {
+      toast.error(`Fout: ${e.message}`);
+    } finally {
+      setSchedulingDryRun(false);
     }
   };
 
@@ -124,6 +145,19 @@ export function UrlKeyAudit({ tenantId }: UrlKeyAuditProps) {
               <Play className="mr-2 h-4 w-4" />
             )}
             Dry Run
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={brokenProducts.length === 0 || schedulingDryRun}
+            onClick={handleScheduleDryRun}
+          >
+            {schedulingDryRun ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Play className="mr-2 h-4 w-4" />
+            )}
+            Plan Dry Run
           </Button>
           <Button
             variant="outline"
