@@ -676,6 +676,40 @@ Deno.serve(async (req) => {
               break;
             }
           } else if (!createResult.response.ok || !createResult.json) {
+            // Check for image upload error — retry without images
+            const errCode = createResult.json?.code;
+            if (errCode === 'woocommerce_product_image_upload_error') {
+              console.warn(`Product ${pim.sku}: image upload failed, retrying create WITHOUT images`);
+              const noImgData = { ...desiredData, images: [] };
+              const retryResult = await fetchWithRetry(createUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(noImgData),
+              }, rateLimiter);
+
+              if (retryResult.response.ok && retryResult.json) {
+                await recordSuccess(supabase);
+                const created = retryResult.json;
+                console.log(`Created product ${pim.sku} (without images) with WC ID ${created.id}`);
+
+                await supabase.from('changelog').insert({
+                  tenant_id: tenantId, event_type: 'WOO_IMAGE_UPLOAD_FAILED',
+                  description: `Afbeeldingen konden niet worden geüpload voor ${pim.sku} — product aangemaakt zonder afbeeldingen`,
+                  metadata: { sku: pim.sku, imageCount: validImages.length, error: createResult.json?.message?.substring(0, 200) },
+                });
+
+                // Still create variations
+                if (isVariable) {
+                  const varResult = await createOrUpdateVariations(
+                    config.woocommerce_url, wooAuth, created.id, pim, rateLimiter, supabase, tenantId, maatAttrId
+                  );
+                  totalVariationAudit.created += varResult.audit.created;
+                }
+
+                results.push({ sku: pim.sku, action: 'created', changes: [{ field: 'images', old_value: null, new_value: 'skipped (upload error)' }], message: `Created without images (WC #${created.id})` });
+                continue;
+              }
+            }
             results.push({ sku: pim.sku, action: 'error', changes: [], message: `Create failed: ${(createResult.text || '').substring(0, 200)}` });
           } else {
             await recordSuccess(supabase);
