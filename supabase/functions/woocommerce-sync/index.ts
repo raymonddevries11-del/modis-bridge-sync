@@ -165,6 +165,51 @@ async function ensureBrandExists(brandName: string, wooConfig: WooCommerceConfig
   }
 }
 
+// Helper: ensure a single size term exists in the global pa_maat attribute
+// Used by createVariationsInWooCommerce and createMissingVariation
+async function ensureSizeTermExists(maatAttrId: number, termValue: string, wooConfig: WooCommerceConfig): Promise<void> {
+  try {
+    const termsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${maatAttrId}/terms`);
+    termsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+    termsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+    termsUrl.searchParams.append('per_page', '100');
+    termsUrl.searchParams.append('search', termValue);
+
+    const termsResponse = await fetchWithRetry(termsUrl.toString(), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (termsResponse.ok) {
+      const terms = await termsResponse.json();
+      const exists = terms.some((t: any) => t.name?.toLowerCase().trim() === termValue.toLowerCase().trim());
+
+      if (!exists) {
+        const createTermUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/attributes/${maatAttrId}/terms`);
+        createTermUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+        createTermUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+        const createRes = await fetchWithRetry(createTermUrl.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: termValue }),
+        });
+
+        if (createRes.ok) {
+          console.log(`✓ Registered Maat term: "${termValue}" in global pa_maat (ID ${maatAttrId})`);
+        } else {
+          const errText = await createRes.text();
+          // term_exists means it's already there — safe to ignore
+          if (!errText.includes('term_exists')) {
+            console.warn(`Could not register Maat term "${termValue}": ${errText.substring(0, 150)}`);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`Error ensuring size term "${termValue}":`, err);
+  }
+}
+
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -899,6 +944,15 @@ async function createVariationsInWooCommerce(
   // Build attribute reference — use global ID when available, NEVER id: 0
   const attrRef = globalMaatId > 0 ? { id: globalMaatId } : { name: 'pa_maat' };
 
+  // --- Ensure all size terms exist in global pa_maat BEFORE creating any variation ---
+  if (globalMaatId > 0) {
+    const sizeLabels = variants.map((v: any) => v.size_label).filter(Boolean);
+    for (const label of sizeLabels) {
+      await ensureSizeTermExists(globalMaatId, label, wooConfig);
+    }
+    console.log(`Ensured ${sizeLabels.length} size terms exist for pa_maat (ID ${globalMaatId})`);
+  }
+
   for (const variant of variants) {
     // Build variation SKU in format: productSku-suffix (e.g., "101069102000-071041")
     // maat_id may already contain the parent SKU prefix, so extract only the suffix
@@ -970,6 +1024,12 @@ async function createMissingVariation(
 
   // Build attribute reference — use global ID when available, NEVER id: 0
   const attrRef = globalMaatId > 0 ? { id: globalMaatId } : { name: 'pa_maat' };
+
+  // --- Ensure size term exists in global pa_maat BEFORE creating the variation ---
+  if (globalMaatId > 0 && variant.size_label) {
+    await ensureSizeTermExists(globalMaatId, variant.size_label, wooConfig);
+    console.log(`Ensured size term "${variant.size_label}" exists for pa_maat (ID ${globalMaatId})`);
+  }
   
   const variationData: any = {
     attributes: [
@@ -1709,6 +1769,11 @@ async function syncVariantToWooCommerce(
       updateData.sku = expectedFullSku;
       console.log(`Updating variation SKU: "${currentWooSku}" → "${expectedFullSku}"`);
     }
+  }
+
+  // Ensure the size term exists in global pa_maat BEFORE setting it on the variation
+  if (globalMaatId > 0 && variant.size_label) {
+    await ensureSizeTermExists(globalMaatId, variant.size_label, wooConfig);
   }
 
   // ALWAYS set the Maat attribute on variations using the SLUG format
