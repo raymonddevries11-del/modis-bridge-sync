@@ -120,8 +120,9 @@ serve(async (req) => {
     // De-duplicate: only emit one entry per itemId (aggregate stock across stores)
     const emittedIds = new Set<string>();
 
-    // ── Pre-fetch WooCommerce slugs and images to match primary feed filtering ──
-    const wooSlugProductIds = new Set<string>();
+    // ── Pre-fetch WooCommerce product IDs to match primary feed filtering ──
+    // Only products that exist in WooCommerce should be in any feed
+    const wooProductIds = new Set<string>();
     const wooImageProductIds = new Set<string>();
     let wooOffset = 0;
     while (true) {
@@ -133,11 +134,13 @@ serve(async (req) => {
         .range(wooOffset, wooOffset + 999);
       if (!wooProducts || wooProducts.length === 0) break;
       for (const wp of wooProducts) {
-        if (wp.product_id) wooSlugProductIds.add(wp.product_id);
-        // Track products that have WooCommerce-hosted images (fallback source)
-        if (wp.product_id && Array.isArray(wp.images) && wp.images.length > 0) {
-          const hasValidImg = wp.images.some((img: any) => img?.src && /^https?:\/\//i.test(img.src));
-          if (hasValidImg) wooImageProductIds.add(wp.product_id);
+        if (wp.product_id) {
+          wooProductIds.add(wp.product_id);
+          // Track products that have WooCommerce-hosted images (fallback source)
+          if (Array.isArray(wp.images) && wp.images.length > 0) {
+            const hasValidImg = wp.images.some((img: any) => img?.src && /^https?:\/\//i.test(img.src));
+            if (hasValidImg) wooImageProductIds.add(wp.product_id);
+          }
         }
       }
       if (wooProducts.length < 1000) break;
@@ -182,10 +185,8 @@ serve(async (req) => {
         // Include product if it has valid images directly OR has WooCommerce-hosted images as fallback
         if (validImages.length === 0 && !wooImageProductIds.has(product.id)) continue;
 
-        // Match primary feed URL validation: skip products without WooCommerce slug or valid url_key
-        const hasWooSlug = wooSlugProductIds.has(product.id);
-        const cleanUrlKey = product.url_key ? product.url_key.replace(/-+$/, '').replace(/-nvt$/, '') : null;
-        if (!hasWooSlug && (!cleanUrlKey || cleanUrlKey.length <= 2)) continue;
+        // Match primary feed: ONLY include products that exist in WooCommerce
+        if (!wooProductIds.has(product.id)) continue;
 
         const salePrice = price?.list && price.list < regularPrice ? price.list : null;
 
