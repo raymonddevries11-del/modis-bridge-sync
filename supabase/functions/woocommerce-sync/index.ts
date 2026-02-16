@@ -734,14 +734,35 @@ async function createProductInWooCommerce(
     tax_class: tax_code || '',
   };
 
-  // Add categories if available - ensure they exist first
+  // Add categories if available - ensure they exist first, apply mappings
   console.log(`Product ${sku} has categories:`, categories);
   if (categories && Array.isArray(categories) && categories.length > 0) {
+    // Fetch category mappings
+    let categoryMappings: Record<string, string> = {};
+    if (supabase && tenantId) {
+      try {
+        const { data: mappingsData } = await supabase
+          .from('woo_category_mappings')
+          .select('source_category, woo_category')
+          .eq('tenant_id', tenantId);
+        if (mappingsData) {
+          for (const m of mappingsData) {
+            categoryMappings[m.source_category] = m.woo_category;
+          }
+        }
+      } catch (err) {
+        console.error('Error loading category mappings:', err);
+      }
+    }
+
     const categoryIds: number[] = [];
     for (const cat of categories) {
       if (cat.name) {
-        console.log(`Ensuring category exists: ${cat.name}`);
-        const catId = await ensureCategoryExists(cat.name, wooConfig);
+        const targetName = categoryMappings[cat.name] || cat.name;
+        if (targetName !== cat.name) {
+          console.log(`Mapped category "${cat.name}" -> "${targetName}"`);
+        }
+        const catId = await ensureCategoryExists(targetName, wooConfig);
         if (catId) {
           categoryIds.push(catId);
         }
@@ -1120,22 +1141,54 @@ async function updateProductInWooCommerce(
     updateData.short_description = meta_description;
   }
   
-  // Update categories - ensure they exist first
+  // Update categories - MERGE with existing WooCommerce categories (don't replace)
   console.log(`Product ${sku} has categories:`, categories);
   if (categories && Array.isArray(categories) && categories.length > 0) {
-    const categoryIds: number[] = [];
+    // Fetch category mappings from woo_category_mappings table
+    let categoryMappings: Record<string, string> = {};
+    if (supabase && tenantId) {
+      try {
+        const { data: mappingsData } = await supabase
+          .from('woo_category_mappings')
+          .select('source_category, woo_category')
+          .eq('tenant_id', tenantId);
+        if (mappingsData) {
+          for (const m of mappingsData) {
+            categoryMappings[m.source_category] = m.woo_category;
+          }
+          console.log(`Loaded ${Object.keys(categoryMappings).length} category mappings`);
+        }
+      } catch (err) {
+        console.error('Error loading category mappings:', err);
+      }
+    }
+
+    // Get existing WooCommerce category IDs from the fetched product
+    const existingCatIds = new Set<number>(
+      (existingProduct.categories || []).map((c: any) => c.id).filter(Boolean)
+    );
+    console.log(`Product ${sku} has ${existingCatIds.size} existing WooCommerce categories`);
+
+    const newCategoryIds: number[] = [];
     for (const cat of categories) {
       if (cat.name) {
-        console.log(`Ensuring category exists: ${cat.name}`);
-        const catId = await ensureCategoryExists(cat.name, wooConfig);
+        // Apply mapping: translate source category to WooCommerce category if mapped
+        const targetName = categoryMappings[cat.name] || cat.name;
+        if (targetName !== cat.name) {
+          console.log(`Mapped category "${cat.name}" -> "${targetName}"`);
+        }
+        const catId = await ensureCategoryExists(targetName, wooConfig);
         if (catId) {
-          categoryIds.push(catId);
+          newCategoryIds.push(catId);
         }
       }
     }
-    if (categoryIds.length > 0) {
-      updateData.categories = categoryIds.map(id => ({ id }));
-      console.log(`Added ${categoryIds.length} categories to product`);
+
+    // Merge: existing + new, deduplicate
+    const mergedCatIds = new Set<number>([...existingCatIds, ...newCategoryIds]);
+    if (mergedCatIds.size > 0) {
+      updateData.categories = Array.from(mergedCatIds).map(id => ({ id }));
+      console.log(`Merged categories: ${existingCatIds.size} existing + ${newCategoryIds.length} new = ${mergedCatIds.size} total`);
     }
   }
 

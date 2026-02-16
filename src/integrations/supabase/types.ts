@@ -980,6 +980,41 @@ export type Database = {
           },
         ]
       }
+      woo_category_mappings: {
+        Row: {
+          created_at: string
+          id: string
+          source_category: string
+          tenant_id: string
+          updated_at: string
+          woo_category: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          source_category: string
+          tenant_id: string
+          updated_at?: string
+          woo_category: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          source_category?: string
+          tenant_id?: string
+          updated_at?: string
+          woo_category?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "woo_category_mappings_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       xml_validation_logs: {
         Row: {
           created_at: string
