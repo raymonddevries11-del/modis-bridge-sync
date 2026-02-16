@@ -10,6 +10,7 @@ import { WooDeltaDashboard } from "@/components/woocommerce/WooDeltaDashboard";
 import { WooLinkStatus } from "@/components/woocommerce/WooLinkStatus";
 import { FailedPushPanel } from "@/components/woocommerce/FailedPushPanel";
 import { CircuitBreakerAlert } from "@/components/woocommerce/CircuitBreakerAlert";
+import { VariationAuditAlert } from "@/components/woocommerce/VariationAuditAlert";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -115,6 +116,9 @@ const ChannelWooCommerce = () => {
 
         {/* Circuit Breaker Alert */}
         <CircuitBreakerAlert />
+
+        {/* Variation Audit Alert */}
+        {tenantId && <VariationAuditAlert tenantId={tenantId} />}
 
         {/* Stats */}
         <div className="grid gap-4 md:grid-cols-4">

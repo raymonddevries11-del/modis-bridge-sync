@@ -165,6 +165,17 @@ interface FieldChange {
   new_value: string | null;
 }
 
+interface VariationAudit {
+  product_sku: string;
+  woo_product_id: number;
+  total_variants: number;
+  created: number;
+  updated: number;
+  attr_fixes: number;
+  stock_fixes: number;
+  mis_mapped: Array<{ sku: string; expected: string; found: string }>;
+}
+
 // --- Ensure global attribute terms exist ---
 async function ensureMaatTerms(
   wooUrl: string, wooAuth: string, maatAttrId: number,
@@ -222,9 +233,21 @@ async function createOrUpdateVariations(
   wooUrl: string, wooAuth: string, wooProductId: number,
   pim: any, rateLimiter: AdaptiveRateLimiter, supabase: any, tenantId: string,
   maatAttrId: number | null = null
-): Promise<number> {
+): Promise<{ synced: number; audit: VariationAudit }> {
+  const audit: VariationAudit = {
+    product_sku: pim.sku,
+    woo_product_id: wooProductId,
+    total_variants: 0,
+    created: 0,
+    updated: 0,
+    attr_fixes: 0,
+    stock_fixes: 0,
+    mis_mapped: [] as Array<{ sku: string; expected: string; found: string }>,
+  };
+
   const activeVariants = (pim.variants || []).filter((v: any) => v.active);
-  if (activeVariants.length === 0) return 0;
+  audit.total_variants = activeVariants.length;
+  if (activeVariants.length === 0) return { synced: 0, audit };
 
   // --- PASS 1: Ensure all size terms exist in the global pa_maat attribute ---
   const sizeLabels = activeVariants.map((v: any) => v.size_label);
@@ -238,7 +261,7 @@ async function createOrUpdateVariations(
   const existingResult = await fetchWithRetry(existingUrl, { method: 'GET' }, rateLimiter);
   if (existingResult.blocked || !existingResult.json) {
     console.warn(`Could not fetch existing variations for WC #${wooProductId}`);
-    return 0;
+    return { synced: 0, audit };
   }
 
   const existingVariations: any[] = existingResult.json;
@@ -280,8 +303,7 @@ async function createOrUpdateVariations(
     }
 
     if (existing) {
-      // --- PASS 3b: Attribute mapping fix ---
-      // Always update if attribute is wrong (e.g. shows "Any Maat" or wrong size)
+      // --- PASS 3b: Attribute mapping audit + fix ---
       const existingMaatAttr = (existing.attributes || []).find(
         (a: any) => a.name === 'Maat' || a.name === 'pa_maat' || (maatAttrId && a.id === maatAttrId)
       );
@@ -289,10 +311,15 @@ async function createOrUpdateVariations(
       const stockMismatch = existing.stock_quantity !== stockQty;
       const priceMismatch = existing.regular_price !== regularPrice || (existing.sale_price || '') !== salePrice;
 
+      if (attrMismatch) {
+        const foundOption = existingMaatAttr?.option || '(leeg/Any)';
+        audit.mis_mapped.push({ sku: variantSku, expected: variant.size_label, found: foundOption });
+        audit.attr_fixes++;
+        console.log(`  Fix attr for ${variantSku}: "${foundOption}" → "${variant.size_label}"`);
+      }
+      if (stockMismatch) audit.stock_fixes++;
+
       if (attrMismatch || stockMismatch || priceMismatch) {
-        if (attrMismatch) {
-          console.log(`  Fix attr for ${variantSku}: "${existingMaatAttr?.option ?? 'ANY'}" → "${variant.size_label}"`);
-        }
         toUpdate.push({ id: existing.id, ...varData });
       }
     } else {
@@ -317,17 +344,17 @@ async function createOrUpdateVariations(
     } else if (batchResult.response.ok) {
       await recordSuccess(supabase);
       const createResponse = batchResult.json;
-      // Log any per-variation errors from the batch response
       if (createResponse?.create) {
         const errors = createResponse.create.filter((v: any) => v.error);
         if (errors.length > 0) {
           console.warn(`${errors.length} variation create errors:`, errors.map((e: any) => `${e.sku}: ${e.error?.message}`).join('; '));
         }
-        synced += createResponse.create.filter((v: any) => !v.error).length;
+        audit.created = createResponse.create.filter((v: any) => !v.error).length;
       } else {
-        synced += toCreate.length;
+        audit.created = toCreate.length;
       }
-      console.log(`✓ Created ${synced} variations for WC #${wooProductId}`);
+      synced += audit.created;
+      console.log(`✓ Created ${audit.created} variations for WC #${wooProductId}`);
     } else {
       console.error(`Variation batch create failed: ${batchResult.response.status} - ${batchResult.text.substring(0, 300)}`);
     }
@@ -346,18 +373,31 @@ async function createOrUpdateVariations(
       await recordBlock(supabase, tenantId);
     } else if (batchResult.response.ok) {
       await recordSuccess(supabase);
+      audit.updated = toUpdate.length;
       synced += toUpdate.length;
-      const attrFixes = toUpdate.filter(u => {
-        const ev = existingSkuMap.get(u.sku.toLowerCase());
-        const ea = (ev?.attributes || []).find((a: any) => a.name === 'Maat' || a.name === 'pa_maat');
-        return !ea || ea.option !== u.attributes[0]?.option;
-      }).length;
-      console.log(`✓ Updated ${toUpdate.length} variations for WC #${wooProductId} (${attrFixes} attr fixes)`);
+      console.log(`✓ Updated ${toUpdate.length} variations for WC #${wooProductId} (${audit.attr_fixes} attr fixes, ${audit.stock_fixes} stock fixes)`);
     }
   }
 
+  // --- PASS 4: Log audit to changelog if mis-mapped variations were found ---
+  if (audit.mis_mapped.length > 0) {
+    await supabase.from('changelog').insert({
+      tenant_id: tenantId,
+      event_type: 'VARIATION_ATTR_AUDIT',
+      description: `${audit.mis_mapped.length} mis-mapped variaties gevonden en gecorrigeerd voor ${pim.sku} (WC #${wooProductId})`,
+      metadata: {
+        product_sku: pim.sku,
+        woo_product_id: wooProductId,
+        mis_mapped: audit.mis_mapped.slice(0, 50),
+        attr_fixes: audit.attr_fixes,
+        stock_fixes: audit.stock_fixes,
+        total_variants: audit.total_variants,
+      },
+    });
+  }
+
   await rateLimiter.wait();
-  return synced;
+  return { synced, audit };
 }
 
 Deno.serve(async (req) => {
@@ -447,6 +487,7 @@ Deno.serve(async (req) => {
     }> = [];
 
     let sessionBlocks = 0;
+    const variationAudits: VariationAudit[] = [];
 
     for (const pim of pimProducts) {
       try {
@@ -637,10 +678,11 @@ Deno.serve(async (req) => {
 
             // --- Create variations for variable products ---
             if (created.type === 'variable' && pim.variants && pim.variants.length > 0) {
-              const varCreated = await createOrUpdateVariations(
+              const varResult = await createOrUpdateVariations(
                 config.woocommerce_url, wooAuth, created.id, pim, rateLimiter, supabase, tenantId, maatAttrId
               );
-              allChanges.push({ field: 'variations', old_value: null, new_value: `${varCreated} variaties aangemaakt` });
+              allChanges.push({ field: 'variations', old_value: null, new_value: `${varResult.synced} variaties aangemaakt` });
+              variationAudits.push(varResult.audit);
             }
 
             results.push({ sku: pim.sku, action: 'created', changes: allChanges, message: `Created WC #${created.id}` });
@@ -766,11 +808,12 @@ Deno.serve(async (req) => {
 
             // --- Sync variations for variable products after update ---
             if (updated.type === 'variable' && pim.variants && pim.variants.length > 0) {
-              const varSynced = await createOrUpdateVariations(
+              const varResult = await createOrUpdateVariations(
                 config.woocommerce_url, wooAuth, updated.id, pim, rateLimiter, supabase, tenantId, maatAttrId
               );
-              if (varSynced > 0) {
-                changes.push({ field: 'variations', old_value: null, new_value: `${varSynced} variaties gesynchroniseerd` });
+              variationAudits.push(varResult.audit);
+              if (varResult.synced > 0) {
+                changes.push({ field: 'variations', old_value: null, new_value: `${varResult.synced} variaties gesynchroniseerd (${varResult.audit.attr_fixes} attr fixes)` });
               }
             }
 
@@ -801,18 +844,45 @@ Deno.serve(async (req) => {
     const errors = results.filter(r => r.action === 'error').length;
     const skipped = results.filter(r => r.action === 'skipped').length;
 
+    // Aggregate variation audit
+    const totalAttrFixes = variationAudits.reduce((s, a) => s + a.attr_fixes, 0);
+    const totalStockFixes = variationAudits.reduce((s, a) => s + a.stock_fixes, 0);
+    const totalMisMapped = variationAudits.reduce((s, a) => s + a.mis_mapped.length, 0);
+    const totalVarCreated = variationAudits.reduce((s, a) => s + a.created, 0);
+    const totalVarUpdated = variationAudits.reduce((s, a) => s + a.updated, 0);
+
+    const variationAuditSummary = {
+      products_with_variations: variationAudits.length,
+      variations_created: totalVarCreated,
+      variations_updated: totalVarUpdated,
+      attr_fixes: totalAttrFixes,
+      stock_fixes: totalStockFixes,
+      mis_mapped_found: totalMisMapped,
+      mis_mapped_details: variationAudits.flatMap(a => a.mis_mapped).slice(0, 100),
+    };
+
     await supabase.from('changelog').insert({
       tenant_id: tenantId,
       event_type: 'WOO_PRODUCT_PUSH',
-      description: `Push naar WooCommerce: ${created} aangemaakt, ${updated} bijgewerkt, ${skipped} ongewijzigd, ${errors} fouten`,
-      metadata: { results: results.slice(0, 50), totals: { created, updated, skipped, errors }, session_blocks: sessionBlocks },
+      description: `Push naar WooCommerce: ${created} aangemaakt, ${updated} bijgewerkt, ${skipped} ongewijzigd, ${errors} fouten` +
+        (totalMisMapped > 0 ? ` | ${totalMisMapped} mis-mapped variaties gecorrigeerd` : ''),
+      metadata: {
+        results: results.slice(0, 50),
+        totals: { created, updated, skipped, errors },
+        session_blocks: sessionBlocks,
+        variation_audit: variationAuditSummary,
+      },
     });
 
     console.log(`Push complete: ${created} created, ${updated} updated, ${skipped} skipped, ${errors} errors`);
+    if (totalMisMapped > 0) {
+      console.warn(`⚠ ${totalMisMapped} mis-mapped variations detected and fixed across ${variationAudits.filter(a => a.mis_mapped.length > 0).length} products`);
+    }
 
     return new Response(JSON.stringify({
       success: true,
       totals: { created, updated, skipped, errors },
+      variation_audit: variationAuditSummary,
       results,
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
