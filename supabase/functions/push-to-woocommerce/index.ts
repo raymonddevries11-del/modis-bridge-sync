@@ -97,7 +97,14 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const wooProducts = await searchRes.json();
+        const searchText = await searchRes.text();
+        let wooProducts;
+        try {
+          wooProducts = JSON.parse(searchText);
+        } catch {
+          results.push({ sku: pim.sku, action: 'error', changes: [], message: 'WooCommerce returned HTML instead of JSON (bot protection)' });
+          continue;
+        }
         const prices = pim.product_prices as any;
         const brand = (pim.brands as any)?.name || null;
         const regularPrice = prices?.regular?.toString() || '';
@@ -291,10 +298,21 @@ Deno.serve(async (req) => {
             body: JSON.stringify(desiredData),
           });
 
+          const updateText = await updateRes.text();
+
           if (!updateRes.ok) {
-            results.push({ sku: pim.sku, action: 'error', changes, message: `Update failed: ${updateRes.status}` });
+            const errMsg = updateText.includes('<html') || updateText.includes('sgcapt')
+              ? 'Blocked by hosting bot protection'
+              : `Update failed: ${updateRes.status}`;
+            results.push({ sku: pim.sku, action: 'error', changes, message: errMsg });
           } else {
-            const updated = await updateRes.json();
+            let updated;
+            try {
+              updated = JSON.parse(updateText);
+            } catch {
+              results.push({ sku: pim.sku, action: 'error', changes, message: 'WooCommerce returned HTML instead of JSON (bot protection)' });
+              continue;
+            }
 
             await supabase.from('woo_products').upsert({
               tenant_id: tenantId,
