@@ -1015,6 +1015,96 @@ export type Database = {
           },
         ]
       }
+      woo_products: {
+        Row: {
+          categories: Json | null
+          created_at: string
+          id: string
+          images: Json | null
+          last_fetched_at: string | null
+          last_push_changes: Json | null
+          last_pushed_at: string | null
+          name: string
+          permalink: string | null
+          product_id: string | null
+          regular_price: string | null
+          sale_price: string | null
+          sku: string | null
+          slug: string | null
+          status: string | null
+          stock_quantity: number | null
+          stock_status: string | null
+          tags: Json | null
+          tenant_id: string
+          type: string | null
+          updated_at: string
+          woo_id: number
+        }
+        Insert: {
+          categories?: Json | null
+          created_at?: string
+          id?: string
+          images?: Json | null
+          last_fetched_at?: string | null
+          last_push_changes?: Json | null
+          last_pushed_at?: string | null
+          name: string
+          permalink?: string | null
+          product_id?: string | null
+          regular_price?: string | null
+          sale_price?: string | null
+          sku?: string | null
+          slug?: string | null
+          status?: string | null
+          stock_quantity?: number | null
+          stock_status?: string | null
+          tags?: Json | null
+          tenant_id: string
+          type?: string | null
+          updated_at?: string
+          woo_id: number
+        }
+        Update: {
+          categories?: Json | null
+          created_at?: string
+          id?: string
+          images?: Json | null
+          last_fetched_at?: string | null
+          last_push_changes?: Json | null
+          last_pushed_at?: string | null
+          name?: string
+          permalink?: string | null
+          product_id?: string | null
+          regular_price?: string | null
+          sale_price?: string | null
+          sku?: string | null
+          slug?: string | null
+          status?: string | null
+          stock_quantity?: number | null
+          stock_status?: string | null
+          tags?: Json | null
+          tenant_id?: string
+          type?: string | null
+          updated_at?: string
+          woo_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "woo_products_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "woo_products_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       xml_validation_logs: {
         Row: {
           created_at: string
