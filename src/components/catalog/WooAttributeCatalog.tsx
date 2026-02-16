@@ -9,7 +9,7 @@ import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Search, ChevronDown, ChevronRight, RefreshCw, Loader2, ChevronLeft, ChevronsLeft, ChevronsRight } from "lucide-react";
-import { TenantSelector } from "@/components/TenantSelector";
+
 
 interface WooAttribute {
   id: number;
@@ -22,8 +22,11 @@ interface WooAttribute {
 
 const PAGE_SIZE = 10;
 
-export function WooAttributeCatalog() {
-  const [tenantId, setTenantId] = useState("");
+interface WooAttributeCatalogProps {
+  tenantId: string;
+}
+
+export function WooAttributeCatalog({ tenantId }: WooAttributeCatalogProps) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [openAttrs, setOpenAttrs] = useState<Set<number>>(new Set());
@@ -75,7 +78,6 @@ export function WooAttributeCatalog() {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-3">
-          <TenantSelector value={tenantId} onChange={setTenantId} />
           <div className="relative flex-1 min-w-[200px] max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input

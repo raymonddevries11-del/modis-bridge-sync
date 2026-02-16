@@ -8,7 +8,11 @@ import { supabase } from "@/integrations/supabase/client";
 import { WooCategoryMappingsPanel } from "@/components/mappings/WooCategoryMappingsPanel";
 import { WooAttributeSync } from "@/components/mappings/WooAttributeSync";
 
+import { useState } from "react";
+import { TenantSelector } from "@/components/TenantSelector";
+
 const Mappings = () => {
+  const [tenantId, setTenantId] = useState("");
   const { data: attributeMappings } = useQuery({
     queryKey: ["attribute-mappings-count"],
     queryFn: async () => {
@@ -99,7 +103,7 @@ const Mappings = () => {
             <WooCategoryMappingsPanel />
           </TabsContent>
           <TabsContent value="attributes">
-            <WooAttributeSync />
+            <WooAttributeSync tenantId={tenantId} />
           </TabsContent>
         </Tabs>
       </div>
