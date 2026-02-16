@@ -165,6 +165,58 @@ interface FieldChange {
   new_value: string | null;
 }
 
+// --- Ensure global attribute terms exist ---
+async function ensureMaatTerms(
+  wooUrl: string, wooAuth: string, maatAttrId: number,
+  sizeLabels: string[], rateLimiter: AdaptiveRateLimiter
+): Promise<Map<string, number>> {
+  const termMap = new Map<string, number>();
+
+  // Fetch existing terms (paginate up to 200)
+  let page = 1;
+  let hasMore = true;
+  while (hasMore) {
+    const url = `${wooUrl}/wp-json/wc/v3/products/attributes/${maatAttrId}/terms?per_page=100&page=${page}&${wooAuth}`;
+    const res = await fetchWithRetry(url, { method: 'GET' }, rateLimiter);
+    if (res.blocked || !res.json || !Array.isArray(res.json)) break;
+    for (const t of res.json) {
+      termMap.set(t.name.toLowerCase(), t.id);
+    }
+    hasMore = res.json.length === 100;
+    page++;
+    await rateLimiter.wait();
+  }
+
+  // Register missing terms
+  const missing = sizeLabels.filter(s => !termMap.has(s.toLowerCase()));
+  for (const label of missing) {
+    const url = `${wooUrl}/wp-json/wc/v3/products/attributes/${maatAttrId}/terms?${wooAuth}`;
+    const res = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: label }),
+    }, rateLimiter);
+
+    if (!res.blocked && res.json?.id) {
+      termMap.set(label.toLowerCase(), res.json.id);
+      console.log(`✓ Registered Maat term: "${label}" (ID ${res.json.id})`);
+    } else if (res.json?.code === 'term_exists') {
+      // Term exists but wasn't found — extract ID from error data
+      const existingId = res.json?.data?.resource_id;
+      if (existingId) termMap.set(label.toLowerCase(), existingId);
+    } else {
+      console.warn(`Could not register Maat term "${label}": ${res.text?.substring(0, 150)}`);
+    }
+    await rateLimiter.wait();
+  }
+
+  if (missing.length > 0) {
+    console.log(`Maat terms: ${missing.length} registered, ${termMap.size} total`);
+  }
+
+  return termMap;
+}
+
 // --- Variation sync helper ---
 async function createOrUpdateVariations(
   wooUrl: string, wooAuth: string, wooProductId: number,
@@ -174,7 +226,14 @@ async function createOrUpdateVariations(
   const activeVariants = (pim.variants || []).filter((v: any) => v.active);
   if (activeVariants.length === 0) return 0;
 
-  // Fetch existing variations
+  // --- PASS 1: Ensure all size terms exist in the global pa_maat attribute ---
+  const sizeLabels = activeVariants.map((v: any) => v.size_label);
+  let termMap = new Map<string, number>();
+  if (maatAttrId) {
+    termMap = await ensureMaatTerms(wooUrl, wooAuth, maatAttrId, sizeLabels, rateLimiter);
+  }
+
+  // --- PASS 2: Fetch existing WooCommerce variations ---
   const existingUrl = `${wooUrl}/wp-json/wc/v3/products/${wooProductId}/variations?per_page=100&${wooAuth}`;
   const existingResult = await fetchWithRetry(existingUrl, { method: 'GET' }, rateLimiter);
   if (existingResult.blocked || !existingResult.json) {
@@ -195,11 +254,12 @@ async function createOrUpdateVariations(
   const toCreate: any[] = [];
   const toUpdate: any[] = [];
 
-  // Build attribute reference: use global attribute ID if available, otherwise slug
+  // Build attribute reference using global ID
   const attrRef = maatAttrId
     ? { id: maatAttrId }
     : { name: 'pa_maat' };
 
+  // --- PASS 3: Build create/update lists with per-variation attribute + stock ---
   for (const variant of activeVariants) {
     const variantSku = `${pim.sku}-${variant.maat_id}`;
     const stockQty = variant.stock_totals?.[0]?.qty ?? variant.stock_totals?.qty ?? 0;
@@ -220,13 +280,19 @@ async function createOrUpdateVariations(
     }
 
     if (existing) {
-      // Check if update needed
-      const needsUpdate =
-        existing.stock_quantity !== stockQty ||
-        existing.regular_price !== regularPrice ||
-        (existing.sale_price || '') !== salePrice;
+      // --- PASS 3b: Attribute mapping fix ---
+      // Always update if attribute is wrong (e.g. shows "Any Maat" or wrong size)
+      const existingMaatAttr = (existing.attributes || []).find(
+        (a: any) => a.name === 'Maat' || a.name === 'pa_maat' || (maatAttrId && a.id === maatAttrId)
+      );
+      const attrMismatch = !existingMaatAttr || existingMaatAttr.option !== variant.size_label;
+      const stockMismatch = existing.stock_quantity !== stockQty;
+      const priceMismatch = existing.regular_price !== regularPrice || (existing.sale_price || '') !== salePrice;
 
-      if (needsUpdate) {
+      if (attrMismatch || stockMismatch || priceMismatch) {
+        if (attrMismatch) {
+          console.log(`  Fix attr for ${variantSku}: "${existingMaatAttr?.option ?? 'ANY'}" → "${variant.size_label}"`);
+        }
         toUpdate.push({ id: existing.id, ...varData });
       }
     } else {
@@ -250,14 +316,24 @@ async function createOrUpdateVariations(
       console.warn(`Variation batch create blocked for WC #${wooProductId}`);
     } else if (batchResult.response.ok) {
       await recordSuccess(supabase);
-      synced += toCreate.length;
-      console.log(`✓ Created ${toCreate.length} variations for WC #${wooProductId}`);
+      const createResponse = batchResult.json;
+      // Log any per-variation errors from the batch response
+      if (createResponse?.create) {
+        const errors = createResponse.create.filter((v: any) => v.error);
+        if (errors.length > 0) {
+          console.warn(`${errors.length} variation create errors:`, errors.map((e: any) => `${e.sku}: ${e.error?.message}`).join('; '));
+        }
+        synced += createResponse.create.filter((v: any) => !v.error).length;
+      } else {
+        synced += toCreate.length;
+      }
+      console.log(`✓ Created ${synced} variations for WC #${wooProductId}`);
     } else {
-      console.error(`Variation batch create failed: ${batchResult.response.status} - ${batchResult.text.substring(0, 200)}`);
+      console.error(`Variation batch create failed: ${batchResult.response.status} - ${batchResult.text.substring(0, 300)}`);
     }
   }
 
-  // Batch update existing variations
+  // Batch update existing variations (includes attribute mapping fixes)
   if (toUpdate.length > 0) {
     const batchUrl = `${wooUrl}/wp-json/wc/v3/products/${wooProductId}/variations/batch?${wooAuth}`;
     const batchResult = await fetchWithRetry(batchUrl, {
@@ -271,7 +347,12 @@ async function createOrUpdateVariations(
     } else if (batchResult.response.ok) {
       await recordSuccess(supabase);
       synced += toUpdate.length;
-      console.log(`✓ Updated ${toUpdate.length} variations for WC #${wooProductId}`);
+      const attrFixes = toUpdate.filter(u => {
+        const ev = existingSkuMap.get(u.sku.toLowerCase());
+        const ea = (ev?.attributes || []).find((a: any) => a.name === 'Maat' || a.name === 'pa_maat');
+        return !ea || ea.option !== u.attributes[0]?.option;
+      }).length;
+      console.log(`✓ Updated ${toUpdate.length} variations for WC #${wooProductId} (${attrFixes} attr fixes)`);
     }
   }
 
