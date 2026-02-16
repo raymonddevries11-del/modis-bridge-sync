@@ -87,16 +87,22 @@ const ChannelWooCommerce = () => {
 
       const productIds = products.map(p => p.id);
       
-      // Create SYNC_TO_WOO job with all product IDs
-      const { error } = await supabase.from("jobs").insert({
-        type: "SYNC_TO_WOO",
-        state: "ready" as const,
-        payload: { productIds },
-        tenant_id: tenantId,
-      });
+      // Split into batches of 50 to avoid edge function timeouts
+      const BATCH_SIZE = 50;
+      const jobs = [];
+      for (let i = 0; i < productIds.length; i += BATCH_SIZE) {
+        jobs.push({
+          type: "SYNC_TO_WOO",
+          state: "ready" as const,
+          payload: { productIds: productIds.slice(i, i + BATCH_SIZE) },
+          tenant_id: tenantId,
+        });
+      }
+
+      const { error } = await supabase.from("jobs").insert(jobs);
       if (error) throw error;
       
-      toast.success(`Full sync job aangemaakt voor ${productIds.length} producten`, {
+      toast.success(`${jobs.length} sync jobs aangemaakt voor ${productIds.length} producten`, {
         action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") },
       });
       refetchStats();
