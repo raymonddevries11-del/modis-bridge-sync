@@ -611,9 +611,16 @@ Deno.serve(async (req) => {
         }
 
         const pimImages = Array.isArray(pim.images) ? pim.images : [];
+        const storageBaseUrl = `${Deno.env.get('SUPABASE_URL')}/storage/v1/object/public/product-images/`;
         const validImages = pimImages
           .map((img: any) => typeof img === 'string' ? img : img.url || img.src)
-          .filter((src: string) => src && (src.startsWith('http://') || src.startsWith('https://')));
+          .filter(Boolean)
+          .map((src: string) => {
+            // Already an absolute URL — use as-is
+            if (src.startsWith('http://') || src.startsWith('https://')) return src;
+            // Relative storage path (e.g. "modis/foto/W-1_233761001.JPG") — convert to public URL
+            return `${storageBaseUrl}${src}`;
+          });
         if (validImages.length > 0) {
           desiredData.images = validImages.map((src: string, idx: number) => ({
             src,
