@@ -71,6 +71,8 @@ Deno.serve(async (req) => {
       JSON.stringify({
         productId: product.id,
         sku: product.sku,
+        slug: product.slug,
+        permalink: product.permalink,
         type: product.type,
         status: product.status,
         attributes: product.attributes,
