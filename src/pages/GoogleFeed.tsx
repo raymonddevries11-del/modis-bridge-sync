@@ -13,11 +13,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { TenantSelector } from "@/components/TenantSelector";
-import { Rss, Copy, ExternalLink, Plus, Pencil, Trash2, AlertCircle, CheckCircle2, Loader2, CheckSquare, ImageOff } from "lucide-react";
+import { Rss, Copy, ExternalLink, Plus, Pencil, Trash2, AlertCircle, CheckCircle2, Loader2, CheckSquare, ImageOff, ShieldCheck } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { GoogleCategorySearch } from "@/components/GoogleCategorySearch";
 import { ImageQaReport } from "@/components/google-feed/ImageQaReport";
 import { WooUrlValidator } from "@/components/google-feed/WooUrlValidator";
+import { FeedValidator } from "@/components/google-feed/FeedValidator";
 
 interface ShippingRule {
   country: string;
@@ -342,6 +343,10 @@ const GoogleFeed = () => {
                 <ImageOff className="h-3.5 w-3.5 ml-1.5" />
               </TabsTrigger>
               <TabsTrigger value="url-validator">URL Validator</TabsTrigger>
+              <TabsTrigger value="feed-validator">
+                Feed Validator
+                <ShieldCheck className="h-3.5 w-3.5 ml-1.5" />
+              </TabsTrigger>
             </TabsList>
 
             {/* Config Tab */}
@@ -764,6 +769,11 @@ const GoogleFeed = () => {
             {/* URL Validator Tab */}
             <TabsContent value="url-validator">
               <WooUrlValidator tenantId={tenantId} />
+            </TabsContent>
+
+            {/* Feed Validator Tab */}
+            <TabsContent value="feed-validator">
+              <FeedValidator tenantId={tenantId} />
             </TabsContent>
           </Tabs>
         )}
