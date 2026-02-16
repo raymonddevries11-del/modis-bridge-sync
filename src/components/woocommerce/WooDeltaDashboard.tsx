@@ -27,6 +27,8 @@ const changeTypeConfig: Record<string, { label: string; color: string; icon: any
   content_change: { label: "Content", color: "bg-green-500/15 text-green-700 border-green-500/30", icon: Tag },
   image_change: { label: "Afbeeldingen", color: "bg-pink-500/15 text-pink-700 border-pink-500/30", icon: ImageIcon },
   new_product: { label: "Nieuw", color: "bg-success/15 text-success border-success/30", icon: Package },
+  push_create: { label: "Push (nieuw)", color: "bg-emerald-500/15 text-emerald-700 border-emerald-500/30", icon: Send },
+  push_update: { label: "Push (update)", color: "bg-cyan-500/15 text-cyan-700 border-cyan-500/30", icon: Send },
 };
 
 const fieldLabels: Record<string, string> = {
