@@ -36,11 +36,14 @@ async function uploadToWordPressMedia(
   imageUrl: string,
   supabase: any,
   wooBaseUrl: string,
-  wooAuth: string,
-  ck: string,
-  cs: string,
   rateLimiter: any,
 ): Promise<{ id: number; src: string } | null> {
+  const wpUser = Deno.env.get('WP_APP_USERNAME') || '';
+  const wpPass = Deno.env.get('WP_APP_PASSWORD') || '';
+  if (!wpUser || !wpPass) {
+    console.warn('WP_APP_USERNAME or WP_APP_PASSWORD not configured — skipping media upload');
+    return null;
+  }
   const storagePath = extractStoragePath(imageUrl);
   if (!storagePath) {
     console.warn(`Could not extract storage path from: ${imageUrl}`);
@@ -72,8 +75,7 @@ async function uploadToWordPressMedia(
 
     // Upload to WordPress Media Library using Basic Auth
     const mediaUrl = `${wooBaseUrl}/wp-json/wp/v2/media`;
-    const basicAuth = btoa(`${ck}:${cs}`);
-    
+    const basicAuth = btoa(`${wpUser}:${wpPass}`);
     if (rateLimiter) await rateLimiter.wait();
     
     const uploadResp = await fetch(mediaUrl, {
@@ -109,16 +111,13 @@ async function uploadImagesToWordPress(
   imageUrls: string[],
   supabase: any,
   wooBaseUrl: string,
-  wooAuth: string,
-  ck: string,
-  cs: string,
   rateLimiter: any,
 ): Promise<Array<{ id: number; src: string; position: number }>> {
   const results: Array<{ id: number; src: string; position: number }> = [];
   for (let i = 0; i < imageUrls.length; i++) {
     const url = imageUrls[i];
     if (isSupabaseStorageUrl(url)) {
-      const media = await uploadToWordPressMedia(url, supabase, wooBaseUrl, wooAuth, ck, cs, rateLimiter);
+      const media = await uploadToWordPressMedia(url, supabase, wooBaseUrl, rateLimiter);
       if (media) {
         results.push({ id: media.id, src: media.src, position: i });
       }
@@ -874,7 +873,7 @@ Deno.serve(async (req) => {
 
         // Upload Supabase storage images to WordPress Media Library to bypass SiteGround firewall
         if (validImages.length > 0) {
-          const wpImages = await uploadImagesToWordPress(validImages, supabase, config.woocommerce_url, wooAuth, config.woocommerce_consumer_key, config.woocommerce_consumer_secret, rateLimiter);
+          const wpImages = await uploadImagesToWordPress(validImages, supabase, config.woocommerce_url, rateLimiter);
           if (wpImages.length > 0) {
             desiredData.images = wpImages.map((img) => {
               // If we have a WP media ID, use it (WooCommerce will link directly)
