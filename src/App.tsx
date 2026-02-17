@@ -17,6 +17,7 @@ import Mappings from "./pages/Mappings";
 import ActivityPage from "./pages/ActivityPage";
 import Validation from "./pages/Validation";
 import CatalogData from "./pages/CatalogData";
+import ImageHealth from "./pages/ImageHealth";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -40,6 +41,7 @@ const App = () => (
           <Route path="/activity" element={<ProtectedRoute><ActivityPage /></ProtectedRoute>} />
           <Route path="/validation" element={<ProtectedRoute><Validation /></ProtectedRoute>} />
           <Route path="/catalog-data" element={<ProtectedRoute><CatalogData /></ProtectedRoute>} />
+          <Route path="/image-health" element={<ProtectedRoute><ImageHealth /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           {/* Legacy redirects */}
           <Route path="/google-feed" element={<Navigate to="/channels/google" replace />} />
