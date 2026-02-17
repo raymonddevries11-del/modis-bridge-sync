@@ -4,11 +4,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, Copy, Loader2 } from "lucide-react";
+import { Trash2, Copy, Loader2, Zap } from "lucide-react";
 import { useState } from "react";
 
 interface SftpFormData {
@@ -22,6 +23,128 @@ interface SftpFormData {
 
 interface ApiKeyFormData {
   name: string;
+}
+
+const WINDOW_OPTIONS = [
+  { value: '30', label: '30 seconds' },
+  { value: '60', label: '1 minute' },
+  { value: '120', label: '2 minutes' },
+  { value: '300', label: '5 minutes' },
+  { value: '600', label: '10 minutes' },
+];
+
+const BATCH_OPTIONS = [
+  { value: '10', label: '10 products' },
+  { value: '25', label: '25 products' },
+  { value: '50', label: '50 products' },
+  { value: '100', label: '100 products' },
+];
+
+function BatchSyncConfig() {
+  const queryClient = useQueryClient();
+  const { data: config, isLoading } = useQuery({
+    queryKey: ['settings', 'batch_sync_config'],
+    queryFn: async () => {
+      const { data, error } = await supabase.functions.invoke('settings', {
+        body: { action: 'get', key: 'batch_sync_config' },
+      });
+      if (error) throw error;
+      return (data as { window_seconds?: number; batch_size?: number }) || {};
+    },
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async (value: { window_seconds: number; batch_size: number }) => {
+      const { error } = await supabase.functions.invoke('settings', {
+        body: { action: 'save', key: 'batch_sync_config', value },
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast({ title: 'Batch sync config saved' });
+      queryClient.invalidateQueries({ queryKey: ['settings', 'batch_sync_config'] });
+    },
+    onError: (e: any) => {
+      toast({ title: 'Error saving config', description: e.message, variant: 'destructive' });
+    },
+  });
+
+  const drainMutation = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke('drain-pending-syncs');
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast({ title: `Drained ${data.drained} pending → ${data.jobs} jobs` });
+    },
+    onError: (e: any) => {
+      toast({ title: 'Error draining', description: e.message, variant: 'destructive' });
+    },
+  });
+
+  const windowSeconds = config?.window_seconds || 60;
+  const batchSize = config?.batch_size || 50;
+
+  if (isLoading) return <Card><CardContent className="p-6"><Loader2 className="h-5 w-5 animate-spin" /></CardContent></Card>;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Zap className="h-5 w-5" /> Batch Sync Configuration</CardTitle>
+        <CardDescription>
+          Price and stock changes are buffered and synced to WooCommerce in batches. Configure the batch window and size.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Batch Window</Label>
+            <Select
+              value={String(windowSeconds)}
+              onValueChange={(v) => saveMutation.mutate({ window_seconds: Number(v), batch_size: batchSize })}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {WINDOW_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Changes within this window are grouped into a single sync job.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>Batch Size</Label>
+            <Select
+              value={String(batchSize)}
+              onValueChange={(v) => saveMutation.mutate({ window_seconds: windowSeconds, batch_size: Number(v) })}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {BATCH_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Max products per sync job.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 pt-2 border-t">
+          <Button variant="outline" onClick={() => drainMutation.mutate()} disabled={drainMutation.isPending}>
+            {drainMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
+            Drain Pending Now
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Manually flush all pending changes into sync jobs.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 const Settings = () => {
@@ -144,11 +267,16 @@ const Settings = () => {
           </p>
         </div>
 
-        <Tabs defaultValue="sftp" className="space-y-4">
+        <Tabs defaultValue="sync" className="space-y-4">
           <TabsList>
+            <TabsTrigger value="sync">Sync</TabsTrigger>
             <TabsTrigger value="sftp">SFTP</TabsTrigger>
             <TabsTrigger value="api">API Keys</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="sync" className="space-y-4">
+            <BatchSyncConfig />
+          </TabsContent>
 
           <TabsContent value="sftp" className="space-y-4">
             <form onSubmit={sftpForm.handleSubmit((data) => saveSftpMutation.mutate(data))}>
