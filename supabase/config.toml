@@ -158,3 +158,6 @@ verify_jwt = false
 
 [functions.refresh-image-urls]
 verify_jwt = false
+
+[functions.attribute-mapping-report]
+verify_jwt = false
