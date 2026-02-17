@@ -905,13 +905,30 @@ Deno.serve(async (req) => {
         }
         if (attrs.length > 0) desiredData.attributes = attrs;
 
-        // Helper: merge PIM attributes with existing WooCommerce attributes (additive model)
+        // Helper: merge PIM attributes with existing WooCommerce attributes
+        // REPLACES local (id:0) attributes when a global (id>0) version exists with the same name
         function mergeAttributes(pimAttrs: any[], existingWooAttrs: any[]): any[] {
+          // Build a set of names that PIM pushes as global (id > 0)
+          const pimGlobalNames = new Set<string>();
+          for (const a of pimAttrs) {
+            if (a.id && a.id > 0) {
+              pimGlobalNames.add((a.name || '').toLowerCase());
+            }
+          }
+
           const merged = new Map<string, any>();
 
-          // First, add all existing WooCommerce attributes (preserves manually added ones)
+          // First, add existing WooCommerce attributes — but SKIP local (id:0) ones
+          // when PIM is pushing a global version with the same name
           for (const a of existingWooAttrs) {
-            const key = a.id > 0 ? `id:${a.id}` : `name:${(a.name || '').toLowerCase()}`;
+            const nameKey = (a.name || '').toLowerCase();
+            const isLocal = !a.id || a.id === 0;
+            if (isLocal && pimGlobalNames.has(nameKey)) {
+              // Drop the old local attribute — PIM's global version replaces it
+              console.log(`  Replacing local attr "${a.name}" (id:0) with global version`);
+              continue;
+            }
+            const key = a.id > 0 ? `id:${a.id}` : `name:${nameKey}`;
             merged.set(key, { ...a });
           }
 
