@@ -15,6 +15,7 @@ import {
 import { PushHealthWidget } from "@/components/woocommerce/PushHealthWidget";
 import { JobHealthWidget } from "@/components/dashboard/JobHealthWidget";
 import { RetryMonitorWidget } from "@/components/dashboard/RetryMonitorWidget";
+import { TriggerConflictAlert } from "@/components/dashboard/TriggerConflictAlert";
 
 // --- Helpers ---
 function timeAgo(dateStr: string): string {
@@ -258,6 +259,9 @@ const Dashboard = () => {
             ))}
           </div>
         )}
+
+        {/* Trigger Conflict Alert */}
+        <TriggerConflictAlert />
 
         {/* KPI Row */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

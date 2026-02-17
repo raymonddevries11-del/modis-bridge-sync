@@ -176,3 +176,6 @@ verify_jwt = false
 
 [functions.trigger-audit]
 verify_jwt = false
+
+[functions.trigger-conflict-check]
+verify_jwt = false
