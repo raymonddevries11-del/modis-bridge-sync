@@ -418,6 +418,7 @@ export type Database = {
           error: string | null
           id: string
           payload: Json
+          payload_hash: string | null
           state: Database["public"]["Enums"]["job_state"]
           tenant_id: string | null
           type: string
@@ -429,6 +430,7 @@ export type Database = {
           error?: string | null
           id?: string
           payload: Json
+          payload_hash?: string | null
           state?: Database["public"]["Enums"]["job_state"]
           tenant_id?: string | null
           type: string
@@ -440,6 +442,7 @@ export type Database = {
           error?: string | null
           id?: string
           payload?: Json
+          payload_hash?: string | null
           state?: Database["public"]["Enums"]["job_state"]
           tenant_id?: string | null
           type?: string
@@ -1340,6 +1343,7 @@ export type Database = {
     }
     Functions: {
       create_batch_sync_jobs: { Args: never; Returns: undefined }
+      dedupe_sync_jobs: { Args: never; Returns: number }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
