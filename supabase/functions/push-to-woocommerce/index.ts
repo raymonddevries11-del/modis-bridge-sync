@@ -748,6 +748,7 @@ Deno.serve(async (req) => {
     const attrMappingStats = { total_mapped: 0, total_unmapped: 0, terms_missing: 0, terms_failed_to_register: 0, terms_newly_registered: 0 };
     let totalTermFailures = 0; // running counter across all products
     const skippedProducts: Array<{ sku: string; reason: string }> = [];
+    const dedupAuditEntries: Array<{ sku: string; woo_id: number; removed: Array<{ name: string; id: number; options: string[] }> }> = [];
 
     for (const pim of pimProducts) {
       try {
@@ -1032,7 +1033,13 @@ Deno.serve(async (req) => {
 
         // Helper: merge PIM attributes with existing WooCommerce attributes
         // REPLACES local (id:0) attributes when a global (id>0) version exists with the same name
-        function mergeAttributes(pimAttrs: any[], existingWooAttrs: any[]): any[] {
+        // Returns merged array + deduplication stats
+        interface MergeResult {
+          attrs: any[];
+          removedDuplicates: Array<{ name: string; id: number; options: string[] }>;
+        }
+        function mergeAttributes(pimAttrs: any[], existingWooAttrs: any[]): MergeResult {
+          const removedDuplicates: Array<{ name: string; id: number; options: string[] }> = [];
           // Build a set of names that PIM pushes as global (id > 0)
           const pimGlobalNames = new Set<string>();
           for (const a of pimAttrs) {
@@ -1051,6 +1058,7 @@ Deno.serve(async (req) => {
             if (isLocal && pimGlobalNames.has(nameKey)) {
               // Drop the old local attribute — PIM's global version replaces it
               console.log(`  Replacing local attr "${a.name}" (id:0) with global version`);
+              removedDuplicates.push({ name: a.name || nameKey, id: a.id || 0, options: a.options || [] });
               continue;
             }
             const key = a.id > 0 ? `id:${a.id}` : `name:${nameKey}`;
@@ -1069,7 +1077,7 @@ Deno.serve(async (req) => {
           for (const attr of merged.values()) {
             result.push({ ...attr, position: pos++ });
           }
-          return result;
+          return { attrs: result, removedDuplicates };
         }
 
         if (!wooProducts || wooProducts.length === 0) {
@@ -1216,11 +1224,20 @@ Deno.serve(async (req) => {
           // Merge PIM attributes with existing WooCommerce attributes (additive model)
           const existingWooAttrs = woo.attributes || [];
           const pimAttrs = desiredData.attributes || [];
-          const mergedAttrs = mergeAttributes(pimAttrs, existingWooAttrs);
-          desiredData.attributes = mergedAttrs;
+          const mergeResult = mergeAttributes(pimAttrs, existingWooAttrs);
+          desiredData.attributes = mergeResult.attrs;
+
+          // Track dedup stats for post-push audit
+          if (mergeResult.removedDuplicates.length > 0) {
+            dedupAuditEntries.push({
+              sku: pim.sku,
+              woo_id: woo.id,
+              removed: mergeResult.removedDuplicates,
+            });
+          }
 
           const wooAttrKey = existingWooAttrs.map((a: any) => `${a.id || a.name}:${(a.options || []).sort().join(',')}`).sort().join('|');
-          const mergedAttrKey = mergedAttrs.map((a: any) => `${a.id || a.name}:${(a.options || []).sort().join(',')}`).sort().join('|');
+          const mergedAttrKey = mergeResult.attrs.map((a: any) => `${a.id || a.name}:${(a.options || []).sort().join(',')}`).sort().join('|');
           if (wooAttrKey !== mergedAttrKey) {
             changes.push({ field: 'attributes', old_value: wooAttrKey.substring(0, 100) || 'geen', new_value: mergedAttrKey.substring(0, 100) || 'geen' });
           }
@@ -1481,6 +1498,26 @@ Deno.serve(async (req) => {
         },
       },
     });
+
+    // Post-push deduplication audit log
+    if (dedupAuditEntries.length > 0) {
+      const totalRemoved = dedupAuditEntries.reduce((sum, e) => sum + e.removed.length, 0);
+      console.log(`🧹 Dedup audit: ${totalRemoved} local duplicate(s) removed across ${dedupAuditEntries.length} product(s)`);
+      await supabase.from('changelog').insert({
+        tenant_id: tenantId,
+        event_type: 'ATTR_DEDUP_AUDIT',
+        description: `Deduplicatie: ${totalRemoved} lokale duplicaten verwijderd bij ${dedupAuditEntries.length} product(en)`,
+        metadata: {
+          products_affected: dedupAuditEntries.length,
+          total_duplicates_removed: totalRemoved,
+          samples: dedupAuditEntries.slice(0, 20).map(e => ({
+            sku: e.sku,
+            woo_id: e.woo_id,
+            removed_attrs: e.removed.map(r => ({ name: r.name, options: r.options.slice(0, 3) })),
+          })),
+        },
+      });
+    }
 
     console.log(`Push complete: ${created} created, ${updated} updated, ${skipped} skipped, ${errors} errors`);
     if (skippedProducts.length > 0) {
