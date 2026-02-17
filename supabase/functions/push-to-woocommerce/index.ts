@@ -714,6 +714,7 @@ Deno.serve(async (req) => {
     const variationAudits: VariationAudit[] = [];
     // Collect attribute mapping diagnostics across all products
     const allUnmappedAttrs = new Map<string, { count: number; slug: string; sample_values: string[] }>();
+    const allTermMissingAttrs = new Map<string, { count: number; wc_id: number; wc_name: string; sample_values: string[] }>();
     const attrMappingStats = { total_mapped: 0, total_unmapped: 0, terms_missing: 0 };
 
     for (const pim of pimProducts) {
@@ -893,7 +894,18 @@ Deno.serve(async (req) => {
         }
         for (const ma of mappedAttrs) {
           attrMappingStats.total_mapped++;
-          if (!ma.term_id) attrMappingStats.terms_missing++;
+          if (!ma.term_id) {
+            attrMappingStats.terms_missing++;
+            const existing = allTermMissingAttrs.get(ma.key);
+            if (existing) {
+              existing.count++;
+              if (existing.sample_values.length < 5 && !existing.sample_values.includes(ma.value)) {
+                existing.sample_values.push(ma.value);
+              }
+            } else {
+              allTermMissingAttrs.set(ma.key, { count: 1, wc_id: ma.wc_id, wc_name: ma.wc_name, sample_values: [ma.value] });
+            }
+          }
         }
 
         // --- Per-product attribute mapping audit log ---
@@ -1350,20 +1362,36 @@ Deno.serve(async (req) => {
 
     // Attribute mapping audit
     const unmappedSummary = [...allUnmappedAttrs.entries()].map(([key, v]) => ({
-      attribute: key, slug: v.slug, products_affected: v.count, sample_values: v.sample_values,
+      attribute: key, slug: v.slug, wc_id: null, products_affected: v.count, sample_values: v.sample_values, issue: 'no_global_attribute',
+    }));
+    const termMissingSummary = [...allTermMissingAttrs.entries()].map(([key, v]) => ({
+      attribute: key, wc_id: v.wc_id, wc_name: v.wc_name, products_affected: v.count, sample_values: v.sample_values, issue: 'term_not_registered',
     }));
     const attrAudit = {
       ...attrMappingStats,
       unmapped_attributes: unmappedSummary,
+      terms_missing_attributes: termMissingSummary,
     };
 
-    // Log unmapped attributes as separate changelog event if any found
-    if (unmappedSummary.length > 0) {
+    // Log unmapped/term-missing attributes as separate changelog event for quick diagnostic
+    if (unmappedSummary.length > 0 || termMissingSummary.length > 0) {
+      const gapParts: string[] = [];
+      if (unmappedSummary.length > 0) {
+        gapParts.push(`${unmappedSummary.length} zonder global WC mapping: ${unmappedSummary.map(a => `"${a.attribute}" (${a.products_affected}x)`).join(', ')}`);
+      }
+      if (termMissingSummary.length > 0) {
+        gapParts.push(`${termMissingSummary.length} met WC ID maar zonder term: ${termMissingSummary.map(a => `"${a.attribute}" wc_id:${a.wc_id} (${a.products_affected}x, values: ${a.sample_values.join('/')})`).join(', ')}`);
+      }
       await supabase.from('changelog').insert({
         tenant_id: tenantId,
         event_type: 'WOO_ATTR_MAPPING_GAPS',
-        description: `${unmappedSummary.length} PIM-attributen zonder WC global mapping: ${unmappedSummary.map(a => `"${a.attribute}" (${a.products_affected}x)`).join(', ')}`,
-        metadata: { unmapped: unmappedSummary, stats: attrMappingStats },
+        description: gapParts.join(' | '),
+        metadata: {
+          unmapped: unmappedSummary,
+          terms_missing: termMissingSummary,
+          stats: attrMappingStats,
+          products_pushed: pimProducts.length,
+        },
       });
     }
 
