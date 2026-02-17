@@ -747,6 +747,7 @@ Deno.serve(async (req) => {
     const allTermMissingAttrs = new Map<string, { count: number; wc_id: number; wc_name: string; sample_values: string[] }>();
     const attrMappingStats = { total_mapped: 0, total_unmapped: 0, terms_missing: 0, terms_failed_to_register: 0, terms_newly_registered: 0 };
     let totalTermFailures = 0; // running counter across all products
+    const skippedProducts: Array<{ sku: string; reason: string }> = [];
 
     for (const pim of pimProducts) {
       try {
@@ -925,6 +926,22 @@ Deno.serve(async (req) => {
             attrs.push({ name: 'Merk', position: attrs.length, visible: true, variation: false, options: [brand] });
             unmappedAttrs.push({ key: 'Merk', value: brand, slug: 'merk' });
           }
+        }
+
+        // --- Pre-flight attribute consistency check: every attr MUST have a name ---
+        const invalidAttrs = attrs.filter((a, idx) => !a.name || typeof a.name !== 'string' || a.name.trim() === '');
+        if (invalidAttrs.length > 0) {
+          const details = invalidAttrs.map(a => `id:${a.id ?? 'none'} pos:${a.position} opts:${(a.options || []).join(',')}`).join('; ');
+          const errMsg = `[${pim.sku}] FAIL-FAST: ${invalidAttrs.length} attribute(s) missing 'name' field — ${details}`;
+          console.error(`✗ ${errMsg}`);
+          await supabase.from('changelog').insert({
+            tenant_id: tenantId,
+            event_type: 'ATTR_CONSISTENCY_FAIL',
+            description: `Consistentiecheck gefaald voor ${pim.sku}: ${invalidAttrs.length} attribu(u)t(en) zonder naam`,
+            metadata: { sku: pim.sku, invalid_attrs: invalidAttrs, all_attrs_count: attrs.length },
+          });
+          skippedProducts.push({ sku: pim.sku, reason: errMsg });
+          continue; // Skip this product entirely
         }
 
         // Aggregate attribute mapping diagnostics
@@ -1466,6 +1483,10 @@ Deno.serve(async (req) => {
     });
 
     console.log(`Push complete: ${created} created, ${updated} updated, ${skipped} skipped, ${errors} errors`);
+    if (skippedProducts.length > 0) {
+      console.warn(`⚠ ${skippedProducts.length} product(s) SKIPPED due to attribute consistency failures:`);
+      for (const sp of skippedProducts) console.warn(`  → ${sp.sku}: ${sp.reason}`);
+    }
     console.log(`Term summary: ${attrMappingStats.terms_missing} missing, ${attrMappingStats.terms_failed_to_register} failed to register, ${attrMappingStats.terms_newly_registered} newly registered`);
     if (totalMisMapped > 0) {
       console.warn(`⚠ ${totalMisMapped} mis-mapped variations detected and fixed across ${variationAudits.filter(a => a.mis_mapped.length > 0).length} products`);
@@ -1480,6 +1501,7 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({
       success: true,
       totals: { created, updated, skipped, errors },
+      consistency_skipped: skippedProducts,
       variation_audit: variationAuditSummary,
       attribute_audit: attrAudit,
       results,
