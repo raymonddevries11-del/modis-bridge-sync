@@ -177,12 +177,20 @@ jobs:
               let errors = 0;
               let skipped = 0;
 
-              for (let i = 0; i < toProcess.length; i++) {
-                const imageName = toProcess[i];
+              const MAX_RETRIES = 3;
+              const failedImages = [];
 
+              async function uploadWithRetry(imageName, attempt = 1) {
                 try {
                   const imagePath = `${webfotoPath}/${imageName}`;
                   const imageBuffer = await sftp.get(imagePath);
+
+                  // Skip files > 50MB to avoid 413 errors
+                  if (imageBuffer.length > 50 * 1024 * 1024) {
+                    console.warn(`⚠ Skipping ${imageName}: too large (${(imageBuffer.length / 1024 / 1024).toFixed(1)}MB)`);
+                    skipped++;
+                    return;
+                  }
 
                   const uploadResponse = await fetch(
                     `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${encodeURIComponent(imageName)}`,
@@ -199,23 +207,55 @@ jobs:
 
                   if (uploadResponse.ok) {
                     uploaded++;
-                  } else if (uploadResponse.status === 409) {
-                    skipped++; // already exists
-                  } else {
-                    errors++;
-                    if (errors <= 10) {
-                      const errText = await uploadResponse.text();
-                      console.error(`✗ Upload failed ${imageName}: ${uploadResponse.status} - ${errText}`);
-                    }
+                    return;
                   }
-                } catch (error) {
-                  errors++;
-                  if (errors <= 10) console.error(`✗ Error ${imageName}: ${error.message}`);
-                }
 
-                // Progress every 100 files
-                if ((i + 1) % 100 === 0 || i === toProcess.length - 1) {
-                  console.log(`Progress: ${i + 1}/${toProcess.length} (uploaded: ${uploaded}, skipped: ${skipped}, errors: ${errors})`);
+                  if (uploadResponse.status === 409) {
+                    skipped++; // already exists — not an error
+                    return;
+                  }
+
+                  if (uploadResponse.status === 413) {
+                    console.warn(`⚠ Skipping ${imageName}: payload too large (413)`);
+                    skipped++;
+                    return;
+                  }
+
+                  // Retryable error
+                  const errText = await uploadResponse.text();
+                  if (attempt < MAX_RETRIES) {
+                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+                    console.warn(`⚠ Retry ${attempt}/${MAX_RETRIES} for ${imageName} in ${delay}ms (${uploadResponse.status})`);
+                    await new Promise(r => setTimeout(r, delay));
+                    return uploadWithRetry(imageName, attempt + 1);
+                  }
+
+                  errors++;
+                  failedImages.push({ name: imageName, status: uploadResponse.status, error: errText.slice(0, 100) });
+                  if (errors <= 20) console.error(`✗ Upload failed ${imageName} after ${MAX_RETRIES} attempts: ${uploadResponse.status}`);
+                } catch (error) {
+                  if (attempt < MAX_RETRIES) {
+                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+                    console.warn(`⚠ Retry ${attempt}/${MAX_RETRIES} for ${imageName} in ${delay}ms (${error.message})`);
+                    await new Promise(r => setTimeout(r, delay));
+                    return uploadWithRetry(imageName, attempt + 1);
+                  }
+                  errors++;
+                  failedImages.push({ name: imageName, status: 0, error: error.message.slice(0, 100) });
+                  if (errors <= 20) console.error(`✗ Error ${imageName} after ${MAX_RETRIES} attempts: ${error.message}`);
+                }
+              }
+
+              // Process in batches
+              const UPLOAD_BATCH = 10;
+              for (let i = 0; i < toProcess.length; i += UPLOAD_BATCH) {
+                const batch = toProcess.slice(i, i + UPLOAD_BATCH);
+                await Promise.all(batch.map(name => uploadWithRetry(name)));
+
+                // Progress every batch
+                const done = Math.min(i + UPLOAD_BATCH, toProcess.length);
+                if (done % 50 === 0 || done === toProcess.length) {
+                  console.log(`Progress: ${done}/${toProcess.length} (uploaded: ${uploaded}, skipped: ${skipped}, errors: ${errors})`);
                 }
               }
 
@@ -223,8 +263,16 @@ jobs:
               console.log(`Total on SFTP: ${imageFiles.length}`);
               console.log(`Already in Storage: ${imageFiles.length - missingImages.length}`);
               console.log(`Uploaded: ${uploaded}`);
-              console.log(`Skipped (409): ${skipped}`);
-              console.log(`Errors: ${errors}`);
+              console.log(`Skipped (409/413/large): ${skipped}`);
+              console.log(`Errors (after ${MAX_RETRIES} retries): ${errors}`);
+
+              if (failedImages.length > 0) {
+                console.log(`\n=== Failed Images (${failedImages.length}) ===`);
+                failedImages.slice(0, 30).forEach(f => {
+                  console.log(`  ${f.name} — status: ${f.status}, error: ${f.error}`);
+                });
+                if (failedImages.length > 30) console.log(`  ... and ${failedImages.length - 30} more`);
+              }
 
               await sftp.end();
 
