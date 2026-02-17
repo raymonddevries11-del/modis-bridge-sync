@@ -5,9 +5,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// --- Base64 image conversion for Supabase storage URLs ---
+// --- WordPress Media Upload for Supabase storage images ---
 // SiteGround's firewall blocks WooCommerce from fetching Supabase storage URLs.
-// We download images server-side and convert to data URLs so WooCommerce can sideload them.
+// We download images server-side and upload them directly to WordPress Media Library,
+// then use the WP media ID in the product update.
 
 const MIME_TYPES: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
@@ -16,12 +17,11 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 function isSupabaseStorageUrl(url: string): boolean {
-  return url.includes('supabase.co/storage') || url.includes('supabase.co/storage');
+  return url.includes('supabase.co/storage');
 }
 
 /**
  * Extract the storage path from a full Supabase storage URL.
- * E.g. "https://xxx.supabase.co/storage/v1/object/public/product-images/foto.JPG" → "foto.JPG"
  */
 function extractStoragePath(url: string): string | null {
   const match = url.match(/\/storage\/v1\/object\/public\/product-images\/(.+)$/);
@@ -29,14 +29,22 @@ function extractStoragePath(url: string): string | null {
 }
 
 /**
- * Download an image from Supabase Storage and return it as a base64 data URL.
- * Falls back to original URL on failure so the sync can continue.
+ * Upload an image to WordPress Media Library via REST API.
+ * Returns { id, src } on success, or null on failure.
  */
-async function convertToDataUrl(imageUrl: string, supabase: any): Promise<string> {
+async function uploadToWordPressMedia(
+  imageUrl: string,
+  supabase: any,
+  wooBaseUrl: string,
+  wooAuth: string,
+  ck: string,
+  cs: string,
+  rateLimiter: any,
+): Promise<{ id: number; src: string } | null> {
   const storagePath = extractStoragePath(imageUrl);
   if (!storagePath) {
     console.warn(`Could not extract storage path from: ${imageUrl}`);
-    return imageUrl; // fallback to original URL
+    return null;
   }
 
   try {
@@ -46,46 +54,77 @@ async function convertToDataUrl(imageUrl: string, supabase: any): Promise<string
 
     if (error || !fileData) {
       console.warn(`Failed to download ${storagePath}: ${error?.message}`);
-      return imageUrl;
+      return null;
     }
 
     const arrayBuffer = await fileData.arrayBuffer();
     const bytes = new Uint8Array(arrayBuffer);
 
-    // Skip very large images (>5MB) to avoid memory issues
+    // Skip very large images (>5MB)
     if (bytes.length > 5 * 1024 * 1024) {
-      console.warn(`Image too large for base64 conversion (${(bytes.length / 1024 / 1024).toFixed(1)}MB): ${storagePath}`);
-      return imageUrl;
+      console.warn(`Image too large (${(bytes.length / 1024 / 1024).toFixed(1)}MB): ${storagePath}`);
+      return null;
     }
 
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    const filename = storagePath.split('/').pop() || 'image.jpg';
+    const ext = filename.split('.').pop()?.toLowerCase() || 'jpg';
+    const mimeType = MIME_TYPES[ext] || MIME_TYPES[ext.toUpperCase()] || 'image/jpeg';
+
+    // Upload to WordPress Media Library using Basic Auth
+    const mediaUrl = `${wooBaseUrl}/wp-json/wp/v2/media`;
+    const basicAuth = btoa(`${ck}:${cs}`);
+    
+    if (rateLimiter) await rateLimiter.wait();
+    
+    const uploadResp = await fetch(mediaUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${basicAuth}`,
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Type': mimeType,
+      },
+      body: bytes,
+    });
+
+    if (!uploadResp.ok) {
+      const errText = await uploadResp.text().catch(() => '');
+      console.warn(`WP media upload failed for ${filename} (${uploadResp.status}): ${errText.substring(0, 200)}`);
+      return null;
     }
-    const base64 = btoa(binary);
 
-    const ext = storagePath.split('.').pop() || 'jpg';
-    const mimeType = MIME_TYPES[ext] || 'image/jpeg';
-
-    console.log(`✓ Converted ${storagePath} to data URL (${(bytes.length / 1024).toFixed(0)}KB)`);
-    return `data:${mimeType};base64,${base64}`;
+    const media = await uploadResp.json();
+    console.log(`✓ Uploaded ${filename} to WP media (ID: ${media.id}, ${(bytes.length / 1024).toFixed(0)}KB)`);
+    return { id: media.id, src: media.source_url || media.guid?.rendered || '' };
   } catch (err) {
-    console.warn(`Base64 conversion failed for ${storagePath}:`, err);
-    return imageUrl; // fallback
+    console.warn(`WP media upload failed for ${storagePath}:`, err);
+    return null;
   }
 }
 
 /**
- * Process an array of image URLs: convert Supabase storage URLs to base64 data URLs,
- * leave other URLs as-is.
+ * Process images: upload Supabase storage images to WP Media Library.
+ * Returns array of { id, src, position } objects for WooCommerce product API.
  */
-async function convertImagesToDataUrls(imageUrls: string[], supabase: any): Promise<string[]> {
-  const results: string[] = [];
-  for (const url of imageUrls) {
+async function uploadImagesToWordPress(
+  imageUrls: string[],
+  supabase: any,
+  wooBaseUrl: string,
+  wooAuth: string,
+  ck: string,
+  cs: string,
+  rateLimiter: any,
+): Promise<Array<{ id: number; src: string; position: number }>> {
+  const results: Array<{ id: number; src: string; position: number }> = [];
+  for (let i = 0; i < imageUrls.length; i++) {
+    const url = imageUrls[i];
     if (isSupabaseStorageUrl(url)) {
-      results.push(await convertToDataUrl(url, supabase));
+      const media = await uploadToWordPressMedia(url, supabase, wooBaseUrl, wooAuth, ck, cs, rateLimiter);
+      if (media) {
+        results.push({ id: media.id, src: media.src, position: i });
+      }
     } else {
-      results.push(url);
+      // External URL — pass through for WooCommerce to sideload
+      results.push({ id: 0, src: url, position: i });
     }
   }
   return results;
@@ -833,13 +872,19 @@ Deno.serve(async (req) => {
             return `${storageBaseUrl}${src}`;
           });
 
-        // Convert Supabase storage URLs to base64 data URLs to bypass SiteGround firewall
+        // Upload Supabase storage images to WordPress Media Library to bypass SiteGround firewall
         if (validImages.length > 0) {
-          validImages = await convertImagesToDataUrls(validImages, supabase);
-          desiredData.images = validImages.map((src: string, idx: number) => ({
-            src,
-            position: idx,
-          }));
+          const wpImages = await uploadImagesToWordPress(validImages, supabase, config.woocommerce_url, wooAuth, config.woocommerce_consumer_key, config.woocommerce_consumer_secret, rateLimiter);
+          if (wpImages.length > 0) {
+            desiredData.images = wpImages.map((img) => {
+              // If we have a WP media ID, use it (WooCommerce will link directly)
+              // Otherwise fall back to src URL for sideloading
+              if (img.id > 0) {
+                return { id: img.id, position: img.position };
+              }
+              return { src: img.src, position: img.position };
+            });
+          }
         }
 
         const attrs: any[] = [];
