@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Send, RefreshCw, CheckCircle2, Link2, Globe, Loader2, Package, ArrowUpDown, Unlink, AlertTriangle, Trash2 } from "lucide-react";
+import { Send, RefreshCw, CheckCircle2, Link2, Globe, Loader2, Package, ArrowUpDown, Unlink, AlertTriangle, Trash2, Image } from "lucide-react";
 import { TenantSelector } from "@/components/TenantSelector";
 import { UrlKeyAudit } from "@/components/woocommerce/UrlKeyAudit";
 import { WooProductTable } from "@/components/woocommerce/WooProductTable";
@@ -11,6 +11,7 @@ import { WooLinkStatus } from "@/components/woocommerce/WooLinkStatus";
 import { FailedPushPanel } from "@/components/woocommerce/FailedPushPanel";
 import { CircuitBreakerAlert } from "@/components/woocommerce/CircuitBreakerAlert";
 import { VariationAuditAlert } from "@/components/woocommerce/VariationAuditAlert";
+import { ImageSyncDashboard } from "@/components/woocommerce/ImageSyncDashboard";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -200,6 +201,10 @@ const ChannelWooCommerce = () => {
               <AlertTriangle className="h-3.5 w-3.5" />
               Mislukte Pushes
             </TabsTrigger>
+            <TabsTrigger value="image-sync" className="flex items-center gap-1.5">
+              <Image className="h-3.5 w-3.5" />
+              Image Sync
+            </TabsTrigger>
             <TabsTrigger value="actions">Acties & Tools</TabsTrigger>
           </TabsList>
 
@@ -269,6 +274,20 @@ const ChannelWooCommerce = () => {
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="image-sync">
+            {tenantId ? (
+              <ImageSyncDashboard tenantId={tenantId} />
+            ) : (
+              <Card className="card-elevated">
+                <CardContent className="py-8">
+                  <p className="text-sm text-muted-foreground text-center">
+                    Selecteer een tenant om de image sync status te bekijken.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
           <TabsContent value="actions" className="space-y-4">
