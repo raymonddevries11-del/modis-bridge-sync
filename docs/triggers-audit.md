@@ -115,3 +115,23 @@ No other functions or triggers should write sync jobs for these tables.
 3. **Include backpressure** — check queue size before inserting into `jobs`; fall back to `pending_product_syncs`
 4. **Use `pending_product_syncs`** for high-frequency changes (stock, price) — let the scheduler batch them
 5. **Test with `SELECT * FROM pg_trigger WHERE tgrelid = 'table_name'::regclass`** to verify no duplicate triggers exist before adding new ones
+
+---
+
+## CI Guardrail
+
+A GitHub Actions workflow (`.github/workflows/validate-triggers.yml`) runs automatically on any push or PR that modifies `supabase/migrations/`. It performs two checks:
+
+1. **Static analysis**: Scans SQL files for `CREATE TRIGGER` + `INSERT INTO jobs` patterns and flags conflicts between migration files
+2. **Runtime validation**: Calls `validate_no_duplicate_triggers()` DB function to verify no duplicates exist in the live database
+
+The DB function `validate_no_duplicate_triggers()` detects:
+- Tables with multiple triggers writing to `jobs` (`duplicate_job_writer`)
+- Tables with multiple triggers writing to `pending_product_syncs` (`duplicate_pending_writer`)
+- Triggers writing to `jobs` without idempotent insert (`missing_idempotent_insert`)
+
+The companion `assert_no_trigger_violations()` raises an exception if any violations exist, usable in migration scripts:
+```sql
+-- Add at the end of any migration that creates triggers:
+SELECT assert_no_trigger_violations();
+```

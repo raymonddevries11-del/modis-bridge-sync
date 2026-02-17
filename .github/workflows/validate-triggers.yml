@@ -1,0 +1,107 @@
+name: Validate Trigger Guardrails
+
+on:
+  push:
+    paths:
+      - 'supabase/migrations/**'
+  pull_request:
+    paths:
+      - 'supabase/migrations/**'
+
+jobs:
+  validate-triggers:
+    name: Check for duplicate triggers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Step 1: Static analysis — scan migration SQL for risky patterns
+      - name: Static scan for trigger creation
+        run: |
+          echo "🔍 Scanning migration files for trigger patterns..."
+          
+          VIOLATIONS=0
+          
+          # Find all migration files that create triggers
+          for f in supabase/migrations/*.sql; do
+            [ -f "$f" ] || continue
+            
+            # Check if file creates a trigger that writes to jobs
+            if grep -qi "CREATE TRIGGER" "$f" && grep -qi "INSERT INTO jobs" "$f"; then
+              TABLE=$(grep -oi "ON public\.\w\+" "$f" | head -1 | sed 's/ON public\.//i')
+              TRIGGER=$(grep -oi "CREATE TRIGGER \w\+" "$f" | head -1 | sed 's/CREATE TRIGGER //i')
+              
+              echo "⚠️  Migration $f creates trigger '$TRIGGER' on '$TABLE' that writes to jobs"
+              echo "   → Verify this doesn't duplicate an existing trigger on the same table"
+              
+              # Check if another migration already has a trigger on the same table writing to jobs
+              EXISTING=$(grep -rl "CREATE TRIGGER.*ON public\.${TABLE}" supabase/migrations/*.sql 2>/dev/null | grep -v "$f" || true)
+              if [ -n "$EXISTING" ]; then
+                echo "❌ CONFLICT: Another migration already creates a trigger on '${TABLE}':"
+                echo "   $EXISTING"
+                VIOLATIONS=$((VIOLATIONS + 1))
+              fi
+            fi
+            
+            # Check if trigger function lacks idempotent insert
+            if grep -qi "CREATE.*FUNCTION.*trigger" "$f" && grep -qi "INSERT INTO jobs" "$f"; then
+              if ! grep -qi "unique_violation\|ON CONFLICT" "$f"; then
+                echo "⚠️  Migration $f creates a trigger function writing to jobs WITHOUT idempotent insert"
+                VIOLATIONS=$((VIOLATIONS + 1))
+              fi
+            fi
+          done
+          
+          if [ $VIOLATIONS -gt 0 ]; then
+            echo ""
+            echo "❌ Found $VIOLATIONS trigger guardrail violation(s)"
+            echo "   See docs/triggers-audit.md for guidelines"
+            exit 1
+          fi
+          
+          echo "✅ No trigger conflicts detected in migration files"
+
+      # Step 2: Runtime validation — call the DB function post-migration
+      - name: Validate triggers in database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "⚠️  Skipping runtime validation — SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set"
+            exit 0
+          fi
+          
+          echo "🔍 Running runtime trigger validation..."
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            "${SUPABASE_URL}/rest/v1/rpc/validate_no_duplicate_triggers" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{}')
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Failed to run trigger validation (HTTP $HTTP_CODE)"
+            echo "$BODY"
+            exit 1
+          fi
+          
+          # Check if any violations returned
+          VIOLATION_COUNT=$(echo "$BODY" | python3 -c "import sys,json; data=json.load(sys.stdin); print(len(data))" 2>/dev/null || echo "0")
+          
+          if [ "$VIOLATION_COUNT" -gt 0 ]; then
+            echo "❌ TRIGGER GUARDRAIL FAILED: $VIOLATION_COUNT violation(s) found:"
+            echo "$BODY" | python3 -c "
+          import sys, json
+          for v in json.load(sys.stdin):
+              print(f\"  • {v['violation_type']} on {v['table_name']}: {', '.join(v['trigger_names'])}\")
+          " 2>/dev/null || echo "$BODY"
+            exit 1
+          fi
+          
+          echo "✅ Runtime trigger validation passed — no duplicate triggers in database"
