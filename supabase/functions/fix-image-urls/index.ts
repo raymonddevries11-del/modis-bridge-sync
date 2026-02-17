@@ -27,23 +27,41 @@ Deno.serve(async (req) => {
     if (!tenant) throw new Error('Tenant not found');
 
     // Pre-fetch list of files in storage bucket (paginated, up to 10000)
-    const bucketFiles = new Set<string>();
-    let bucketOffset = 0;
-    while (true) {
-      const { data: files } = await supabase.storage
-        .from('product-images')
-        .list('', { limit: 1000, offset: bucketOffset });
-      if (!files || files.length === 0) break;
-      for (const f of files) {
-        bucketFiles.add(f.name);
-        // Also add lowercase version for case-insensitive matching
-        bucketFiles.add(f.name.toLowerCase());
+    // Maps lowercase filename -> actual storage path (for case-insensitive matching)
+    const bucketFileMap = new Map<string, string>();
+    
+    // Helper to list all files in a directory
+    async function listBucketDir(dir: string) {
+      let dirOffset = 0;
+      while (true) {
+        const { data: files } = await supabase.storage
+          .from('product-images')
+          .list(dir, { limit: 1000, offset: dirOffset });
+        if (!files || files.length === 0) break;
+        for (const f of files) {
+          if (!f.name || !f.name.includes('.')) continue; // skip subdirs
+          const fullPath = dir ? `${dir}/${f.name}` : f.name;
+          const justFilename = f.name.toLowerCase();
+          // Store mapping: lowercase filename -> full storage path
+          // Root-level files take priority over subdirectory files
+          if (!dir) {
+            bucketFileMap.set(justFilename, fullPath);
+          } else if (!bucketFileMap.has(justFilename)) {
+            bucketFileMap.set(justFilename, fullPath);
+          }
+        }
+        if (files.length < 1000) break;
+        dirOffset += 1000;
       }
-      if (files.length < 1000) break;
-      bucketOffset += 1000;
     }
+    
+    // List root AND modis/foto/ subdirectory
+    await Promise.all([
+      listBucketDir(''),
+      listBucketDir('modis/foto'),
+    ]);
 
-    console.log(`Loaded ${bucketFiles.size / 2} files from storage bucket`);
+    console.log(`Loaded ${bucketFileMap.size} unique filenames from storage bucket`);
 
     // Get products in this chunk
     const { data: batch, error: batchError } = await supabase
@@ -104,15 +122,13 @@ Deno.serve(async (req) => {
             const trimmed = path.trim();
             if (!trimmed) continue;
             filename = trimmed.split('/').pop() || trimmed;
-            const found = bucketFiles.has(filename) || bucketFiles.has(filename.toLowerCase());
-            if (found) {
-              // Use the actual filename (preserve case from bucket)
-              const actualName = bucketFiles.has(filename) ? filename : filename;
-              newImages.push(`${storageBase}${actualName}`);
+            const lookupKey = filename.toLowerCase();
+            const storagePath = bucketFileMap.get(lookupKey);
+            if (storagePath) {
+              newImages.push(`${storageBase}${storagePath}`);
               convertedUrls++;
               changed = true;
             } else {
-              // Keep original if not in bucket
               newImages.push(img);
               notFoundInBucket++;
               if (notFoundSamples.length < 10) notFoundSamples.push(filename);
@@ -134,27 +150,14 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Check if file exists in bucket (try original and uppercase JPG variants)
-        const variants = [
-          filename,
-          filename.replace('.jpg', '.JPG'),
-          filename.replace('.JPG', '.jpg'),
-          filename.replace('.jpeg', '.JPG'),
-          filename.replace('.png', '.PNG'),
-        ];
-
-        let found = false;
-        for (const variant of variants) {
-          if (bucketFiles.has(variant)) {
-            newImages.push(`${storageBase}${variant}`);
-            convertedUrls++;
-            changed = true;
-            found = true;
-            break;
-          }
-        }
-
-        if (!found) {
+        // Check if file exists in bucket using case-insensitive lookup
+        const lookupKey = filename.toLowerCase();
+        const storagePath = bucketFileMap.get(lookupKey);
+        if (storagePath) {
+          newImages.push(`${storageBase}${storagePath}`);
+          convertedUrls++;
+          changed = true;
+        } else {
           newImages.push(img); // Keep original
           notFoundInBucket++;
           if (notFoundSamples.length < 10) notFoundSamples.push(filename);
@@ -193,7 +196,7 @@ Deno.serve(async (req) => {
         notFoundSamples,
         totalInChunk: batch.length,
         externalInChunk: toFix.length,
-        bucketFileCount: bucketFiles.size / 2,
+        bucketFileCount: bucketFileMap.size,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
