@@ -173,3 +173,6 @@ verify_jwt = false
 
 [functions.retry-monitor]
 verify_jwt = false
+
+[functions.trigger-audit]
+verify_jwt = false

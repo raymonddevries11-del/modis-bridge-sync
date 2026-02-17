@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ClipboardCheck,
   Image,
+  ScanSearch,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
@@ -65,6 +66,7 @@ const navGroups: NavGroup[] = [
     label: "Activity",
     items: [
       { name: "Jobs & Logs", href: "/activity", icon: Activity },
+      { name: "Trigger Audit", href: "/trigger-audit", icon: ScanSearch },
     ],
   },
 ];
