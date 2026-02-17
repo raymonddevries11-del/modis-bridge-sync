@@ -164,3 +164,9 @@ verify_jwt = false
 
 [functions.auto-fix-images]
 verify_jwt = false
+
+[functions.woo-media-webhook]
+verify_jwt = false
+
+[functions.retry-image-sync]
+verify_jwt = false
