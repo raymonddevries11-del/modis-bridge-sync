@@ -845,6 +845,7 @@ Deno.serve(async (req) => {
           const maatAttrDef: any = { position: 0, visible: true, variation: true, options: sizeOptions };
           if (maatAttrId) {
             maatAttrDef.id = maatAttrId;
+            maatAttrDef.name = 'Maat';
             // Register size terms as saved global values
             await ensureAttributeTerms(config.woocommerce_url, wooAuth, maatAttrId, 'Maat', sizeOptions, rateLimiter, cachedTermsByAttrId.get(maatAttrId) || null, supabase, tenantId);
           } else {
@@ -889,7 +890,7 @@ Deno.serve(async (req) => {
               if (termDetails.registeredTerms.length > 0) {
                 attrMappingStats.terms_newly_registered += termDetails.registeredTerms.length;
               }
-              attrs.push({ id: globalAttr.id, position: pos++, visible: true, variation: false, options: [valStr] });
+              attrs.push({ id: globalAttr.id, name: globalAttr.name, position: pos++, visible: true, variation: false, options: [valStr] });
               usedAttrIds.add(globalAttr.id);
               mappedAttrs.push({ key, wc_id: globalAttr.id, wc_name: globalAttr.name, value: valStr, term_id: termId });
               if (!termId) {
@@ -918,7 +919,7 @@ Deno.serve(async (req) => {
             if (merkTermDetails.registeredTerms.length > 0) {
               attrMappingStats.terms_newly_registered += merkTermDetails.registeredTerms.length;
             }
-            attrs.push({ id: merkAttr.id, position: attrs.length, visible: true, variation: false, options: [brand] });
+            attrs.push({ id: merkAttr.id, name: 'Merk', position: attrs.length, visible: true, variation: false, options: [brand] });
             mappedAttrs.push({ key: 'Merk', wc_id: merkAttr.id, wc_name: 'Merk', value: brand, term_id: termId });
           } else {
             attrs.push({ name: 'Merk', position: attrs.length, visible: true, variation: false, options: [brand] });
