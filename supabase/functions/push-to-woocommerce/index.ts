@@ -896,12 +896,60 @@ Deno.serve(async (req) => {
           if (!ma.term_id) attrMappingStats.terms_missing++;
         }
 
-        if (unmappedAttrs.length > 0) {
-          console.warn(`[${pim.sku}] ${unmappedAttrs.length} unmapped attributes: ${unmappedAttrs.map(a => `"${a.key}"`).join(', ')}`);
+        // --- Per-product attribute mapping audit log ---
+        const warnings: string[] = [];
+        for (const ma of mappedAttrs) {
+          if (!ma.term_id) {
+            warnings.push(`"${ma.key}" → wc_id:${ma.wc_id} value="${ma.value}" — term_id MISSING (won't appear as filter)`);
+          }
         }
-        if (mappedAttrs.length > 0) {
-          const noTerm = mappedAttrs.filter(a => !a.term_id);
-          console.log(`[${pim.sku}] ${mappedAttrs.length} mapped attrs (${noTerm.length} without term ID)`);
+        for (const ua of unmappedAttrs) {
+          warnings.push(`"${ua.key}" (slug:${ua.slug}) value="${ua.value}" — NO global WC attribute (pushed as local id:0)`);
+        }
+
+        // Also audit Maat
+        const maatAuditEntry = maatAttrId
+          ? { key: 'Maat', wc_id: maatAttrId, status: 'global', sizes: sizeOptions.length }
+          : { key: 'Maat', wc_id: null, status: 'MISSING — variations may show "Any"', sizes: sizeOptions.length };
+        if (!maatAttrId) warnings.push('"Maat" — NO global pa_maat attribute found (variations risk "Any Size" display)');
+
+        if (mappedAttrs.length > 0 || unmappedAttrs.length > 0 || warnings.length > 0) {
+          console.log(`[${pim.sku}] Attr audit: ${mappedAttrs.length} mapped, ${unmappedAttrs.length} unmapped, ${warnings.length} warnings`);
+          for (const w of warnings) console.warn(`  ⚠ [${pim.sku}] ${w}`);
+
+          await supabase.from('changelog').insert({
+            tenant_id: tenantId,
+            event_type: 'PRODUCT_ATTR_AUDIT',
+            description: `Attribuut-audit ${pim.sku}: ${mappedAttrs.length} mapped (${mappedAttrs.filter(a => !a.term_id).length} zonder term), ${unmappedAttrs.length} unmapped` +
+              (warnings.length > 0 ? ` | ${warnings.length} waarschuwingen` : ''),
+            metadata: {
+              sku: pim.sku,
+              maat: maatAuditEntry,
+              mapped: mappedAttrs.map(a => ({
+                pim_key: a.key,
+                wc_id: a.wc_id,
+                wc_name: a.wc_name,
+                value: a.value,
+                term_id: a.term_id,
+                status: a.term_id ? 'ok' : 'term_missing',
+              })),
+              unmapped: unmappedAttrs.map(a => ({
+                pim_key: a.key,
+                slug: a.slug,
+                value: a.value,
+                wc_id: null,
+                term_id: null,
+                status: 'no_global_attribute',
+              })),
+              warnings,
+              totals: {
+                mapped: mappedAttrs.length,
+                unmapped: unmappedAttrs.length,
+                terms_missing: mappedAttrs.filter(a => !a.term_id).length,
+                warnings: warnings.length,
+              },
+            },
+          });
         }
         if (attrs.length > 0) desiredData.attributes = attrs;
 
