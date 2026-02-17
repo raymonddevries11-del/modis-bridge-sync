@@ -264,13 +264,36 @@ interface VariationAudit {
 
 // --- Ensure global attribute terms exist ---
 // Uses cached terms from DB first, then fetches/creates via WC API only for missing ones
+// Returns { termMap, failedTerms } where failedTerms lists values that could not be registered
+interface TermResult {
+  termMap: Map<string, number>;
+  failedTerms: string[];
+  registeredTerms: string[];
+}
+
 async function ensureAttributeTerms(
   wooUrl: string, wooAuth: string, attrId: number, attrName: string,
   values: string[], rateLimiter: AdaptiveRateLimiter,
   cachedTerms?: Array<{ id: number; name: string; slug: string }> | null,
   supabase?: any, tenantId?: string
-): Promise<Map<string, number>> {
+): Promise<Map<string, number>>;
+async function ensureAttributeTerms(
+  wooUrl: string, wooAuth: string, attrId: number, attrName: string,
+  values: string[], rateLimiter: AdaptiveRateLimiter,
+  cachedTerms: Array<{ id: number; name: string; slug: string }> | null | undefined,
+  supabase: any, tenantId: string,
+  returnDetails: true
+): Promise<TermResult>;
+async function ensureAttributeTerms(
+  wooUrl: string, wooAuth: string, attrId: number, attrName: string,
+  values: string[], rateLimiter: AdaptiveRateLimiter,
+  cachedTerms?: Array<{ id: number; name: string; slug: string }> | null,
+  supabase?: any, tenantId?: string,
+  returnDetails?: boolean
+): Promise<Map<string, number> | TermResult> {
   const termMap = new Map<string, number>();
+  const failedTerms: string[] = [];
+  const registeredTerms: string[] = [];
 
   // 1. Pre-populate from cached terms (from woo_global_attributes table)
   if (cachedTerms && cachedTerms.length > 0) {
@@ -285,7 +308,7 @@ async function ensureAttributeTerms(
 
   // 3. If all resolved from cache, skip API calls entirely
   if (unresolved.length === 0) {
-    return termMap;
+    return returnDetails ? { termMap, failedTerms, registeredTerms } : termMap;
   }
 
   // 4. Fetch existing terms from WC API only if we have unresolved values
@@ -319,12 +342,19 @@ async function ensureAttributeTerms(
     if (!res.blocked && res.json?.id) {
       termMap.set(label.toLowerCase(), res.json.id);
       newTerms.push({ id: res.json.id, name: res.json.name || label, slug: res.json.slug || '' });
+      registeredTerms.push(label);
       console.log(`✓ Registered ${attrName} term: "${label}" (ID ${res.json.id})`);
     } else if (res.json?.code === 'term_exists') {
       const existingId = res.json?.data?.resource_id;
-      if (existingId) termMap.set(label.toLowerCase(), existingId);
+      if (existingId) {
+        termMap.set(label.toLowerCase(), existingId);
+      } else {
+        failedTerms.push(label);
+        console.warn(`⚠ Term "${label}" exists for ${attrName} but resource_id not returned`);
+      }
     } else {
-      console.warn(`Could not register ${attrName} term "${label}": ${res.text?.substring(0, 150)}`);
+      failedTerms.push(label);
+      console.warn(`✗ Failed to register ${attrName} term "${label}": ${res.text?.substring(0, 150)}`);
     }
     await rateLimiter.wait();
   }
@@ -355,10 +385,10 @@ async function ensureAttributeTerms(
   }
 
   if (stillMissing.length > 0) {
-    console.log(`${attrName} terms: ${stillMissing.length} registered, ${termMap.size} total`);
+    console.log(`${attrName} terms: ${registeredTerms.length} registered, ${failedTerms.length} failed, ${termMap.size} total`);
   }
 
-  return termMap;
+  return returnDetails ? { termMap, failedTerms, registeredTerms } : termMap;
 }
 
 // Helper: slugify attribute name to match WooCommerce pa_ prefix convention
@@ -715,7 +745,8 @@ Deno.serve(async (req) => {
     // Collect attribute mapping diagnostics across all products
     const allUnmappedAttrs = new Map<string, { count: number; slug: string; sample_values: string[] }>();
     const allTermMissingAttrs = new Map<string, { count: number; wc_id: number; wc_name: string; sample_values: string[] }>();
-    const attrMappingStats = { total_mapped: 0, total_unmapped: 0, terms_missing: 0 };
+    const attrMappingStats = { total_mapped: 0, total_unmapped: 0, terms_missing: 0, terms_failed_to_register: 0, terms_newly_registered: 0 };
+    let totalTermFailures = 0; // running counter across all products
 
     for (const pim of pimProducts) {
       try {
@@ -848,13 +879,21 @@ Deno.serve(async (req) => {
               }
               // Skip if this global ID is already in attrs (prevents duplicates)
               if (usedAttrIds.has(globalAttr.id)) continue;
-              const termResult = await ensureAttributeTerms(config.woocommerce_url, wooAuth, globalAttr.id, globalAttr.name, [valStr], rateLimiter, cachedTermsByAttrId.get(globalAttr.id) || null, supabase, tenantId);
-              const termId = termResult.get(valStr.toLowerCase()) || null;
+              const termDetails = await ensureAttributeTerms(config.woocommerce_url, wooAuth, globalAttr.id, globalAttr.name, [valStr], rateLimiter, cachedTermsByAttrId.get(globalAttr.id) || null, supabase, tenantId, true) as TermResult;
+              const termId = termDetails.termMap.get(valStr.toLowerCase()) || null;
+              if (termDetails.failedTerms.length > 0) {
+                totalTermFailures += termDetails.failedTerms.length;
+                attrMappingStats.terms_failed_to_register += termDetails.failedTerms.length;
+                console.error(`  ✗ [${pim.sku}] Term registration FAILED for "${key}" wc_id:${globalAttr.id} values: ${termDetails.failedTerms.join(', ')} (running total: ${totalTermFailures})`);
+              }
+              if (termDetails.registeredTerms.length > 0) {
+                attrMappingStats.terms_newly_registered += termDetails.registeredTerms.length;
+              }
               attrs.push({ id: globalAttr.id, position: pos++, visible: true, variation: false, options: [valStr] });
               usedAttrIds.add(globalAttr.id);
               mappedAttrs.push({ key, wc_id: globalAttr.id, wc_name: globalAttr.name, value: valStr, term_id: termId });
               if (!termId) {
-                console.warn(`  ⚠ Attr "${key}" → global ID ${globalAttr.id}, value="${valStr}" — term NOT resolved (may not save as filter)`);
+                console.warn(`  ⚠ [${pim.sku}] Attr "${key}" → wc_id:${globalAttr.id}, value="${valStr}" — term NOT resolved (total missing: ${totalTermFailures})`);
               }
             } else {
               // Skip if name already used (prevents duplicates with explicitly handled attrs)
@@ -869,8 +908,16 @@ Deno.serve(async (req) => {
         if (brand) {
           const merkAttr = globalAttrMap.get('merk');
           if (merkAttr) {
-            const termResult = await ensureAttributeTerms(config.woocommerce_url, wooAuth, merkAttr.id, 'Merk', [brand], rateLimiter, cachedTermsByAttrId.get(merkAttr.id) || null, supabase, tenantId);
-            const termId = termResult.get(brand.toLowerCase()) || null;
+            const merkTermDetails = await ensureAttributeTerms(config.woocommerce_url, wooAuth, merkAttr.id, 'Merk', [brand], rateLimiter, cachedTermsByAttrId.get(merkAttr.id) || null, supabase, tenantId, true) as TermResult;
+            const termId = merkTermDetails.termMap.get(brand.toLowerCase()) || null;
+            if (merkTermDetails.failedTerms.length > 0) {
+              totalTermFailures += merkTermDetails.failedTerms.length;
+              attrMappingStats.terms_failed_to_register += merkTermDetails.failedTerms.length;
+              console.error(`  ✗ [${pim.sku}] Merk term registration FAILED for "${brand}" (running total: ${totalTermFailures})`);
+            }
+            if (merkTermDetails.registeredTerms.length > 0) {
+              attrMappingStats.terms_newly_registered += merkTermDetails.registeredTerms.length;
+            }
             attrs.push({ id: merkAttr.id, position: attrs.length, visible: true, variation: false, options: [brand] });
             mappedAttrs.push({ key: 'Merk', wc_id: merkAttr.id, wc_name: 'Merk', value: brand, term_id: termId });
           } else {
@@ -1400,22 +1447,33 @@ Deno.serve(async (req) => {
       event_type: 'WOO_PRODUCT_PUSH',
       description: `Push naar WooCommerce: ${created} aangemaakt, ${updated} bijgewerkt, ${skipped} ongewijzigd, ${errors} fouten` +
         (totalMisMapped > 0 ? ` | ${totalMisMapped} mis-mapped variaties gecorrigeerd` : '') +
-        (unmappedSummary.length > 0 ? ` | ${unmappedSummary.length} attributen zonder mapping` : ''),
+        (unmappedSummary.length > 0 ? ` | ${unmappedSummary.length} attributen zonder mapping` : '') +
+        (attrMappingStats.terms_failed_to_register > 0 ? ` | ${attrMappingStats.terms_failed_to_register} termen niet geregistreerd` : '') +
+        (attrMappingStats.terms_newly_registered > 0 ? ` | ${attrMappingStats.terms_newly_registered} nieuwe termen aangemaakt` : ''),
       metadata: {
         results: results.slice(0, 50),
         totals: { created, updated, skipped, errors },
         session_blocks: sessionBlocks,
         variation_audit: variationAuditSummary,
         attribute_audit: attrAudit,
+        term_summary: {
+          total_terms_missing: attrMappingStats.terms_missing,
+          total_terms_failed_to_register: attrMappingStats.terms_failed_to_register,
+          total_terms_newly_registered: attrMappingStats.terms_newly_registered,
+        },
       },
     });
 
     console.log(`Push complete: ${created} created, ${updated} updated, ${skipped} skipped, ${errors} errors`);
+    console.log(`Term summary: ${attrMappingStats.terms_missing} missing, ${attrMappingStats.terms_failed_to_register} failed to register, ${attrMappingStats.terms_newly_registered} newly registered`);
     if (totalMisMapped > 0) {
       console.warn(`⚠ ${totalMisMapped} mis-mapped variations detected and fixed across ${variationAudits.filter(a => a.mis_mapped.length > 0).length} products`);
     }
     if (unmappedSummary.length > 0) {
       console.warn(`⚠ ${unmappedSummary.length} PIM attributes have no global WC mapping: ${unmappedSummary.map(a => a.attribute).join(', ')}`);
+    }
+    if (attrMappingStats.terms_failed_to_register > 0) {
+      console.error(`✗ ${attrMappingStats.terms_failed_to_register} terms could NOT be registered in WooCommerce — these attributes won't work as filters`);
     }
 
     return new Response(JSON.stringify({
