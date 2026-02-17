@@ -16,6 +16,7 @@ import {
   ClipboardCheck,
   Image,
   ScanSearch,
+  HeartPulse,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
@@ -66,6 +67,7 @@ const navGroups: NavGroup[] = [
     label: "Activity",
     items: [
       { name: "Jobs & Logs", href: "/activity", icon: Activity },
+      { name: "Pipeline Health", href: "/pipeline-health", icon: HeartPulse },
       { name: "Trigger Audit", href: "/trigger-audit", icon: ScanSearch },
     ],
   },

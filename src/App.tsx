@@ -20,6 +20,7 @@ import CatalogData from "./pages/CatalogData";
 import ImageHealth from "./pages/ImageHealth";
 import NotFound from "./pages/NotFound";
 import TriggerAudit from "./pages/TriggerAudit";
+import PipelineHealth from "./pages/PipelineHealth";
 
 const queryClient = new QueryClient();
 
@@ -44,6 +45,7 @@ const App = () => (
           <Route path="/catalog-data" element={<ProtectedRoute><CatalogData /></ProtectedRoute>} />
           <Route path="/image-health" element={<ProtectedRoute><ImageHealth /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+          <Route path="/pipeline-health" element={<ProtectedRoute><PipelineHealth /></ProtectedRoute>} />
           <Route path="/trigger-audit" element={<ProtectedRoute><TriggerAudit /></ProtectedRoute>} />
           {/* Legacy redirects */}
           <Route path="/google-feed" element={<Navigate to="/channels/google" replace />} />
