@@ -828,8 +828,13 @@ Deno.serve(async (req) => {
         if (pim.attributes && typeof pim.attributes === 'object') {
           const pimAttrs = pim.attributes as Record<string, any>;
           let pos = 1;
+          // Track which attr IDs are already in attrs to prevent duplicates
+          const usedAttrIds = new Set<number>(attrs.filter(a => a.id > 0).map(a => a.id));
+          const usedAttrNames = new Set<string>(attrs.map(a => (a.name || '').toLowerCase()).filter(Boolean));
           for (const [key, val] of Object.entries(pimAttrs)) {
             if (!val) continue;
+            // Skip Maat (handled above) and Merk (handled below)
+            if (key.toLowerCase() === 'maat' || key.toLowerCase() === 'merk') continue;
             const valStr = String(val);
             const lookupKey = toWooSlug(key);
             // Priority: 1) explicit PIM→WC mapping from DB, 2) slug match, 3) name match
@@ -840,15 +845,21 @@ Deno.serve(async (req) => {
                 unmappedAttrs.push({ key, value: valStr, slug: lookupKey });
                 continue;
               }
+              // Skip if this global ID is already in attrs (prevents duplicates)
+              if (usedAttrIds.has(globalAttr.id)) continue;
               const termResult = await ensureAttributeTerms(config.woocommerce_url, wooAuth, globalAttr.id, globalAttr.name, [valStr], rateLimiter, cachedTermsByAttrId.get(globalAttr.id) || null, supabase, tenantId);
               const termId = termResult.get(valStr.toLowerCase()) || null;
               attrs.push({ id: globalAttr.id, position: pos++, visible: true, variation: false, options: [valStr] });
+              usedAttrIds.add(globalAttr.id);
               mappedAttrs.push({ key, wc_id: globalAttr.id, wc_name: globalAttr.name, value: valStr, term_id: termId });
               if (!termId) {
                 console.warn(`  ⚠ Attr "${key}" → global ID ${globalAttr.id}, value="${valStr}" — term NOT resolved (may not save as filter)`);
               }
             } else {
+              // Skip if name already used (prevents duplicates with explicitly handled attrs)
+              if (usedAttrNames.has(key.toLowerCase())) continue;
               attrs.push({ name: key, position: pos++, visible: true, variation: false, options: [valStr] });
+              usedAttrNames.add(key.toLowerCase());
               unmappedAttrs.push({ key, value: valStr, slug: lookupKey });
               console.warn(`  ✗ Attr "${key}" (slug: ${lookupKey}) has no matching global WC attribute — pushed as local`);
             }

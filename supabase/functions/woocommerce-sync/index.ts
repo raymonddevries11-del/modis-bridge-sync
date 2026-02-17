@@ -830,16 +830,26 @@ async function createProductInWooCommerce(
   // Add all product attributes using global attribute IDs
   if (mappedAttributes && typeof mappedAttributes === 'object') {
     let position = productAttributes.length;
+    // Track IDs and names already in productAttributes to prevent duplicates
+    const usedAttrIds = new Set<number>(productAttributes.filter((a: any) => a.id > 0).map((a: any) => a.id));
+    const usedAttrNames = new Set<string>(productAttributes.map((a: any) => (a.name || '').toLowerCase()).filter(Boolean));
     for (const [key, value] of Object.entries(mappedAttributes)) {
       const valueStr = String(value).trim();
-      if (!valueStr || key.toLowerCase() === 'maat') continue;
+      if (!valueStr || key.toLowerCase() === 'maat' || key.toLowerCase() === 'merk' || key.toLowerCase() === 'kleur') continue;
       
       const globalAttr = findGlobalAttribute(key);
+      
+      // Skip if global ID already used
+      if (globalAttr?.id && usedAttrIds.has(globalAttr.id)) continue;
+      // Skip if name already used
+      if (usedAttrNames.has(key.toLowerCase())) continue;
       
       if (globalAttr?.id) {
         await ensureAttributeTerm(globalAttr.id, valueStr);
         console.log(`Using global attribute "${key}" (ID: ${globalAttr.id}) for new product`);
+        usedAttrIds.add(globalAttr.id);
       }
+      usedAttrNames.add(key.toLowerCase());
       
       productAttributes.push({
         id: globalAttr?.id || 0,
@@ -1574,21 +1584,33 @@ async function updateProductInWooCommerce(
     : attributes;
   
   if (mappedAttributes && typeof mappedAttributes === 'object') {
+    // Track used IDs and names to prevent duplicates
+    const usedAttrIds = new Set<number>(updatedAttributes.filter((a: any) => a.id > 0).map((a: any) => a.id));
+    
     for (const [attrName, attrValue] of Object.entries(mappedAttributes)) {
       const valueStr = String(attrValue).trim();
       if (!valueStr) continue;
       
-      // Skip if it's Maat (already handled)
-      if (attrName.toLowerCase() === 'maat') continue;
+      // Skip if it's Maat or Merk (already handled separately)
+      if (attrName.toLowerCase() === 'maat' || attrName.toLowerCase() === 'merk') continue;
       
       // Try to find a global attribute for this name
       const globalAttr = findGlobalAttribute(attrName);
       
-      // Check if this attribute already exists in the product
-      const existingIndex = updatedAttributes.findIndex((a: any) => 
-        a.name?.toLowerCase() === attrName.toLowerCase() ||
-        a.slug?.toLowerCase() === attrName.toLowerCase().replace(/\s+/g, '-')
-      );
+      // Check if this attribute already exists in the product - match by ID first, then name
+      let existingIndex = -1;
+      if (globalAttr?.id) {
+        existingIndex = updatedAttributes.findIndex((a: any) => a.id === globalAttr.id);
+      }
+      if (existingIndex < 0) {
+        existingIndex = updatedAttributes.findIndex((a: any) => 
+          a.name?.toLowerCase() === attrName.toLowerCase() ||
+          a.slug?.toLowerCase() === attrName.toLowerCase().replace(/\s+/g, '-')
+        );
+      }
+      
+      // Skip if global ID already used by another attr at a different position
+      if (globalAttr?.id && usedAttrIds.has(globalAttr.id) && existingIndex < 0) continue;
       
       const newAttr = {
         id: globalAttr?.id || 0,
@@ -1603,6 +1625,7 @@ async function updateProductInWooCommerce(
       if (globalAttr?.id) {
         await ensureAttributeTerm(globalAttr.id, valueStr);
         console.log(`Using global attribute "${attrName}" (ID: ${globalAttr.id}) with value: ${valueStr}`);
+        usedAttrIds.add(globalAttr.id);
       }
       
       if (existingIndex >= 0) {
@@ -1617,12 +1640,15 @@ async function updateProductInWooCommerce(
   if (brands?.name) {
     const globalBrand = findGlobalAttribute('merk') || findGlobalAttribute('brand');
     
-    // Check if Merk attribute already exists
-    const merkIndex = updatedAttributes.findIndex((a: any) => 
-      a.name?.toLowerCase() === 'merk' ||
-      a.slug?.toLowerCase() === 'merk' ||
-      a.slug?.toLowerCase() === 'pa_merk'
-    );
+    // Check if Merk attribute already exists - by ID first, then name/slug
+    let merkIndex = globalBrand?.id ? updatedAttributes.findIndex((a: any) => a.id === globalBrand.id) : -1;
+    if (merkIndex < 0) {
+      merkIndex = updatedAttributes.findIndex((a: any) => 
+        a.name?.toLowerCase() === 'merk' ||
+        a.slug?.toLowerCase() === 'merk' ||
+        a.slug?.toLowerCase() === 'pa_merk'
+      );
+    }
     
     const merkAttr = {
       id: globalBrand?.id || 0,
@@ -1850,6 +1876,21 @@ async function syncVariantToWooCommerce(
   }
 
   if (!matchingVariation) {
+    // Safety check: verify no existing variation has this size_label before creating
+    // This prevents duplicates when SKU format changes but size is the same
+    const sizeAlreadyExists = wooVariations.some((wv: any) => {
+      const sa = wv.attributes?.find((a: any) =>
+        a.name?.toLowerCase() === 'maat' || a.name?.toLowerCase() === 'pa_maat' ||
+        a.name?.toLowerCase() === 'size' || a.name?.toLowerCase() === 'pa_size'
+      );
+      return sa?.option && normalizeSize(sa.option) === normalizeSize(variant.size_label);
+    });
+
+    if (sizeAlreadyExists) {
+      console.warn(`Variation with size "${variant.size_label}" already exists for WC #${wooProductId} but SKU didn't match — skipping creation to prevent duplicate`);
+      return;
+    }
+
     console.log(`No matching WooCommerce variation found for size ${variant.size_label}, creating new variation...`);
     
     // Create missing variation in WooCommerce
