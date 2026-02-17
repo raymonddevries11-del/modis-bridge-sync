@@ -1563,6 +1563,56 @@ Deno.serve(async (req) => {
       });
     }
 
+    // --- Image sync status tracking ---
+    try {
+      const imageStatusUpserts: any[] = [];
+      for (const r of results) {
+        const pim = pimProducts.find((p: any) => p.sku === r.sku);
+        if (!pim) continue;
+        const pimImages = Array.isArray(pim.images) ? pim.images : [];
+        if (pimImages.length === 0) continue;
+
+        const hasImageChange = r.changes.some((c: FieldChange) => c.field === 'images');
+        const imageUploadFailed = r.changes.some((c: FieldChange) => c.field === 'images' && c.new_value?.includes('skipped'));
+        
+        // Get WP media IDs from the WooCommerce response if available
+        const wooMediaIds: number[] = [];
+        if (r.action === 'created' || r.action === 'updated') {
+          // desiredData.images contains the uploaded media IDs
+          const desiredImages = Array.isArray(pim._pushed_images) ? pim._pushed_images : [];
+          for (const img of desiredImages) {
+            if (img.id > 0) wooMediaIds.push(img.id);
+          }
+        }
+
+        imageStatusUpserts.push({
+          product_id: pim.id,
+          tenant_id: tenantId,
+          status: imageUploadFailed ? 'failed' : (r.action === 'error' ? 'failed' : 'uploaded'),
+          image_count: pimImages.length,
+          uploaded_count: imageUploadFailed ? 0 : pimImages.length,
+          failed_count: imageUploadFailed ? pimImages.length : 0,
+          woo_media_ids: wooMediaIds,
+          error_message: imageUploadFailed ? 'Image upload failed — pushed without images' : (r.action === 'error' ? r.message : null),
+          push_attempted_at: new Date().toISOString(),
+          push_confirmed_at: (!imageUploadFailed && r.action !== 'error') ? new Date().toISOString() : null,
+        });
+      }
+
+      if (imageStatusUpserts.length > 0) {
+        // Batch upsert in groups of 100
+        for (let i = 0; i < imageStatusUpserts.length; i += 100) {
+          await supabase.from('image_sync_status').upsert(
+            imageStatusUpserts.slice(i, i + 100),
+            { onConflict: 'product_id' }
+          );
+        }
+        console.log(`📸 Image sync status: ${imageStatusUpserts.filter(s => s.status === 'uploaded').length} uploaded, ${imageStatusUpserts.filter(s => s.status === 'failed').length} failed`);
+      }
+    } catch (imgStatusErr) {
+      console.warn('Non-critical: failed to update image_sync_status:', imgStatusErr);
+    }
+
     console.log(`Push complete: ${created} created, ${updated} updated, ${skipped} skipped, ${errors} errors`);
     if (skippedProducts.length > 0) {
       console.warn(`⚠ ${skippedProducts.length} product(s) SKIPPED due to attribute consistency failures:`);

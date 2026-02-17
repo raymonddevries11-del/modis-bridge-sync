@@ -339,6 +339,72 @@ export type Database = {
           },
         ]
       }
+      image_sync_status: {
+        Row: {
+          created_at: string
+          error_message: string | null
+          failed_count: number
+          id: string
+          image_count: number
+          product_id: string
+          push_attempted_at: string | null
+          push_confirmed_at: string | null
+          status: string
+          tenant_id: string
+          updated_at: string
+          uploaded_count: number
+          webhook_confirmed_at: string | null
+          woo_media_ids: Json | null
+        }
+        Insert: {
+          created_at?: string
+          error_message?: string | null
+          failed_count?: number
+          id?: string
+          image_count?: number
+          product_id: string
+          push_attempted_at?: string | null
+          push_confirmed_at?: string | null
+          status?: string
+          tenant_id: string
+          updated_at?: string
+          uploaded_count?: number
+          webhook_confirmed_at?: string | null
+          woo_media_ids?: Json | null
+        }
+        Update: {
+          created_at?: string
+          error_message?: string | null
+          failed_count?: number
+          id?: string
+          image_count?: number
+          product_id?: string
+          push_attempted_at?: string | null
+          push_confirmed_at?: string | null
+          status?: string
+          tenant_id?: string
+          updated_at?: string
+          uploaded_count?: number
+          webhook_confirmed_at?: string | null
+          woo_media_ids?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "image_sync_status_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "image_sync_status_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       jobs: {
         Row: {
           attempts: number
