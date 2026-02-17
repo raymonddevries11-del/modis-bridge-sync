@@ -10,6 +10,7 @@ import { WooDeltaDashboard } from "@/components/woocommerce/WooDeltaDashboard";
 import { WooLinkStatus } from "@/components/woocommerce/WooLinkStatus";
 import { FailedPushPanel } from "@/components/woocommerce/FailedPushPanel";
 import { CircuitBreakerAlert } from "@/components/woocommerce/CircuitBreakerAlert";
+import { QueueHealthAlert } from "@/components/woocommerce/QueueHealthAlert";
 import { VariationAuditAlert } from "@/components/woocommerce/VariationAuditAlert";
 import { ImageSyncDashboard } from "@/components/woocommerce/ImageSyncDashboard";
 import { supabase } from "@/integrations/supabase/client";
@@ -134,6 +135,9 @@ const ChannelWooCommerce = () => {
 
         {/* Circuit Breaker Alert */}
         <CircuitBreakerAlert />
+
+        {/* Queue Health Alert */}
+        <QueueHealthAlert />
 
         {/* Variation Audit Alert */}
         {tenantId && <VariationAuditAlert tenantId={tenantId} />}
