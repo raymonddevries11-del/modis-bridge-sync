@@ -346,9 +346,11 @@ export type Database = {
           failed_count: number
           id: string
           image_count: number
+          next_retry_at: string | null
           product_id: string
           push_attempted_at: string | null
           push_confirmed_at: string | null
+          retry_count: number
           status: string
           tenant_id: string
           updated_at: string
@@ -362,9 +364,11 @@ export type Database = {
           failed_count?: number
           id?: string
           image_count?: number
+          next_retry_at?: string | null
           product_id: string
           push_attempted_at?: string | null
           push_confirmed_at?: string | null
+          retry_count?: number
           status?: string
           tenant_id: string
           updated_at?: string
@@ -378,9 +382,11 @@ export type Database = {
           failed_count?: number
           id?: string
           image_count?: number
+          next_retry_at?: string | null
           product_id?: string
           push_attempted_at?: string | null
           push_confirmed_at?: string | null
+          retry_count?: number
           status?: string
           tenant_id?: string
           updated_at?: string

@@ -1,18 +1,23 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
-  Image, CheckCircle2, XCircle, Clock, Loader2, ImageOff, TrendingUp, Webhook, ShieldCheck,
+  Image, CheckCircle2, XCircle, Clock, Loader2, ImageOff, TrendingUp, Webhook, ShieldCheck, RotateCcw, AlertTriangle,
 } from "lucide-react";
+import { toast } from "sonner";
 
 interface ImageSyncDashboardProps {
   tenantId: string;
 }
 
 export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
-  const { data: stats } = useQuery({
+  const [retrying, setRetrying] = useState(false);
+
+  const { data: stats, refetch } = useQuery({
     queryKey: ["image-sync-stats", tenantId],
     queryFn: async () => {
       const [
@@ -22,11 +27,11 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
         activeJobsRes,
         recentLogsRes,
         linkedWithImagesRes,
-        // Image sync status counts
         statusUploadedRes,
         statusConfirmedRes,
         statusFailedRes,
         statusPendingRes,
+        retryExhaustedRes,
       ] = await Promise.all([
         supabase
           .from("pending_product_syncs")
@@ -53,7 +58,7 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
           .select("event_type, description, metadata, created_at")
           .eq("tenant_id", tenantId)
           .gte("created_at", new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString())
-          .or("event_type.eq.WOO_PRODUCT_PUSH,event_type.eq.WOO_IMAGE_UPLOAD_FAILED")
+          .or("event_type.eq.WOO_PRODUCT_PUSH,event_type.eq.WOO_IMAGE_UPLOAD_FAILED,event_type.eq.IMAGE_RETRY_BATCH")
           .order("created_at", { ascending: false })
           .limit(20),
         supabase
@@ -62,7 +67,6 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
           .eq("tenant_id", tenantId)
           .not("images", "is", null)
           .neq("images", "[]"),
-        // image_sync_status counts
         supabase
           .from("image_sync_status")
           .select("id", { count: "exact", head: true })
@@ -83,6 +87,13 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
           .select("id", { count: "exact", head: true })
           .eq("tenant_id", tenantId)
           .eq("status", "pending"),
+        // Items that exhausted all retries
+        supabase
+          .from("image_sync_status")
+          .select("id", { count: "exact", head: true })
+          .eq("tenant_id", tenantId)
+          .eq("status", "failed")
+          .gte("retry_count", 5),
       ]);
 
       const reasonCounts: Record<string, number> = {};
@@ -112,11 +123,28 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
           failed: statusFailedRes.count ?? 0,
           pending: statusPendingRes.count ?? 0,
         },
+        retryExhausted: retryExhaustedRes.count ?? 0,
       };
     },
     enabled: !!tenantId,
     refetchInterval: 10000,
   });
+
+  const handleRetryFailed = async (forceAll = false) => {
+    setRetrying(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("retry-image-sync", {
+        body: { tenantId, forceAll },
+      });
+      if (error) throw error;
+      toast.success(`${data.retried} items opnieuw ingepland${data.exhausted > 0 ? `, ${data.exhausted} definitief mislukt` : ""}`);
+      refetch();
+    } catch (err: any) {
+      toast.error(`Retry mislukt: ${err.message}`);
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   if (!stats) {
     return (
@@ -134,6 +162,7 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
 
   const totalTracked = stats.syncStatus.uploaded + stats.syncStatus.confirmed + stats.syncStatus.failed + stats.syncStatus.pending;
   const confirmedPct = totalTracked > 0 ? Math.round((stats.syncStatus.confirmed / totalTracked) * 100) : 0;
+  const retryableFailed = stats.syncStatus.failed - stats.retryExhausted;
 
   return (
     <div className="space-y-4">
@@ -170,6 +199,48 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
           highlight={stats.imageFailures > 0}
         />
       </div>
+
+      {/* Retry failed panel */}
+      {stats.syncStatus.failed > 0 && (
+        <Card className="card-elevated border-destructive/30">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              Mislukte Image Syncs
+              <Badge variant="destructive" className="text-[10px] ml-auto">{stats.syncStatus.failed}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <MiniStat label="Retrybaar" value={retryableFailed} color="text-warning" />
+              <MiniStat label="Uitgeput (5x)" value={stats.retryExhausted} color="text-destructive" icon={XCircle} />
+              <MiniStat label="Max retries" value={5} color="text-muted-foreground" />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Exponentiële backoff: 1min → 2min → 4min → 8min → 16min. Items die 5× mislukken worden als definitief mislukt gemarkeerd.
+            </p>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleRetryFailed(false)}
+                disabled={retrying || retryableFailed === 0}
+              >
+                {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <RotateCcw className="h-3.5 w-3.5 mr-1.5" />}
+                Retry eligible ({retryableFailed})
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => handleRetryFailed(true)}
+                disabled={retrying || stats.syncStatus.failed === 0}
+              >
+                Force retry alles
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Image sync status tracking */}
       {totalTracked > 0 && (
@@ -296,12 +367,15 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
             <div className="space-y-1.5 max-h-64 overflow-y-auto">
               {stats.recentLogs.map((log, i) => {
                 const isError = log.event_type === "WOO_IMAGE_UPLOAD_FAILED";
+                const isRetry = log.event_type === "IMAGE_RETRY_BATCH";
                 const meta = log.metadata as any;
                 return (
                   <div key={i} className="flex items-center justify-between text-[11px] py-1 border-b border-border/50 last:border-0">
                     <div className="flex items-center gap-1.5 min-w-0">
                       {isError ? (
                         <XCircle className="h-3 w-3 text-destructive flex-shrink-0" />
+                      ) : isRetry ? (
+                        <RotateCcw className="h-3 w-3 text-warning flex-shrink-0" />
                       ) : (
                         <CheckCircle2 className="h-3 w-3 text-success flex-shrink-0" />
                       )}
