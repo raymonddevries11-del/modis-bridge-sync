@@ -1342,6 +1342,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      assert_no_trigger_violations: { Args: never; Returns: undefined }
       create_batch_sync_jobs: { Args: never; Returns: undefined }
       dedupe_sync_jobs: { Args: never; Returns: number }
       has_role: {
@@ -1352,6 +1353,16 @@ export type Database = {
         Returns: boolean
       }
       housekeep_jobs: { Args: never; Returns: undefined }
+      validate_no_duplicate_triggers: {
+        Args: never
+        Returns: {
+          function_names: string[]
+          table_name: string
+          trigger_count: number
+          trigger_names: string[]
+          violation_type: string
+        }[]
+      }
     }
     Enums: {
       ai_content_status: "pending" | "generated" | "approved" | "rejected"
