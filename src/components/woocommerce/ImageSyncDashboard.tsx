@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
-  Image, CheckCircle2, XCircle, Clock, Loader2, ImageOff, TrendingUp,
+  Image, CheckCircle2, XCircle, Clock, Loader2, ImageOff, TrendingUp, Webhook, ShieldCheck,
 } from "lucide-react";
 
 interface ImageSyncDashboardProps {
@@ -15,75 +15,103 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
   const { data: stats } = useQuery({
     queryKey: ["image-sync-stats", tenantId],
     queryFn: async () => {
-      // Get pending image syncs
-      const { count: pendingImages } = await supabase
-        .from("pending_product_syncs")
-        .select("product_id", { count: "exact", head: true })
-        .eq("tenant_id", tenantId)
-        .eq("reason", "images");
-
-      // Get all pending syncs by reason
-      const { data: pendingByReason } = await supabase
-        .from("pending_product_syncs")
-        .select("reason")
-        .eq("tenant_id", tenantId);
+      const [
+        pendingRes,
+        pendingByReasonRes,
+        productsWithImagesRes,
+        activeJobsRes,
+        recentLogsRes,
+        linkedWithImagesRes,
+        // Image sync status counts
+        statusUploadedRes,
+        statusConfirmedRes,
+        statusFailedRes,
+        statusPendingRes,
+      ] = await Promise.all([
+        supabase
+          .from("pending_product_syncs")
+          .select("product_id", { count: "exact", head: true })
+          .eq("tenant_id", tenantId)
+          .eq("reason", "images"),
+        supabase
+          .from("pending_product_syncs")
+          .select("reason")
+          .eq("tenant_id", tenantId),
+        supabase
+          .from("products")
+          .select("id", { count: "exact", head: true })
+          .eq("tenant_id", tenantId)
+          .not("images", "is", null)
+          .neq("images", "[]"),
+        supabase
+          .from("jobs")
+          .select("id", { count: "exact", head: true })
+          .eq("type", "SYNC_TO_WOO")
+          .in("state", ["ready", "processing"]),
+        supabase
+          .from("changelog")
+          .select("event_type, description, metadata, created_at")
+          .eq("tenant_id", tenantId)
+          .gte("created_at", new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString())
+          .or("event_type.eq.WOO_PRODUCT_PUSH,event_type.eq.WOO_IMAGE_UPLOAD_FAILED")
+          .order("created_at", { ascending: false })
+          .limit(20),
+        supabase
+          .from("products")
+          .select("id, woo_products!inner(id)", { count: "exact", head: true })
+          .eq("tenant_id", tenantId)
+          .not("images", "is", null)
+          .neq("images", "[]"),
+        // image_sync_status counts
+        supabase
+          .from("image_sync_status")
+          .select("id", { count: "exact", head: true })
+          .eq("tenant_id", tenantId)
+          .eq("status", "uploaded"),
+        supabase
+          .from("image_sync_status")
+          .select("id", { count: "exact", head: true })
+          .eq("tenant_id", tenantId)
+          .eq("status", "confirmed"),
+        supabase
+          .from("image_sync_status")
+          .select("id", { count: "exact", head: true })
+          .eq("tenant_id", tenantId)
+          .eq("status", "failed"),
+        supabase
+          .from("image_sync_status")
+          .select("id", { count: "exact", head: true })
+          .eq("tenant_id", tenantId)
+          .eq("status", "pending"),
+      ]);
 
       const reasonCounts: Record<string, number> = {};
-      for (const row of pendingByReason || []) {
+      for (const row of pendingByReasonRes.data || []) {
         reasonCounts[row.reason] = (reasonCounts[row.reason] || 0) + 1;
       }
 
-      // Get total products with images
-      const { count: productsWithImages } = await supabase
-        .from("products")
-        .select("id", { count: "exact", head: true })
-        .eq("tenant_id", tenantId)
-        .not("images", "is", null)
-        .neq("images", "[]");
-
-      // Get active SYNC_TO_WOO jobs
-      const { count: activeJobs } = await supabase
-        .from("jobs")
-        .select("id", { count: "exact", head: true })
-        .eq("type", "SYNC_TO_WOO")
-        .in("state", ["ready", "processing"]);
-
-      // Get recent image-related changelog entries
-      const since6h = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
-      const { data: recentLogs } = await supabase
-        .from("changelog")
-        .select("event_type, description, metadata, created_at")
-        .eq("tenant_id", tenantId)
-        .gte("created_at", since6h)
-        .or("event_type.eq.WOO_PRODUCT_PUSH,event_type.eq.WOO_IMAGE_UPLOAD_FAILED")
-        .order("created_at", { ascending: false })
-        .limit(20);
-
-      // Count image upload failures vs successes
       let imageFailures = 0;
       let imagePushes = 0;
-      for (const log of recentLogs || []) {
+      for (const log of recentLogsRes.data || []) {
         if (log.event_type === "WOO_IMAGE_UPLOAD_FAILED") imageFailures++;
         if (log.event_type === "WOO_PRODUCT_PUSH") imagePushes++;
       }
 
-      // Products with images linked to WooCommerce
-      const { count: linkedWithImages } = await supabase
-        .from("products")
-        .select("id, woo_products!inner(id)", { count: "exact", head: true })
-        .eq("tenant_id", tenantId)
-        .not("images", "is", null)
-        .neq("images", "[]");
-
       return {
-        pendingImages: pendingImages ?? 0,
+        pendingImages: pendingRes.count ?? 0,
         pendingByReason: reasonCounts,
-        productsWithImages: productsWithImages ?? 0,
-        linkedWithImages: linkedWithImages ?? 0,
-        activeJobs: activeJobs ?? 0,
+        productsWithImages: productsWithImagesRes.count ?? 0,
+        linkedWithImages: linkedWithImagesRes.count ?? 0,
+        activeJobs: activeJobsRes.count ?? 0,
         imageFailures,
         imagePushes,
-        recentLogs: recentLogs || [],
+        recentLogs: recentLogsRes.data || [],
+        syncStatus: {
+          uploaded: statusUploadedRes.count ?? 0,
+          confirmed: statusConfirmedRes.count ?? 0,
+          failed: statusFailedRes.count ?? 0,
+          pending: statusPendingRes.count ?? 0,
+        },
       };
     },
     enabled: !!tenantId,
@@ -103,6 +131,9 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
   const progressPct = stats.linkedWithImages > 0
     ? Math.round(((stats.linkedWithImages - stats.pendingImages) / stats.linkedWithImages) * 100)
     : 100;
+
+  const totalTracked = stats.syncStatus.uploaded + stats.syncStatus.confirmed + stats.syncStatus.failed + stats.syncStatus.pending;
+  const confirmedPct = totalTracked > 0 ? Math.round((stats.syncStatus.confirmed / totalTracked) * 100) : 0;
 
   return (
     <div className="space-y-4">
@@ -139,6 +170,52 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
           highlight={stats.imageFailures > 0}
         />
       </div>
+
+      {/* Image sync status tracking */}
+      {totalTracked > 0 && (
+        <Card className="card-elevated">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              Image Upload Verificatie
+              <Badge variant="outline" className="text-[10px] ml-auto">Push + Webhook</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-4">
+              <MiniStat label="Push Bevestigd" value={stats.syncStatus.uploaded} color="text-primary" />
+              <MiniStat label="Webhook Bevestigd" value={stats.syncStatus.confirmed} color="text-success" icon={Webhook} />
+              <MiniStat label="Mislukt" value={stats.syncStatus.failed} color="text-destructive" />
+              <MiniStat label="In Afwachting" value={stats.syncStatus.pending} color="text-muted-foreground" />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Webhook bevestiging</span>
+                <span className="font-medium">{confirmedPct}%</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden flex">
+                <div
+                  className="h-full bg-success transition-all"
+                  style={{ width: `${totalTracked > 0 ? (stats.syncStatus.confirmed / totalTracked) * 100 : 0}%` }}
+                />
+                <div
+                  className="h-full bg-primary transition-all"
+                  style={{ width: `${totalTracked > 0 ? (stats.syncStatus.uploaded / totalTracked) * 100 : 0}%` }}
+                />
+                <div
+                  className="h-full bg-destructive transition-all"
+                  style={{ width: `${totalTracked > 0 ? (stats.syncStatus.failed / totalTracked) * 100 : 0}%` }}
+                />
+              </div>
+              <div className="flex gap-4 text-[10px] text-muted-foreground pt-1">
+                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-success" />Webhook OK</span>
+                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-primary" />Push OK</span>
+                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-destructive" />Mislukt</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Progress bar */}
       {stats.pendingImages > 0 && (
@@ -243,6 +320,23 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
           )}
         </CardContent>
       </Card>
+
+      {/* Webhook setup info */}
+      <Card className="card-elevated border-dashed">
+        <CardContent className="pt-5">
+          <div className="flex items-start gap-3">
+            <Webhook className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="text-sm font-medium">Webhook Configuratie</p>
+              <p className="text-xs text-muted-foreground">
+                Configureer een WooCommerce webhook met topic <code className="bg-muted px-1 py-0.5 rounded text-[10px]">Product updated</code> naar 
+                het endpoint <code className="bg-muted px-1 py-0.5 rounded text-[10px]">woo-media-webhook</code> voor automatische bevestiging van afbeelding uploads.
+                Gebruik hetzelfde webhook secret als het order webhook.
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 };
@@ -263,5 +357,19 @@ function StatCard({ icon: Icon, iconClass, label, value, sub, highlight }: {
         <p className="text-xs text-muted-foreground mt-1">{sub}</p>
       </CardContent>
     </Card>
+  );
+}
+
+function MiniStat({ label, value, color, icon: Icon }: {
+  label: string; value: number; color: string; icon?: typeof Webhook;
+}) {
+  return (
+    <div className="text-center p-2 rounded-lg bg-muted/30">
+      <div className={`text-xl font-bold ${color} flex items-center justify-center gap-1`}>
+        {Icon && <Icon className="h-4 w-4" />}
+        {value}
+      </div>
+      <p className="text-[10px] text-muted-foreground mt-0.5">{label}</p>
+    </div>
   );
 }
