@@ -24,7 +24,7 @@ function extractStoragePath(url: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-async function convertToDataUrl(imageUrl: string, supabase: any): Promise<string> {
+async function convertToDataUrl(imageUrl: string, supabase: any): Promise<string | null> {
   const storagePath = extractStoragePath(imageUrl);
   if (!storagePath) return imageUrl;
 
@@ -34,8 +34,8 @@ async function convertToDataUrl(imageUrl: string, supabase: any): Promise<string
       .download(storagePath);
 
     if (error || !fileData) {
-      console.warn(`Failed to download ${storagePath}: ${error?.message}`);
-      return imageUrl;
+      console.warn(`⚠ Image not found in storage, skipping: ${storagePath} (${error?.message})`);
+      return null;
     }
 
     const arrayBuffer = await fileData.arrayBuffer();
@@ -43,7 +43,12 @@ async function convertToDataUrl(imageUrl: string, supabase: any): Promise<string
 
     if (bytes.length > 5 * 1024 * 1024) {
       console.warn(`Image too large for base64 (${(bytes.length / 1024 / 1024).toFixed(1)}MB): ${storagePath}`);
-      return imageUrl;
+      return null;
+    }
+
+    if (bytes.length < 100) {
+      console.warn(`⚠ Image file too small / empty, skipping: ${storagePath} (${bytes.length} bytes)`);
+      return null;
     }
 
     let binary = '';
@@ -58,18 +63,28 @@ async function convertToDataUrl(imageUrl: string, supabase: any): Promise<string
     return `data:${mimeType};base64,${base64}`;
   } catch (err) {
     console.warn(`Base64 conversion failed for ${storagePath}:`, err);
-    return imageUrl;
+    return null;
   }
 }
 
 async function convertImagesToDataUrls(imageUrls: string[], supabase: any): Promise<string[]> {
   const results: string[] = [];
+  const failed: string[] = [];
   for (const url of imageUrls) {
     if (isSupabaseStorageUrl(url)) {
-      results.push(await convertToDataUrl(url, supabase));
+      const converted = await convertToDataUrl(url, supabase);
+      if (converted) {
+        results.push(converted);
+      } else {
+        failed.push(url);
+      }
     } else {
+      // Non-supabase URLs are passed through (but likely will be blocked by SiteGround)
       results.push(url);
     }
+  }
+  if (failed.length > 0) {
+    console.warn(`⚠ ${failed.length} images removed (not found in storage): ${failed.map(u => extractStoragePath(u) || u).join(', ')}`);
   }
   return results;
 }
@@ -664,6 +679,7 @@ async function createProductInWooCommerce(
 
   // Prepare product images - convert relative storage paths to absolute URLs, then base64
   const storageBaseUrl = `${Deno.env.get('SUPABASE_URL')}/storage/v1/object/public/product-images/`;
+  const originalImageCount = (images || []).filter((img: string) => img && img.trim().length > 0).length;
   let imageUrls = (images || [])
     .filter((img: string) => img && img.trim().length > 0)
     .map((img: string) => {
@@ -676,6 +692,23 @@ async function createProductInWooCommerce(
     imageUrls = await convertImagesToDataUrls(imageUrls, supabase);
   }
   const productImages = imageUrls.map((src: string) => ({ src }));
+
+  // Track missing images in image_sync_status for later retry
+  const missingImageCount = originalImageCount - imageUrls.length;
+  if (missingImageCount > 0 && supabase && tenantId) {
+    console.warn(`Product ${sku}: ${missingImageCount}/${originalImageCount} images missing from storage`);
+    await supabase.from('image_sync_status').upsert({
+      product_id: product.id,
+      tenant_id: tenantId,
+      status: 'failed',
+      image_count: originalImageCount,
+      uploaded_count: imageUrls.length,
+      failed_count: missingImageCount,
+      error_message: `${missingImageCount} afbeeldingen niet gevonden in storage`,
+      push_attempted_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'product_id' });
+  }
 
   // Prepare size attribute values from variants
   const variantsToCreate = variantIdsFilter 
