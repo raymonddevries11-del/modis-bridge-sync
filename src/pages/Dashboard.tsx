@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { PushHealthWidget } from "@/components/woocommerce/PushHealthWidget";
 import { JobHealthWidget } from "@/components/dashboard/JobHealthWidget";
+import { RetryMonitorWidget } from "@/components/dashboard/RetryMonitorWidget";
 
 // --- Helpers ---
 function timeAgo(dateStr: string): string {
@@ -333,10 +334,11 @@ const Dashboard = () => {
         </div>
 
 
-        {/* Push Health + Job Health Widgets */}
-        <div className="grid gap-4 lg:grid-cols-2">
+        {/* Push Health + Job Health + Retry Monitor */}
+        <div className="grid gap-4 lg:grid-cols-3">
           <PushHealthWidget />
           <JobHealthWidget />
+          <RetryMonitorWidget />
         </div>
 
         {/* Bottom row: Activity Feed + Job Queue */}

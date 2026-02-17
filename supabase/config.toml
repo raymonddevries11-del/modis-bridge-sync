@@ -170,3 +170,6 @@ verify_jwt = false
 
 [functions.retry-image-sync]
 verify_jwt = false
+
+[functions.retry-monitor]
+verify_jwt = false
