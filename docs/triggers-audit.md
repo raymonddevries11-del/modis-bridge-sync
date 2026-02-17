@@ -48,14 +48,31 @@ These tables have `update_updated_at_column()` triggers (BEFORE UPDATE):
 
 ---
 
-## Removed Triggers (Cleanup 2026-02-17)
+## Removed Triggers & Functions
 
-| Trigger | Table | Function | Reason for removal |
+| Item | Type | Table | Reason for removal |
 |---|---|---|---|
-| `queue_price_sync_trigger` | `product_prices` | `queue_price_sync()` | **Duplicate.** Both this and `trg_product_prices_sync` fired on UPDATE, causing double-writes to `pending_product_syncs`. The newer `trigger_sync_product_prices()` already handles the fallback. |
-| `queue_stock_sync_trigger` | `stock_totals` | `queue_stock_sync()` | **Duplicate.** Same issue — redundant with `trg_stock_totals_sync`. |
+| `queue_price_sync_trigger` | Trigger | `product_prices` | **Duplicate.** Redundant with `trg_product_prices_sync`. Removed 2026-02-17. |
+| `queue_stock_sync_trigger` | Trigger | `stock_totals` | **Duplicate.** Redundant with `trg_stock_totals_sync`. Removed 2026-02-17. |
+| `queue_price_sync()` | Function | — | Orphaned after trigger removal. Dropped 2026-02-17. |
+| `queue_stock_sync()` | Function | — | Orphaned after trigger removal. Dropped 2026-02-17. |
+| `track_product_change()` | Function | — | **Orphaned.** Never attached to a trigger. Logic fully covered by `trigger_sync_product_prices()` and `trigger_sync_stock_totals()`. Dropped 2026-02-17. |
 
-The orphaned functions `queue_price_sync()` and `queue_stock_sync()` were also dropped.
+---
+
+## Single Source of Truth — Price & Stock Triggers
+
+Each table has exactly **one** trigger handling sync job creation:
+
+- **`product_prices`** → `trg_product_prices_sync` → `trigger_sync_product_prices()`
+- **`stock_totals`** → `trg_stock_totals_sync` → `trigger_sync_stock_totals()`
+
+Both follow an identical pattern:
+1. **Change detection**: `OLD.field IS DISTINCT FROM NEW.field`
+2. **Backpressure**: If queue ≥ 100, write to `pending_product_syncs` instead
+3. **Idempotent insert**: `EXCEPTION WHEN unique_violation THEN NULL`
+
+No other functions or triggers should write sync jobs for these tables.
 
 ---
 
