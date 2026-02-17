@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
-  Image, CheckCircle2, XCircle, Clock, Loader2, ImageOff, TrendingUp, Webhook, ShieldCheck, RotateCcw, AlertTriangle,
+  Image, CheckCircle2, XCircle, Clock, Loader2, ImageOff, TrendingUp, Webhook, ShieldCheck, RotateCcw, AlertTriangle, Play, Square, Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -16,6 +16,8 @@ interface ImageSyncDashboardProps {
 
 export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
   const [retrying, setRetrying] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data: stats, refetch } = useQuery({
     queryKey: ["image-sync-stats", tenantId],
@@ -32,6 +34,7 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
         statusFailedRes,
         statusPendingRes,
         retryExhaustedRes,
+        checkpointRes,
       ] = await Promise.all([
         supabase
           .from("pending_product_syncs")
@@ -87,13 +90,18 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
           .select("id", { count: "exact", head: true })
           .eq("tenant_id", tenantId)
           .eq("status", "pending"),
-        // Items that exhausted all retries
         supabase
           .from("image_sync_status")
           .select("id", { count: "exact", head: true })
           .eq("tenant_id", tenantId)
           .eq("status", "failed")
           .gte("retry_count", 5),
+        // Checkpoint
+        supabase
+          .from("config")
+          .select("value")
+          .eq("key", `image_sync_checkpoint_${tenantId}`)
+          .maybeSingle(),
       ]);
 
       const reasonCounts: Record<string, number> = {};
@@ -107,6 +115,11 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
         if (log.event_type === "WOO_IMAGE_UPLOAD_FAILED") imageFailures++;
         if (log.event_type === "WOO_PRODUCT_PUSH") imagePushes++;
       }
+
+      const checkpoint = checkpointRes.data?.value as {
+        offset: number; total: number; processed: number; updated: number;
+        errors: number; started_at: string; last_batch_at: string;
+      } | null;
 
       return {
         pendingImages: pendingRes.count ?? 0,
@@ -124,6 +137,7 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
           pending: statusPendingRes.count ?? 0,
         },
         retryExhausted: retryExhaustedRes.count ?? 0,
+        checkpoint,
       };
     },
     enabled: !!tenantId,
@@ -143,6 +157,37 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
       toast.error(`Retry mislukt: ${err.message}`);
     } finally {
       setRetrying(false);
+    }
+  };
+
+  const handleResume = async () => {
+    setSyncing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("sync-woo-images", {
+        body: { tenantId, resume: true, dryRun: false },
+      });
+      if (error) throw error;
+      const s = data?.summary;
+      toast.success(
+        `Batch verwerkt: ${s?.processed || 0} producten (${s?.updated || 0} bijgewerkt).${s?.nextOffset ? " Meer batches beschikbaar." : " Klaar!"}`,
+      );
+      refetch();
+    } catch (err: any) {
+      toast.error(`Sync mislukt: ${err.message}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleResetCheckpoint = async () => {
+    try {
+      await supabase.functions.invoke("sync-woo-images", {
+        body: { tenantId, resetCheckpoint: true },
+      });
+      toast.success("Checkpoint gereset");
+      refetch();
+    } catch (err: any) {
+      toast.error(`Reset mislukt: ${err.message}`);
     }
   };
 
@@ -166,6 +211,56 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
 
   return (
     <div className="space-y-4">
+      {/* Checkpoint resume card */}
+      {stats.checkpoint && (
+        <Card className="card-elevated border-primary/30">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Play className="h-4 w-4 text-primary" />
+              Onderbroken Sync — Hervat beschikbaar
+              <Badge variant="secondary" className="text-[10px] ml-auto">
+                {stats.checkpoint.processed} / {stats.checkpoint.total}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Progress
+              value={stats.checkpoint.total > 0 ? Math.round((stats.checkpoint.processed / stats.checkpoint.total) * 100) : 0}
+              className="h-2"
+            />
+            <div className="grid gap-3 sm:grid-cols-4">
+              <MiniStat label="Verwerkt" value={stats.checkpoint.processed} color="text-primary" />
+              <MiniStat label="Bijgewerkt" value={stats.checkpoint.updated} color="text-success" />
+              <MiniStat label="Fouten" value={stats.checkpoint.errors} color="text-destructive" />
+              <MiniStat label="Resterend" value={stats.checkpoint.total - stats.checkpoint.processed} color="text-muted-foreground" />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Gestart {new Date(stats.checkpoint.started_at).toLocaleString("nl-NL")} — 
+              laatste batch {new Date(stats.checkpoint.last_batch_at).toLocaleTimeString("nl-NL")}
+            </p>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                onClick={handleResume}
+                disabled={syncing}
+              >
+                {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Play className="h-3.5 w-3.5 mr-1.5" />}
+                Hervat sync
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleResetCheckpoint}
+                disabled={syncing}
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                Reset checkpoint
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Progress overview */}
       <div className="grid gap-4 md:grid-cols-4">
         <StatCard
