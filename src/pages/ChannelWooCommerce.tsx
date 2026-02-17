@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Send, RefreshCw, CheckCircle2, Link2, Globe, Loader2, Package, ArrowUpDown, Unlink, AlertTriangle } from "lucide-react";
+import { Send, RefreshCw, CheckCircle2, Link2, Globe, Loader2, Package, ArrowUpDown, Unlink, AlertTriangle, Trash2 } from "lucide-react";
 import { TenantSelector } from "@/components/TenantSelector";
 import { UrlKeyAudit } from "@/components/woocommerce/UrlKeyAudit";
 import { WooProductTable } from "@/components/woocommerce/WooProductTable";
@@ -23,6 +23,7 @@ const ChannelWooCommerce = () => {
   const [syncingSlugs, setSyncingSlugs] = useState(false);
   const [fullSyncing, setFullSyncing] = useState(false);
   const [syncingMissing, setSyncingMissing] = useState(false);
+  const [purgingDuplicates, setPurgingDuplicates] = useState(false);
   const navigate = useNavigate();
 
   // Fetch sync stats
@@ -97,6 +98,22 @@ const ChannelWooCommerce = () => {
       refetchStats();
     } catch (e: any) { toast.error(`Fout: ${e.message}`); }
     finally { setSyncingMissing(false); }
+  };
+
+  const handlePurgeDuplicates = async () => {
+    if (!tenantId) { toast.error("Selecteer eerst een tenant"); return; }
+    setPurgingDuplicates(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("purge-duplicate-attributes", { body: { tenantId } });
+      if (error) throw error;
+      if (data?.products_fixed > 0) {
+        toast.success(`${data.products_fixed} producten gefixt, ${data.duplicates_removed} duplicaten verwijderd, ${data.global_attrs_refreshed} attrs ververst`);
+      } else {
+        toast.info(`Geen duplicaten gevonden. ${data?.global_attrs_refreshed ?? 0} global attrs ververst.`);
+      }
+      refetchStats();
+    } catch (e: any) { toast.error(`Fout: ${e.message}`); }
+    finally { setPurgingDuplicates(false); }
   };
 
   const syncPercentage = stats ? Math.round((stats.syncedProducts / Math.max(stats.totalProducts, 1)) * 100) : 0;
@@ -276,6 +293,10 @@ const ChannelWooCommerce = () => {
                   <Button variant="outline" size="sm" disabled={!tenantId || syncingSlugs} onClick={() => createJob("SYNC_WOO_SLUGS", "Sync Slugs", setSyncingSlugs)}>
                     <Globe className="mr-2 h-4 w-4" />
                     {syncingSlugs ? "Bezig..." : "Sync alle Slugs"}
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={!tenantId || purgingDuplicates} onClick={handlePurgeDuplicates} className="border-destructive/30 text-destructive hover:bg-destructive/10">
+                    {purgingDuplicates ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                    {purgingDuplicates ? "Purging..." : "Purge Dubbele Attributen"}
                   </Button>
                 </div>
               </CardContent>
