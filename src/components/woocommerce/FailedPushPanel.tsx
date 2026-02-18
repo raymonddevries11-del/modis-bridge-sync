@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { invokeEdgeFunction } from "@/lib/edge-function-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -108,10 +109,10 @@ export const FailedPushPanel = ({ tenantId }: FailedPushPanelProps) => {
     }
     setRetryingIds(prev => new Set(prev).add(product.id));
     try {
-      const { data, error } = await supabase.functions.invoke("push-to-woocommerce", {
+      const data = await invokeEdgeFunction<{ results: any[] }>("push-to-woocommerce", {
         body: { tenantId, productIds: [product.product_id] },
+        maxRetries: 2,
       });
-      if (error) throw error;
 
       const result = data.results?.[0];
       if (result?.action === "updated") {

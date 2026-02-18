@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { invokeEdgeFunction } from "@/lib/edge-function-client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,11 +54,10 @@ export const AiContentTab = ({ product }: AiContentTabProps) => {
   // Generate AI content mutation
   const generateMutation = useMutation({
     mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke("generate-ai-content", {
+      return await invokeEdgeFunction("generate-ai-content", {
         body: { productIds: [product.id], tenantId: product.tenant_id },
+        maxRetries: 2,
       });
-      if (error) throw error;
-      return data;
     },
     onSuccess: () => {
       toast.success("AI content gegenereerd");

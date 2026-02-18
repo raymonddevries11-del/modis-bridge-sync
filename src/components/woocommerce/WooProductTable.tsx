@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { invokeEdgeFunction } from "@/lib/edge-function-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -172,8 +173,7 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
   const handleFetchAll = async () => {
     setFetching(true);
     try {
-      const { data, error } = await supabase.functions.invoke("fetch-woo-product-list", { body: { tenantId } });
-      if (error) throw error;
+      const data = await invokeEdgeFunction<{ fetched: number }>("fetch-woo-product-list", { body: { tenantId }, maxRetries: 2 });
       toast.success(`${data.fetched} producten opgehaald uit WooCommerce`);
       refetch();
     } catch (e: any) { toast.error(`Fout bij ophalen: ${e.message}`); }
@@ -184,11 +184,10 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
     if (!wooProduct.product_id) { toast.error("Dit product is niet gekoppeld aan een PIM product"); return; }
     setPushingId(wooProduct.id);
     try {
-      const { data, error } = await supabase.functions.invoke("push-to-woocommerce", {
+      const data = await invokeEdgeFunction<{ results: any[] }>("push-to-woocommerce", {
         body: { tenantId, productIds: [wooProduct.product_id] },
+        maxRetries: 2,
       });
-      if (error) throw error;
-
       const result = data.results?.[0];
       if (result?.action === "updated") {
         toast.success(`${result.sku}: ${result.changes.length} velden bijgewerkt`);
@@ -216,10 +215,11 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
 
       for (let i = 0; i < productIds.length; i += batchSize) {
         const batch = productIds.slice(i, i + batchSize);
-        const { data, error } = await supabase.functions.invoke("push-to-woocommerce", {
+        const data = await invokeEdgeFunction<{ totals: any }>("push-to-woocommerce", {
           body: { tenantId, productIds: batch },
-        });
-        if (error) { totalErrors += batch.length; continue; }
+          maxRetries: 1,
+        }).catch(() => null);
+        if (!data) { totalErrors += batch.length; continue; }
         totalCreated += data.totals?.created || 0;
         totalUpdated += data.totals?.updated || 0;
         totalSkipped += data.totals?.skipped || 0;

@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { invokeEdgeFunction } from "@/lib/edge-function-client";
 import { toast } from "sonner";
 import { Save, Image as ImageIcon, RefreshCw, AlertCircle, Package, Sparkles } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -180,11 +181,10 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
   const { data: compareData, isLoading: isComparing, refetch: refetchCompare } = useQuery({
     queryKey: ["product-compare", product.id],
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke("compare-product", {
+      return await invokeEdgeFunction<{ differences: { exists: boolean; fields: Record<string, any> } }>("compare-product", {
         body: { productId: product.id, tenantId: product.tenant_id },
+        maxRetries: 2,
       });
-      if (error) throw error;
-      return data;
     },
     enabled: false, // Only fetch when user clicks compare
   });
