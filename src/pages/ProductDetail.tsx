@@ -261,6 +261,42 @@ const ProductDetail = () => {
     enabled: !!id,
   });
 
+  const { data: pendingSyncJob } = useQuery({
+    queryKey: ["pending-sync-job", id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("jobs")
+        .select("id, state, created_at, error, attempts")
+        .eq("type", "SYNC_TO_WOO")
+        .in("state", ["ready", "processing", "error"])
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      // Find a job that contains this product id in its payload
+      return data?.find((job: any) => {
+        const productIds = (job.payload as any)?.productIds;
+        return Array.isArray(productIds) && productIds.includes(id);
+      }) || null;
+    },
+    enabled: !!id,
+    refetchInterval: 10000,
+  });
+
+  const retryJobMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      const { error } = await supabase
+        .from("jobs")
+        .update({ state: "ready", attempts: 0, error: null, updated_at: new Date().toISOString() })
+        .eq("id", jobId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Sync-job opnieuw ingepland");
+      queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] });
+    },
+    onError: (e: any) => toast.error(`Fout: ${e.message}`),
+  });
+
   const pushToWooMutation = useMutation({
     mutationFn: async () => {
       if (!product) throw new Error("Geen product");
@@ -557,6 +593,50 @@ const ProductDetail = () => {
                   {pushToWooMutation.isPending ? "Bezig..." : "Opnieuw pushen"}
                 </Button>
               </div>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Pending Sync Job Status */}
+        {pendingSyncJob && (
+          <Alert className={pendingSyncJob.state === 'error' 
+            ? "border-destructive/50 bg-destructive/10" 
+            : "border-primary/50 bg-primary/10"
+          }>
+            {pendingSyncJob.state === 'error' ? (
+              <XCircle className="h-4 w-4 text-destructive" />
+            ) : (
+              <RefreshCw className="h-4 w-4 text-primary animate-spin" />
+            )}
+            <AlertDescription className="flex items-center justify-between">
+              <span className="text-sm">
+                {pendingSyncJob.state === 'ready' && (
+                  <>Sync-job staat <strong>klaar</strong> om verwerkt te worden</>
+                )}
+                {pendingSyncJob.state === 'processing' && (
+                  <>Sync-job wordt <strong>nu verwerkt</strong>…</>
+                )}
+                {pendingSyncJob.state === 'error' && (
+                  <>Sync-job is <strong>mislukt</strong> na {pendingSyncJob.attempts} poging(en)
+                    {pendingSyncJob.error && <span className="text-muted-foreground ml-1">— {pendingSyncJob.error.slice(0, 80)}</span>}
+                  </>
+                )}
+                <span className="text-muted-foreground ml-2 text-xs">
+                  · {new Date(pendingSyncJob.created_at).toLocaleString("nl-NL")}
+                </span>
+              </span>
+              {pendingSyncJob.state === 'error' && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => retryJobMutation.mutate(pendingSyncJob.id)}
+                  disabled={retryJobMutation.isPending}
+                  className="ml-4 flex-shrink-0"
+                >
+                  <RefreshCw className="h-4 w-4 mr-1" />
+                  {retryJobMutation.isPending ? "Bezig..." : "Opnieuw proberen"}
+                </Button>
+              )}
             </AlertDescription>
           </Alert>
         )}
