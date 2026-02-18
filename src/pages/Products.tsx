@@ -177,7 +177,7 @@ const Products = () => {
       while (true) {
         let query = supabase
           .from("products")
-          .select(`id, sku, title, images, webshop_text, meta_title, meta_description, brand_id, attributes, categories,
+          .select(`id, sku, title, images, webshop_text, meta_title, meta_description, brand_id, attributes, categories, is_promotion,
             brands(id, name),
             product_prices(regular),
             variants(id, size_label, stock_totals(qty))
@@ -1362,6 +1362,7 @@ const Products = () => {
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-xs font-mono text-muted-foreground">{product.sku}</span>
                           {product.brands?.name && <Badge variant="outline" className="text-[10px] px-1.5 py-0">{product.brands.name}</Badge>}
+                          {product.is_promotion && <Badge className="bg-destructive text-destructive-foreground text-[10px] px-1.5 py-0">Sale</Badge>}
                           {aiTitlesMap?.[product.id]?.status === "approved" && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-success/15 text-success">AI ✓</Badge>}
                           {aiTitlesMap?.[product.id]?.status === "generated" && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-warning/15 text-warning">AI</Badge>}
                         </div>
