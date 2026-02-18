@@ -5,6 +5,35 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+/** Upsert into woo_products to keep local SKU cache in sync and prevent duplicate CREATE jobs */
+async function upsertWooProductCache(
+  supabase: any,
+  tenantId: string,
+  wooId: number,
+  productId: string,
+  sku: string,
+  name: string,
+  slug?: string,
+  status?: string,
+  type?: string,
+) {
+  try {
+    await supabase.from('woo_products').upsert({
+      tenant_id: tenantId,
+      woo_id: wooId,
+      product_id: productId,
+      sku,
+      name,
+      slug: slug || '',
+      status: status || 'publish',
+      type: type || 'variable',
+      last_pushed_at: new Date().toISOString(),
+    }, { onConflict: 'tenant_id,woo_id' });
+  } catch (e) {
+    console.error(`Failed to upsert woo_products cache for ${sku}:`, e);
+  }
+}
+
 // --- Base64 image conversion for Supabase storage URLs ---
 // SiteGround's firewall blocks WooCommerce from fetching Supabase storage URLs.
 // We download images server-side and convert to data URLs.
@@ -1080,6 +1109,7 @@ async function createProductInWooCommerce(
             `Nieuw product aangemaakt in WooCommerce (zonder afbeeldingen): ${title} (${sku})`,
             { productId: product.id, sku, title, wooProductId: createdProduct.id, variantCount: variantsToCreate?.length || 0, imagesSkipped: true }
           );
+          await upsertWooProductCache(supabase, tenantId, createdProduct.id, product.id, sku, title, createdProduct.slug, createdProduct.status, createdProduct.type);
         }
 
         if (variantsToCreate && variantsToCreate.length > 0) {
@@ -1147,6 +1177,7 @@ async function createProductInWooCommerce(
         variantCount: variantsToCreate?.length || 0
       }
     );
+    await upsertWooProductCache(supabase, tenantId, createdProduct.id, product.id, sku, title, createdProduct.slug, createdProduct.status, createdProduct.type);
   }
 
   // Create variations — pass globalMaatId for proper attribute linking
@@ -1846,6 +1877,10 @@ async function updateProductInWooCommerce(
             changes: changesArray
           }
         );
+      }
+      // Invalidate local cache so sync-new-products won't re-queue this product
+      if (supabase && tenantId) {
+        await upsertWooProductCache(supabase, tenantId, wooProductId, product.id, sku, title, undefined, undefined, product.product_type);
       }
     }
   }
