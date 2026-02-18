@@ -300,6 +300,27 @@ const ProductDetail = () => {
   const pushToWooMutation = useMutation({
     mutationFn: async () => {
       if (!product) throw new Error("Geen product");
+
+      // Pre-flight: check for existing pending/processing job to avoid hitting the constraint
+      const { data: existingJobs } = await supabase
+        .from("jobs")
+        .select("id, state, created_at")
+        .eq("type", "SYNC_TO_WOO")
+        .in("state", ["ready", "processing"])
+        .limit(100);
+
+      const alreadyQueued = existingJobs?.find((job: any) => {
+        const ids = (job.payload as any)?.productIds;
+        return Array.isArray(ids) && ids.includes(product.id);
+      });
+
+      if (alreadyQueued) {
+        const stateLabel = alreadyQueued.state === "processing" ? "wordt nu verwerkt" : "staat al in de wachtrij";
+        toast.info(`Dit product ${stateLabel} (sinds ${new Date(alreadyQueued.created_at).toLocaleString("nl-NL")})`);
+        queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] });
+        return "dedupe";
+      }
+
       const { error } = await supabase.from("jobs").insert({
         type: "SYNC_TO_WOO",
         state: "ready",
@@ -307,17 +328,22 @@ const ProductDetail = () => {
         payload: { productIds: [product.id] },
       });
       if (error) {
-        // Handle duplicate job constraint - job already exists
+        // Fallback: handle race-condition duplicate at DB level
         if (error.message?.includes("idx_jobs_dedupe") || error.code === "23505") {
           toast.info("Er staat al een sync-job klaar voor dit product");
-          return;
+          queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] });
+          return "dedupe";
         }
         throw error;
       }
+      return "created";
     },
-    onSuccess: () => {
-      toast.success("Sync-job aangemaakt — product wordt naar WooCommerce gepusht");
+    onSuccess: (result) => {
+      if (result !== "dedupe") {
+        toast.success("Sync-job aangemaakt — product wordt naar WooCommerce gepusht");
+      }
       queryClient.invalidateQueries({ queryKey: ["woo-link", id] });
+      queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] });
     },
     onError: (e: any) => toast.error(`Fout: ${e.message}`),
   });
