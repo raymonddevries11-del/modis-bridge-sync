@@ -5,28 +5,34 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const FETCH_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (compatible; PIM-Sync/1.0)',
+  'Accept': 'application/json',
+};
+
 interface WooProduct {
   id: number;
   sku: string;
+  name: string;
+  slug: string;
   type: string;
   status: string;
   stock_quantity: number;
+  permalink: string;
+  regular_price: string;
+  sale_price: string;
+  stock_status: string;
+  categories: any[];
+  tags: any[];
+  images: any[];
 }
 
-interface WooVariation {
-  id: number;
-  sku: string;
-  stock_quantity: number;
-}
-
-interface CacheData {
-  products: { sku: string; id: number; type: string; status: string; stock_quantity: number }[];
-  variations: { sku: string; id: number; parent_id: number; stock_quantity: number }[];
-  cached_at: string;
-  product_count: number;
-  variation_count: number;
-  complete: boolean;
-  last_variable_index?: number;
+interface CacheProgress {
+  phase: 'products' | 'variations' | 'upsert' | 'done';
+  productPage: number;
+  variableIndex: number;
+  totalProducts: number;
+  totalVariations: number;
 }
 
 Deno.serve(async (req) => {
@@ -40,202 +46,299 @@ Deno.serve(async (req) => {
   );
 
   try {
-    const { tenantId, continueFrom } = await req.json();
+    const body = await req.json().catch(() => ({}));
+    const { tenantId, phase } = body;
 
-    if (!tenantId) {
-      throw new Error('tenantId is required');
-    }
-
-    console.log(`Starting WooCommerce cache build for tenant ${tenantId}, continueFrom: ${continueFrom ?? 'start'}`);
+    if (!tenantId) throw new Error('tenantId is required');
 
     // Get tenant config
-    const { data: tenantConfig, error: configError } = await supabase
+    const { data: tenantConfig } = await supabase
       .from('tenant_config')
       .select('*')
       .eq('tenant_id', tenantId)
       .maybeSingle();
 
-    if (configError || !tenantConfig) {
-      throw new Error(`Failed to get tenant config: ${configError?.message}`);
+    if (!tenantConfig) throw new Error('No tenant config found');
+
+    const progressKey = `woo_cache_progress_${tenantId}`;
+
+    // Load existing progress
+    const { data: progressData } = await supabase
+      .from('config')
+      .select('value')
+      .eq('key', progressKey)
+      .maybeSingle();
+
+    const progress: CacheProgress = (progressData?.value as any) ?? {
+      phase: 'products',
+      productPage: 1,
+      variableIndex: 0,
+      totalProducts: 0,
+      totalVariations: 0,
+    };
+
+    // Override phase if explicitly requested
+    if (phase === 'products') {
+      progress.phase = 'products';
+      progress.productPage = 1;
+    } else if (phase === 'variations') {
+      progress.phase = 'variations';
+    } else if (phase === 'upsert') {
+      progress.phase = 'upsert';
     }
 
-    const cacheKey = `woo_cache_${tenantId}`;
-    
-    // Check for existing partial cache
-    let existingCache: CacheData | null = null;
-    if (continueFrom !== undefined) {
-      const { data: configData } = await supabase
-        .from('config')
-        .select('value')
-        .eq('key', cacheKey)
-        .maybeSingle();
-      
-      if (configData?.value) {
-        existingCache = configData.value as CacheData;
-        console.log(`Continuing from existing cache: ${existingCache.product_count} products, ${existingCache.variation_count} variations`);
-      }
-    }
+    console.log(`Phase: ${progress.phase}, page: ${progress.productPage}, varIdx: ${progress.variableIndex}`);
 
-    let wooProducts: { sku: string; id: number; type: string; status: string; stock_quantity: number }[] = existingCache?.products ?? [];
-    let wooVariations: { sku: string; id: number; parent_id: number; stock_quantity: number }[] = existingCache?.variations ?? [];
-    
-    // STEP 1: Fetch ALL WooCommerce products (only if starting fresh)
-    if (!existingCache || continueFrom === undefined) {
-      console.log('Fetching all WooCommerce products...');
-      wooProducts = [];
-      let page = 1;
-      const perPage = 100;
+    // ──────────────────────────────────
+    // PHASE 1: Fetch products page by page → upsert directly into woo_products
+    // ──────────────────────────────────
+    if (progress.phase === 'products') {
+      const MAX_PAGES_PER_RUN = 15; // ~15 pages × 100 = 1500 products per run
+      let page = progress.productPage;
+      let pagesProcessed = 0;
+      let productsThisRun = 0;
 
-      while (true) {
+      while (pagesProcessed < MAX_PAGES_PER_RUN) {
         const url = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products`);
         url.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
         url.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
-        url.searchParams.append('per_page', String(perPage));
+        url.searchParams.append('per_page', '100');
         url.searchParams.append('page', String(page));
         url.searchParams.append('status', 'any');
 
-        const response = await fetch(url.toString());
+        const response = await fetch(url.toString(), { headers: FETCH_HEADERS });
+
         if (!response.ok) {
-          throw new Error(`Failed to fetch WooCommerce products page ${page}: ${response.status}`);
+          const text = await response.text();
+          if (text.includes('<html') || text.includes('sgcapt')) {
+            console.warn(`SiteGround blocked page ${page}, saving progress and stopping`);
+            break;
+          }
+          throw new Error(`WooCommerce API error page ${page}: ${response.status}`);
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          console.warn(`Non-JSON response on page ${page}, stopping`);
+          break;
         }
 
         const products: WooProduct[] = await response.json();
         console.log(`Products page ${page}: ${products.length} items`);
 
-        for (const product of products) {
-          if (product.sku) {
-            wooProducts.push({
-              sku: product.sku,
-              id: product.id,
-              type: product.type,
-              status: product.status || 'publish',
-              stock_quantity: product.stock_quantity || 0,
-            });
-          }
-        }
+        if (products.length > 0) {
+          // Upsert directly into woo_products
+          const rows = products
+            .filter(p => p.sku)
+            .map(p => ({
+              woo_id: p.id,
+              tenant_id: tenantId,
+              sku: p.sku,
+              name: p.name,
+              slug: p.slug || null,
+              type: p.type || 'simple',
+              status: p.status || 'publish',
+              stock_quantity: p.stock_quantity || 0,
+              stock_status: p.stock_status || 'instock',
+              permalink: p.permalink || null,
+              regular_price: p.regular_price || null,
+              sale_price: p.sale_price || null,
+              categories: p.categories || [],
+              tags: p.tags || [],
+              images: p.images || [],
+              last_fetched_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }));
 
-        if (products.length < perPage) break;
-        page++;
-      }
+          if (rows.length > 0) {
+            const { error: upsertErr } = await supabase
+              .from('woo_products')
+              .upsert(rows, { onConflict: 'tenant_id,woo_id', ignoreDuplicates: false });
 
-      console.log(`Total products fetched: ${wooProducts.length}`);
-    }
-
-    // STEP 2: Fetch variations for variable products WITH PAGINATION
-    const variableProducts = wooProducts.filter(p => p.type === 'variable');
-    const startIndex = continueFrom ?? 0;
-    const BATCH_SIZE = 10;
-    const MAX_PRODUCTS_PER_RUN = 500; // Process max 500 variable products per run
-    const endIndex = Math.min(startIndex + MAX_PRODUCTS_PER_RUN, variableProducts.length);
-    
-    console.log(`Fetching variations for variable products ${startIndex}-${endIndex} of ${variableProducts.length}...`);
-
-    for (let i = startIndex; i < endIndex; i += BATCH_SIZE) {
-      const batch = variableProducts.slice(i, Math.min(i + BATCH_SIZE, endIndex));
-      
-      await Promise.all(batch.map(async (product) => {
-        try {
-          let varPage = 1;
-          while (true) {
-            const varUrl = new URL(`${tenantConfig.woocommerce_url}/wp-json/wc/v3/products/${product.id}/variations`);
-            varUrl.searchParams.append('consumer_key', tenantConfig.woocommerce_consumer_key);
-            varUrl.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
-            varUrl.searchParams.append('per_page', '100');
-            varUrl.searchParams.append('page', String(varPage));
-
-            const varResponse = await fetch(varUrl.toString());
-            if (varResponse.ok) {
-              const variations: WooVariation[] = await varResponse.json();
-              for (const variation of variations) {
-                if (variation.sku) {
-                  // Avoid duplicates
-                  const exists = wooVariations.some(v => v.id === variation.id);
-                  if (!exists) {
-                    wooVariations.push({
-                      sku: variation.sku,
-                      id: variation.id,
-                      parent_id: product.id,
-                      stock_quantity: variation.stock_quantity || 0,
-                    });
-                  }
-                }
-              }
-              if (variations.length < 100) break;
-              varPage++;
-            } else {
-              break;
+            if (upsertErr) {
+              console.error(`Upsert error page ${page}:`, upsertErr.message);
             }
           }
-        } catch (e) {
-          console.error(`Failed to fetch variations for product ${product.id}`);
+
+          productsThisRun += products.length;
+          progress.totalProducts += products.length;
         }
-      }));
 
-      const progress = Math.min(i + BATCH_SIZE, endIndex);
-      console.log(`Variations progress: ${progress}/${variableProducts.length}`);
-    }
+        if (products.length < 100) {
+          // All products fetched
+          progress.phase = 'upsert'; // skip variations for now, go to linking
+          progress.productPage = page;
+          break;
+        }
 
-    console.log(`Total variations fetched: ${wooVariations.length}`);
+        page++;
+        pagesProcessed++;
 
-    // Determine if complete
-    const isComplete = endIndex >= variableProducts.length;
-    const nextOffset = isComplete ? null : endIndex;
+        // Polite delay
+        await new Promise(r => setTimeout(r, 500));
+      }
 
-    // STEP 3: Store cache in config table
-    const cacheData: CacheData = {
-      products: wooProducts,
-      variations: wooVariations,
-      cached_at: new Date().toISOString(),
-      product_count: wooProducts.length,
-      variation_count: wooVariations.length,
-      complete: isComplete,
-      last_variable_index: endIndex,
-    };
+      // If we hit the page limit but not done, save progress for next run
+      if (progress.phase === 'products') {
+        progress.productPage = page;
+      }
 
-    const { error: upsertError } = await supabase
-      .from('config')
-      .upsert({
-        key: cacheKey,
-        value: cacheData,
+      // Save progress
+      await supabase.from('config').upsert({
+        key: progressKey,
+        value: progress as any,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'key' });
 
-    if (upsertError) {
-      throw new Error(`Failed to save cache: ${upsertError.message}`);
+      console.log(`Products phase: ${productsThisRun} this run, ${progress.totalProducts} total. Next phase: ${progress.phase}`);
+
+      const needsContinuation = progress.phase === 'products';
+
+      // Self-invoke for continuation if needed
+      if (needsContinuation) {
+        const selfUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/cache-woo-products`;
+        fetch(selfUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${Deno.env.get('SUPABASE_ANON_KEY')}`,
+          },
+          body: JSON.stringify({ tenantId }),
+        }).catch(() => { /* fire and forget */ });
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          phase: progress.phase,
+          productsThisRun,
+          totalProducts: progress.totalProducts,
+          hasMore: needsContinuation,
+          message: needsContinuation
+            ? `Nog meer pagina\'s op te halen, auto-vervolg gestart`
+            : `Alle producten opgehaald, volgende fase: ${progress.phase}`,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    console.log(`Cache saved: ${wooProducts.length} products, ${wooVariations.length} variations, complete: ${isComplete}`);
+    // ──────────────────────────────────
+    // PHASE 2: Link woo_products to PIM products via SKU
+    // ──────────────────────────────────
+    if (progress.phase === 'upsert') {
+      console.log('Linking WooCommerce products to PIM products by SKU...');
 
-    // Log to changelog only when complete
-    if (isComplete) {
+      // Get all PIM products
+      const { data: pimProducts } = await supabase
+        .from('products')
+        .select('id, sku')
+        .eq('tenant_id', tenantId);
+
+      const pimBySku = new Map<string, string>();
+      for (const p of pimProducts ?? []) {
+        if (p.sku) pimBySku.set(p.sku, p.id);
+      }
+
+      // Get unlinked woo_products
+      const { data: unlinked } = await supabase
+        .from('woo_products')
+        .select('id, sku')
+        .eq('tenant_id', tenantId)
+        .is('product_id', null);
+
+      let linked = 0;
+      const updates: { id: string; product_id: string }[] = [];
+
+      for (const wp of unlinked ?? []) {
+        const pimId = pimBySku.get(wp.sku);
+        if (pimId) {
+          updates.push({ id: wp.id, product_id: pimId });
+        }
+      }
+
+      // Batch update
+      for (let i = 0; i < updates.length; i += 100) {
+        const batch = updates.slice(i, i + 100);
+        for (const u of batch) {
+          await supabase
+            .from('woo_products')
+            .update({ product_id: u.product_id })
+            .eq('id', u.id);
+        }
+        linked += batch.length;
+      }
+
+      progress.phase = 'done';
+
+      await supabase.from('config').upsert({
+        key: progressKey,
+        value: progress as any,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'key' });
+
+      // Count totals
+      const { count: totalWoo } = await supabase
+        .from('woo_products')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', tenantId);
+
+      const { count: linkedCount } = await supabase
+        .from('woo_products')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', tenantId)
+        .not('product_id', 'is', null);
+
+      // Log to changelog
       await supabase.from('changelog').insert({
         tenant_id: tenantId,
         event_type: 'WOO_CACHE_BUILT',
-        description: `WooCommerce cache opgebouwd: ${wooProducts.length} producten, ${wooVariations.length} variaties`,
-        metadata: { product_count: wooProducts.length, variation_count: wooVariations.length },
+        description: `WooCommerce cache opgebouwd: ${totalWoo} producten, ${linkedCount} gekoppeld aan PIM`,
+        metadata: { total_woo: totalWoo, linked: linkedCount, newly_linked: linked },
       });
+
+      console.log(`Linking complete: ${linked} newly linked, ${linkedCount}/${totalWoo} total linked`);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          phase: 'done',
+          totalWooProducts: totalWoo,
+          linkedToPim: linkedCount,
+          newlyLinked: linked,
+          unlinked: (totalWoo ?? 0) - (linkedCount ?? 0),
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
+
+    // Phase done — just report status
+    const { count: totalWoo } = await supabase
+      .from('woo_products')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId);
+
+    const { count: linkedCount } = await supabase
+      .from('woo_products')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId)
+      .not('product_id', 'is', null);
 
     return new Response(
       JSON.stringify({
         success: true,
-        products: wooProducts.length,
-        variations: wooVariations.length,
-        cached_at: cacheData.cached_at,
-        complete: isComplete,
-        nextOffset,
-        hasMore: !isComplete,
-        processedRange: `${startIndex}-${endIndex} of ${variableProducts.length} variable products`,
+        phase: 'done',
+        totalWooProducts: totalWoo,
+        linkedToPim: linkedCount,
+        message: 'Cache is al compleet',
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('Error in cache-woo-products:', errorMessage);
-    
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Error in cache-woo-products:', msg);
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify({ error: msg }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
