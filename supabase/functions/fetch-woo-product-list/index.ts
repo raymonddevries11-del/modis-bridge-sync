@@ -121,14 +121,30 @@ Deno.serve(async (req) => {
       url.searchParams.append('status', 'any');
 
       console.log(`Fetching page ${page}...`);
-      const response = await fetchWithRetry(url.toString(), { headers: { 'Content-Type': 'application/json' } });
+      const response = await fetchWithRetry(url.toString(), {
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (compatible; PIM-Sync/1.0)',
+          'Accept': 'application/json',
+        },
+      });
 
       if (!response.ok) {
         const text = await response.text();
         if (text.includes('sgcapt') || text.includes('<html')) {
-          throw new Error('Blocked by hosting bot protection');
+          throw new Error('Blocked by hosting bot protection (SiteGround). Whitelist /wp-json/wc/v3/* in SiteGround Site Tools > Security.');
         }
         throw new Error(`API error ${response.status}: ${text.substring(0, 200)}`);
+      }
+
+      // Validate JSON response before parsing
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await response.text();
+        if (text.includes('<html') || text.includes('sgcapt')) {
+          throw new Error('Blocked by hosting bot protection (SiteGround). Whitelist /wp-json/wc/v3/* in SiteGround Site Tools > Security.');
+        }
+        throw new Error(`Unexpected content-type: ${contentType}. Preview: ${text.substring(0, 200)}`);
       }
 
       const products = await response.json();
