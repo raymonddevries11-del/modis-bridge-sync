@@ -17,7 +17,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const tenantSlug = body.tenant || 'kosterschoenmode';
-    const batchSize = Math.min(body.batchSize || 20, 50);
+    const batchSize = Math.min(body.batchSize || 50, 100);
     const dryRun = body.dryRun ?? false;
 
     const { data: tenant } = await supabase
@@ -26,16 +26,62 @@ Deno.serve(async (req) => {
 
     const bucketBase = `${supabaseUrl}/storage/v1/object/public/product-images/`;
 
-    // Get products with missing images that are linked to woo_products
-    const { data: products, error: dbErr } = await supabase
-      .from('products')
-      .select('id, sku, images, woo_products!inner(woo_id, images)')
-      .eq('tenant_id', tenant.id)
-      .not('images', 'is', null)
-      .limit(1000);
-    if (dbErr) throw new Error(`DB error: ${dbErr.message}`);
+    // Step 1: Get ALL products with images, paginated
+    const allProducts: { id: string; sku: string; images: string[] }[] = [];
+    let offset = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, sku, images')
+        .eq('tenant_id', tenant.id)
+        .not('images', 'is', null)
+        .order('sku')
+        .range(offset, offset + 999);
+      if (error) throw new Error(`DB error: ${error.message}`);
+      if (!data || data.length === 0) break;
+      for (const p of data) {
+        const imgs = p.images as string[] | null;
+        if (!imgs || !Array.isArray(imgs) || imgs.length === 0) continue;
+        // Check if any image is non-bucket
+        const hasNonBucket = imgs.some((img: string) => 
+          typeof img === 'string' && img && !img.includes('supabase.co/storage')
+        );
+        if (hasNonBucket) {
+          allProducts.push({ id: p.id, sku: p.sku, images: imgs });
+        }
+      }
+      if (data.length < 1000) break;
+      offset += 1000;
+    }
 
-    // Filter to products with non-bucket images
+    console.log(`Found ${allProducts.length} products with non-bucket images`);
+
+    // Step 2: Get woo_products for these products (batch lookup)
+    const productIds = allProducts.map(p => p.id);
+    const wooMap = new Map<string, { src: string; name?: string }[]>();
+    
+    for (let i = 0; i < productIds.length; i += 200) {
+      const batch = productIds.slice(i, i + 200);
+      const { data: wooData } = await supabase
+        .from('woo_products')
+        .select('product_id, images')
+        .in('product_id', batch)
+        .not('images', 'is', null);
+      
+      if (wooData) {
+        for (const wp of wooData) {
+          if (!wp.product_id) continue;
+          const wcImgs = (wp.images as any[] || []).filter((i: any) => i?.src);
+          if (wcImgs.length > 0) {
+            wooMap.set(wp.product_id, wcImgs);
+          }
+        }
+      }
+    }
+
+    console.log(`Found WC images for ${wooMap.size} products`);
+
+    // Step 3: Build list of products to fix
     interface ToFix {
       id: string;
       sku: string;
@@ -45,26 +91,23 @@ Deno.serve(async (req) => {
     }
 
     const toFix: ToFix[] = [];
-    for (const p of (products || [])) {
-      const imgs = p.images as string[] | null;
-      if (!imgs || !Array.isArray(imgs)) continue;
+    for (const p of allProducts) {
       const missingIndices: number[] = [];
-      for (let i = 0; i < imgs.length; i++) {
-        if (!imgs[i] || typeof imgs[i] !== 'string') continue;
-        if (imgs[i].includes('supabase.co/storage')) continue;
+      for (let i = 0; i < p.images.length; i++) {
+        const img = p.images[i];
+        if (!img || typeof img !== 'string') continue;
+        if (img.includes('supabase.co/storage')) continue;
         missingIndices.push(i);
       }
       if (missingIndices.length === 0) continue;
 
-      // Get WC images from the joined woo_products
-      const wpArr = p.woo_products as any;
-      const wp = Array.isArray(wpArr) ? wpArr[0] : wpArr;
-      if (!wp?.images) continue;
-      const wcImgs = (wp.images as any[] || []).filter((i: any) => i?.src);
-      if (wcImgs.length === 0) continue;
+      const wcImages = wooMap.get(p.id);
+      if (!wcImages || wcImages.length === 0) continue;
 
-      toFix.push({ id: p.id, sku: p.sku, images: imgs, missingIndices, wcImages: wcImgs });
+      toFix.push({ id: p.id, sku: p.sku, images: p.images, missingIndices, wcImages });
     }
+
+    console.log(`${toFix.length} products fixable from WC`);
 
     const batch = toFix.slice(0, batchSize);
     const stats = { processed: 0, downloaded: 0, updated: 0, skipped: 0, failed: 0 };
@@ -120,6 +163,22 @@ Deno.serve(async (req) => {
           }
         }
 
+        // Fallback: if only one WC image and one missing, use it
+        if (!wcSrc && product.wcImages.length === 1 && product.missingIndices.length === 1) {
+          wcSrc = product.wcImages[0].src;
+        }
+
+        // Fallback: match by position (W-N -> Nth WC image)
+        if (!wcSrc) {
+          const posMatch = fileBase.match(/w-(\d+)/);
+          if (posMatch) {
+            const imgNum = parseInt(posMatch[1]);
+            if (imgNum <= product.wcImages.length) {
+              wcSrc = product.wcImages[imgNum - 1]?.src;
+            }
+          }
+        }
+
         if (!wcSrc) {
           stats.skipped++;
           continue;
@@ -149,10 +208,12 @@ Deno.serve(async (req) => {
             continue;
           }
 
+          // Normalize filename to lowercase
+          const normalizedFilename = filename.toLowerCase().replace(/\.jpeg$/, '.jpg');
           const contentType = response.headers.get('content-type') || 'image/jpeg';
           const { error: uploadErr } = await supabase.storage
             .from('product-images')
-            .upload(filename, blob, { contentType, upsert: true });
+            .upload(normalizedFilename, blob, { contentType, upsert: true });
 
           if (uploadErr) {
             stats.failed++;
@@ -160,7 +221,7 @@ Deno.serve(async (req) => {
             continue;
           }
 
-          newImages[idx] = `${bucketBase}${filename}`;
+          newImages[idx] = `${bucketBase}${normalizedFilename}`;
           changed = true;
           fixedCount++;
           stats.downloaded++;
@@ -183,7 +244,8 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({
       success: true,
       dryRun,
-      totalWithMissing: toFix.length,
+      totalWithMissing: allProducts.length,
+      totalFixable: toFix.length,
       ...stats,
       errors: errors.slice(0, 20),
       results,
