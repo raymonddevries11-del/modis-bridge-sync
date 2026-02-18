@@ -137,7 +137,35 @@ Deno.serve(async (req) => {
     }
 
     // Find products that don't exist in WooCommerce
-    const missingProducts = dbProducts.filter(p => p.sku && p.title && !wooSkus.has(p.sku));
+    const potentiallyMissing = dbProducts.filter(p => p.sku && p.title && !wooSkus.has(p.sku));
+
+    // Check which products already have pending jobs to avoid duplicates
+    let missingProducts = potentiallyMissing;
+    if (potentiallyMissing.length > 0) {
+      const potentialIds = potentiallyMissing.map(p => p.id);
+      
+      // Fetch existing ready/processing jobs for these product IDs
+      const { data: existingJobs } = await supabase
+        .from('jobs')
+        .select('payload')
+        .in('state', ['ready', 'processing'])
+        .in('type', ['CREATE_NEW_PRODUCTS', 'SYNC_TO_WOO']);
+
+      const alreadyQueued = new Set<string>();
+      if (existingJobs) {
+        for (const job of existingJobs) {
+          const ids = (job.payload as any)?.productIds;
+          if (Array.isArray(ids)) {
+            for (const id of ids) alreadyQueued.add(id);
+          }
+        }
+      }
+
+      missingProducts = potentiallyMissing.filter(p => !alreadyQueued.has(p.id));
+      if (missingProducts.length < potentiallyMissing.length) {
+        console.log(`Filtered out ${potentiallyMissing.length - missingProducts.length} products already queued`);
+      }
+    }
 
     console.log(`Found ${missingProducts.length} new products to create (source: ${source})`);
 
