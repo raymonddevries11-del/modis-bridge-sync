@@ -177,12 +177,15 @@ export type Database = {
       export_files: {
         Row: {
           ack_status: string
+          archived_at: string | null
           created_at: string | null
           filename: string
           id: string
           last_retry_at: string | null
           max_retries: number
           order_number: string
+          reconciled_at: string | null
+          reconciliation_hash: string | null
           retry_count: number
           storage_path: string
           synced_at: string | null
@@ -192,12 +195,15 @@ export type Database = {
         }
         Insert: {
           ack_status?: string
+          archived_at?: string | null
           created_at?: string | null
           filename: string
           id?: string
           last_retry_at?: string | null
           max_retries?: number
           order_number: string
+          reconciled_at?: string | null
+          reconciliation_hash?: string | null
           retry_count?: number
           storage_path: string
           synced_at?: string | null
@@ -207,12 +213,15 @@ export type Database = {
         }
         Update: {
           ack_status?: string
+          archived_at?: string | null
           created_at?: string | null
           filename?: string
           id?: string
           last_retry_at?: string | null
           max_retries?: number
           order_number?: string
+          reconciled_at?: string | null
+          reconciliation_hash?: string | null
           retry_count?: number
           storage_path?: string
           synced_at?: string | null
