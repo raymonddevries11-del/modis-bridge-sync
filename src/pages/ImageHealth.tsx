@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
+import { ImageVerifier } from "@/components/google-feed/ImageVerifier";
 
 interface ProductImageStatus {
   id: string;
@@ -389,6 +390,9 @@ export default function ImageHealth() {
             ))}
           </div>
         </div>
+
+        {/* Image Existence Verifier */}
+        <ImageVerifier />
 
         {/* Product Table */}
         <Card>
