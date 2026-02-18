@@ -118,6 +118,7 @@ Deno.serve(async (req) => {
       url.searchParams.append('page', page.toString());
       url.searchParams.append('orderby', 'id');
       url.searchParams.append('order', 'asc');
+      url.searchParams.append('status', 'any');
 
       console.log(`Fetching page ${page}...`);
       const response = await fetchWithRetry(url.toString(), { headers: { 'Content-Type': 'application/json' } });
