@@ -17,6 +17,7 @@ interface ParentProduct {
   attributes: Record<string, string>;
   colorArticle: string;
   colorWebshop: string;
+  isSale: boolean;
 }
 
 interface VariationRow {
@@ -96,7 +97,7 @@ function parseAllRows(rows: string[][], headers: string[]) {
 
     if (type === 'variable') {
       const attributes: Record<string, string> = {};
-      for (let a = 1; a <= 20; a++) {
+      for (let a = 1; a <= 24; a++) {
         const ni = headers.findIndex(h => h === `Attribute ${a} name`);
         const vi = headers.findIndex(h => h === `Attribute ${a} value(s)`);
         if (ni >= 0 && vi >= 0) {
@@ -109,6 +110,21 @@ function parseAllRows(rows: string[][], headers: string[]) {
       const cats = row[categoriesIdx]?.trim() || '';
       const imgs = row[imagesIdx]?.trim() || '';
 
+      // Extract special attributes from Attribute 21-24 and merge into color/flags
+      const attrColorWebshop = attributes['Color-webshop'] || '';
+      const attrSale = attributes['sale'] || attributes['Sale'] || '';
+      // Remove special attrs from the generic attributes map (they go into dedicated fields)
+      delete attributes['Color-webshop'];
+      if (attributes['sale']) delete attributes['sale'];
+      if (attributes['Sale']) delete attributes['Sale'];
+
+      // Determine color-webshop: prefer dedicated column, fallback to attribute
+      const csvColorWebshop = colorWebshopIdx >= 0 ? (row[colorWebshopIdx]?.trim() || '') : '';
+      const finalColorWebshop = csvColorWebshop || attrColorWebshop;
+
+      // Sale flag: "Ja" / "ja" / "yes" / "1" → true
+      const isSale = ['ja', 'yes', '1'].includes(attrSale.toLowerCase());
+
       const parent: ParentProduct = {
         sku,
         title: row[nameIdx]?.trim() || sku,
@@ -120,7 +136,8 @@ function parseAllRows(rows: string[][], headers: string[]) {
         images: imgs ? imgs.split(';').map(i => i.trim()).filter(Boolean) : [],
         attributes,
         colorArticle: colorArticleIdx >= 0 ? (row[colorArticleIdx]?.trim() || '') : '',
-        colorWebshop: colorWebshopIdx >= 0 ? (row[colorWebshopIdx]?.trim() || '') : '',
+        colorWebshop: finalColorWebshop,
+        isSale,
       };
 
       // Deduplicate: merge attributes, keep longest images/categories
@@ -314,6 +331,7 @@ Deno.serve(async (req) => {
         attributes: p.attributes,
         brand_id: p.brand ? brandMap.get(p.brand) || null : null,
         color,
+        is_promotion: p.isSale,
       };
 
       const existing = existingProducts.get(p.sku);
