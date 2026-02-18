@@ -22,7 +22,8 @@ export const ProductAttributesTab = ({ product, section = "attributes" }: Produc
   const { definitions } = useAttributeDefinitions();
   const { names: KNOWN_ATTRIBUTES, valuesMap: KNOWN_ATTRIBUTE_VALUES } = buildAttributeLookups(definitions);
   const attrs = (product.attributes as Record<string, any>) || {};
-  const cats = Array.isArray(product.categories) ? (product.categories as string[]) : [];
+  const rawCats = Array.isArray(product.categories) ? product.categories : [];
+  const cats: string[] = rawCats.map((c: any) => (typeof c === "object" && c !== null ? c.name || String(c.id) : String(c)));
 
   const [editedAttributes, setEditedAttributes] = useState<Record<string, string>>({ ...attrs });
   const [editedCategories, setEditedCategories] = useState<string[]>([...cats]);
