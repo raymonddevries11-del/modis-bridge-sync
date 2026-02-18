@@ -179,7 +179,7 @@ serve(async (req) => {
     console.log(`Found ${allProducts.length} products to export${exportType === 'missing' ? ' (missing only)' : ''}`);
 
     // Generate CSV
-    const csv = generateWooCommerceCSV(allProducts);
+    const csv = generateWooCommerceCSV(allProducts, exportType);
     
     // Save to storage
     const filePrefix = exportType === 'missing' ? 'woocommerce-missing' : 'woocommerce-import';
@@ -226,7 +226,7 @@ function formatPrice(price: any): string {
   return num.toFixed(2);
 }
 
-function generateWooCommerceCSV(products: any[]): string {
+function generateWooCommerceCSV(products: any[], exportType: string = 'full'): string {
   // WooCommerce CSV Import columns - standard format
   // IMPORTANT: For attribute values, WooCommerce expects comma-separated terms.
   const headers = [
@@ -330,8 +330,9 @@ function generateWooCommerceCSV(products: any[]): string {
     
     // Build images string - COMMA separated (NO SPACES) for WooCommerce native importer
     // The pipe separator with spaces causes URL encoding issues
+    // When exporting missing-only, skip images to avoid 404 errors during WC import
     let images = '';
-    if (product.images && Array.isArray(product.images)) {
+    if (exportType !== 'missing' && product.images && Array.isArray(product.images)) {
       images = product.images
         .filter((img: any) => img && typeof img === 'string' && img.trim())
         .join(',');
