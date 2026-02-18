@@ -75,6 +75,14 @@ Deno.serve(async (req) => {
 
     console.log('Successfully created product:', result.id);
 
+    // Cache invalidation: upsert woo_products so sync-new-products won't re-queue
+    await supabase.from('woo_products').upsert({
+      tenant_id: product.tenant_id, woo_id: result.id, product_id: product.id,
+      sku: product.sku, name: product.title, slug: result.slug || '',
+      status: result.status || 'publish', type: result.type || 'variable',
+      last_pushed_at: new Date().toISOString(),
+    }, { onConflict: 'tenant_id,woo_id' });
+
     return new Response(
       JSON.stringify({
         success: true,

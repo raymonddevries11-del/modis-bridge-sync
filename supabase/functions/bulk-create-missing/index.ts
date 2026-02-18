@@ -99,6 +99,14 @@ Deno.serve(async (req) => {
           console.log(`✓ Created ${product.sku} - WooCommerce ID: ${result.id}`);
           created++;
           results.push({ sku: product.sku, success: true, woo_id: result.id });
+
+          // Cache invalidation: upsert woo_products so sync-new-products won't re-queue
+          await supabase.from('woo_products').upsert({
+            tenant_id: product.tenant_id, woo_id: result.id, product_id: product.id,
+            sku: product.sku, name: product.title, slug: result.slug || '',
+            status: result.status || 'publish', type: result.type || 'variable',
+            last_pushed_at: new Date().toISOString(),
+          }, { onConflict: 'tenant_id,woo_id' });
         } else {
           console.error(`✗ Failed ${product.sku}:`, result.message);
           failed++;
