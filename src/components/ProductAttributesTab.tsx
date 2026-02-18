@@ -95,7 +95,7 @@ export const ProductAttributesTab = ({ product, section = "attributes" }: Produc
 
   const derivedAttributes: { label: string; value: string }[] = [
     { label: "Merk", value: product.brands?.name || "—" },
-    { label: "Kleur", value: color ? [color.label, color.filter].filter(Boolean).join(" / ") : "—" },
+    { label: "Kleur", value: color ? [color.webshop, color.article].filter(Boolean).join(" / ") : "—" },
     { label: "Maat (EU)", value: maatValues || "—" },
   ];
 
