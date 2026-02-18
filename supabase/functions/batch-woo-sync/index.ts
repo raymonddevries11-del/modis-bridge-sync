@@ -188,6 +188,7 @@ Deno.serve(async (req) => {
           }
 
           const wooProductId = wooProducts[0].id;
+          const wooProductData = wooProducts[0];
           const variants = (product.variants as any[]) || [];
           const priceData = product.product_prices as any;
           const price = Array.isArray(priceData) ? priceData[0] : priceData;
@@ -304,6 +305,23 @@ Deno.serve(async (req) => {
                 totalFailed++;
               }
             }
+          }
+
+          // Cache invalidation: upsert woo_products after successful sync
+          try {
+            await supabase.from('woo_products').upsert({
+              tenant_id: tenantId,
+              woo_id: wooProductId,
+              product_id: product.id,
+              sku: productSku,
+              name: wooProductData.name || productSku,
+              slug: wooProductData.slug || '',
+              status: wooProductData.status || 'publish',
+              type: wooProductData.type || 'variable',
+              last_pushed_at: new Date().toISOString(),
+            }, { onConflict: 'tenant_id,woo_id' });
+          } catch (e) {
+            console.error(`Cache upsert failed for ${productSku}:`, e);
           }
 
           totalProcessed++;

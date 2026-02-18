@@ -11,30 +11,23 @@ interface WooCommerceConfig {
   consumerSecret: string;
 }
 
-// Normalize size string for comparison
 function normalizeSize(size: string): string {
   return size.toLowerCase().replace(/\s+/g, '').trim();
 }
 
-// Helper function with retry logic
 async function fetchWithRetry(
   url: string,
   options: RequestInit,
   maxRetries: number = 3
 ): Promise<Response> {
   let lastError: Error | null = null;
-  
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(1000 * Math.pow(2, attempt), 5000);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
     try {
-      // Add delay between attempts (exponential backoff)
-      if (attempt > 0) {
-        const delay = Math.min(1000 * Math.pow(2, attempt), 5000);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-      
       const response = await fetch(url, options);
-      
-      // Handle rate limiting
       if (response.status === 429) {
         const retryAfter = response.headers.get('Retry-After');
         const delay = retryAfter ? parseInt(retryAfter) * 1000 : 5000;
@@ -42,32 +35,49 @@ async function fetchWithRetry(
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
-      
       return response;
     } catch (error) {
       lastError = error as Error;
       console.error(`Fetch attempt ${attempt + 1} failed:`, error);
     }
   }
-  
   throw lastError || new Error('All fetch attempts failed');
 }
 
-// Update a single variant's stock in WooCommerce
+// Cache upsert helper
+async function upsertWooCache(supabase: any, tenantId: string, wooProduct: any, productId: string, sku: string) {
+  try {
+    await supabase.from('woo_products').upsert({
+      tenant_id: tenantId,
+      woo_id: wooProduct.id,
+      product_id: productId,
+      sku,
+      name: wooProduct.name || sku,
+      slug: wooProduct.slug || '',
+      status: wooProduct.status || 'publish',
+      type: wooProduct.type || 'variable',
+      last_pushed_at: new Date().toISOString(),
+    }, { onConflict: 'tenant_id,woo_id' });
+  } catch (e) {
+    console.error('Cache upsert failed:', e);
+  }
+}
+
 async function updateVariantStock(
   variant: any,
   product: any,
-  wooConfig: WooCommerceConfig
+  wooConfig: WooCommerceConfig,
+  supabase: any,
+  tenantId: string
 ): Promise<{ success: boolean; message: string }> {
   const { sku: productSku } = product;
   const stockQty = variant.stock_totals?.qty || 0;
-  
-  // Find WooCommerce product by SKU
+
   const searchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
   searchUrl.searchParams.append('sku', productSku);
   searchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
   searchUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-  
+
   const searchResponse = await fetchWithRetry(searchUrl.toString(), {
     headers: { 'Content-Type': 'application/json' },
   });
@@ -78,9 +88,7 @@ async function updateVariantStock(
 
   const responseText = await searchResponse.text();
   let wooProducts;
-  try {
-    wooProducts = JSON.parse(responseText);
-  } catch {
+  try { wooProducts = JSON.parse(responseText); } catch {
     return { success: false, message: 'Invalid JSON from WooCommerce' };
   }
 
@@ -96,7 +104,7 @@ async function updateVariantStock(
   variationsUrl.searchParams.append('per_page', '100');
   variationsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
   variationsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-  
+
   const variationsResponse = await fetchWithRetry(variationsUrl.toString(), {
     headers: { 'Content-Type': 'application/json' },
   });
@@ -106,47 +114,27 @@ async function updateVariantStock(
   }
 
   const wooVariations = await variationsResponse.json();
-  
+
   // Find matching variation
   const maatSuffix = variant.maat_id && variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id;
   const expectedFullSku = `${productSku}-${maatSuffix}`;
   const legacyFullSku = `${productSku}-${variant.size_label}`;
-  
+
   let matchingVariation = null;
-  
   for (const wooVariation of wooVariations) {
-    // Match by new SKU format
-    if (wooVariation.sku && normalizeSize(wooVariation.sku) === normalizeSize(expectedFullSku)) {
-      matchingVariation = wooVariation;
-      break;
-    }
-    // Match by legacy SKU format
-    if (wooVariation.sku && normalizeSize(wooVariation.sku) === normalizeSize(legacyFullSku)) {
-      matchingVariation = wooVariation;
-      break;
-    }
-    // Match by SKU suffix
-    if (wooVariation.sku && wooVariation.sku.endsWith(variant.size_label)) {
-      matchingVariation = wooVariation;
-      break;
-    }
-    // Match by size attribute
-    const sizeAttr = wooVariation.attributes?.find((attr: any) => 
-      attr.name?.toLowerCase() === 'size' || 
-      attr.name?.toLowerCase() === 'maat' ||
-      attr.name?.toLowerCase() === 'pa_maat'
+    if (wooVariation.sku && normalizeSize(wooVariation.sku) === normalizeSize(expectedFullSku)) { matchingVariation = wooVariation; break; }
+    if (wooVariation.sku && normalizeSize(wooVariation.sku) === normalizeSize(legacyFullSku)) { matchingVariation = wooVariation; break; }
+    if (wooVariation.sku && wooVariation.sku.endsWith(variant.size_label)) { matchingVariation = wooVariation; break; }
+    const sizeAttr = wooVariation.attributes?.find((attr: any) =>
+      attr.name?.toLowerCase() === 'size' || attr.name?.toLowerCase() === 'maat' || attr.name?.toLowerCase() === 'pa_maat'
     );
-    if (sizeAttr?.option && normalizeSize(variant.size_label) === normalizeSize(sizeAttr.option)) {
-      matchingVariation = wooVariation;
-      break;
-    }
+    if (sizeAttr?.option && normalizeSize(variant.size_label) === normalizeSize(sizeAttr.option)) { matchingVariation = wooVariation; break; }
   }
 
   if (!matchingVariation) {
     return { success: false, message: `Variation ${variant.size_label} not found in WooCommerce` };
   }
 
-  // Update variation stock
   const updateData = {
     stock_quantity: stockQty,
     manage_stock: true,
@@ -156,7 +144,7 @@ async function updateVariantStock(
   const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations/${matchingVariation.id}`);
   updateUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
   updateUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-  
+
   const updateResponse = await fetchWithRetry(updateUrl.toString(), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -167,27 +155,30 @@ async function updateVariantStock(
     return { success: false, message: `Update failed: ${updateResponse.status}` };
   }
 
-  return { 
-    success: true, 
-    message: `Updated ${productSku}/${variant.size_label} stock: ${matchingVariation.stock_quantity} → ${stockQty}` 
+  // Cache invalidation: upsert woo_products after successful stock update
+  await upsertWooCache(supabase, tenantId, wooProduct, product.id, productSku);
+
+  return {
+    success: true,
+    message: `Updated ${productSku}/${variant.size_label} stock: ${matchingVariation.stock_quantity} → ${stockQty}`
   };
 }
 
-// Update a product's price in WooCommerce
 async function updateProductPrice(
   product: any,
   regularPrice: number,
   listPrice: number | null,
-  wooConfig: WooCommerceConfig
+  wooConfig: WooCommerceConfig,
+  supabase: any,
+  tenantId: string
 ): Promise<{ success: boolean; message: string }> {
   const { sku: productSku } = product;
-  
-  // Find WooCommerce product by SKU
+
   const searchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
   searchUrl.searchParams.append('sku', productSku);
   searchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
   searchUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-  
+
   const searchResponse = await fetchWithRetry(searchUrl.toString(), {
     headers: { 'Content-Type': 'application/json' },
   });
@@ -198,9 +189,7 @@ async function updateProductPrice(
 
   const responseText = await searchResponse.text();
   let wooProducts;
-  try {
-    wooProducts = JSON.parse(responseText);
-  } catch {
+  try { wooProducts = JSON.parse(responseText); } catch {
     return { success: false, message: 'Invalid JSON from WooCommerce' };
   }
 
@@ -211,14 +200,12 @@ async function updateProductPrice(
   const wooProduct = wooProducts[0];
   const wooProductId = wooProduct.id;
 
-  // For variable products, we need to update prices on variations
   if (wooProduct.type === 'variable') {
-    // Get all variations
     const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
     variationsUrl.searchParams.append('per_page', '100');
     variationsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
     variationsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-    
+
     const variationsResponse = await fetchWithRetry(variationsUrl.toString(), {
       headers: { 'Content-Type': 'application/json' },
     });
@@ -228,12 +215,11 @@ async function updateProductPrice(
     }
 
     const wooVariations = await variationsResponse.json();
-    
-    // Batch update variations
+
     const batchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations/batch`);
     batchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
     batchUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-    
+
     const updates = wooVariations.map((v: any) => ({
       id: v.id,
       regular_price: regularPrice.toString(),
@@ -250,23 +236,21 @@ async function updateProductPrice(
       return { success: false, message: `Batch price update failed: ${batchResponse.status}` };
     }
 
-    return { 
-      success: true, 
-      message: `Updated ${productSku} price on ${updates.length} variations: €${regularPrice}` 
+    // Cache invalidation after successful price update
+    await upsertWooCache(supabase, tenantId, wooProduct, product.id, productSku);
+
+    return {
+      success: true,
+      message: `Updated ${productSku} price on ${updates.length} variations: €${regularPrice}`
     };
   } else {
-    // Simple product - update directly
-    const updateData: any = {
-      regular_price: regularPrice.toString(),
-    };
-    if (listPrice) {
-      updateData.sale_price = listPrice.toString();
-    }
+    const updateData: any = { regular_price: regularPrice.toString() };
+    if (listPrice) { updateData.sale_price = listPrice.toString(); }
 
     const updateUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
     updateUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
     updateUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-    
+
     const updateResponse = await fetchWithRetry(updateUrl.toString(), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -277,9 +261,12 @@ async function updateProductPrice(
       return { success: false, message: `Price update failed: ${updateResponse.status}` };
     }
 
-    return { 
-      success: true, 
-      message: `Updated ${productSku} price: €${regularPrice}` 
+    // Cache invalidation after successful price update
+    await upsertWooCache(supabase, tenantId, wooProduct, product.id, productSku);
+
+    return {
+      success: true,
+      message: `Updated ${productSku} price: €${regularPrice}`
     };
   }
 }
@@ -302,7 +289,6 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get WooCommerce config
     const { data: tenantConfig, error: configError } = await supabase
       .from('tenant_config')
       .select('woocommerce_url, woocommerce_consumer_key, woocommerce_consumer_secret')
@@ -324,8 +310,7 @@ Deno.serve(async (req) => {
     // Process variant stock updates
     if (variantIds && variantIds.length > 0) {
       console.log(`Processing ${variantIds.length} variant stock updates...`);
-      
-      // Fetch variant data with product and stock info
+
       const { data: variants, error: variantsError } = await supabase
         .from('variants')
         .select(`
@@ -340,16 +325,15 @@ Deno.serve(async (req) => {
       } else if (variants) {
         for (const variant of variants) {
           try {
-            const result = await updateVariantStock(variant, variant.products, wooConfig);
+            const result = await updateVariantStock(variant, variant.products, wooConfig, supabase, tenantId);
             results.push({ type: 'stock', ...result });
-            
+
             if (result.success) {
               console.log(`✓ ${result.message}`);
             } else {
               console.log(`✗ ${result.message}`);
             }
-            
-            // Small delay to avoid rate limiting
+
             await new Promise(resolve => setTimeout(resolve, 200));
           } catch (error) {
             const msg = error instanceof Error ? error.message : 'Unknown error';
@@ -363,10 +347,9 @@ Deno.serve(async (req) => {
     // Process product price updates
     if (priceUpdates && priceUpdates.length > 0) {
       console.log(`Processing ${priceUpdates.length} price updates...`);
-      
+
       for (const update of priceUpdates) {
         try {
-          // Fetch product data
           const { data: product } = await supabase
             .from('products')
             .select('id, sku, title')
@@ -378,16 +361,15 @@ Deno.serve(async (req) => {
             continue;
           }
 
-          const result = await updateProductPrice(product, update.regularPrice, update.listPrice, wooConfig);
+          const result = await updateProductPrice(product, update.regularPrice, update.listPrice, wooConfig, supabase, tenantId);
           results.push({ type: 'price', ...result });
-          
+
           if (result.success) {
             console.log(`✓ ${result.message}`);
           } else {
             console.log(`✗ ${result.message}`);
           }
-          
-          // Small delay to avoid rate limiting
+
           await new Promise(resolve => setTimeout(resolve, 200));
         } catch (error) {
           const msg = error instanceof Error ? error.message : 'Unknown error';
@@ -402,7 +384,6 @@ Deno.serve(async (req) => {
 
     console.log(`Direct sync complete: ${successCount} succeeded, ${failCount} failed`);
 
-    // Log to changelog
     if (results.length > 0) {
       await supabase.from('changelog').insert({
         tenant_id: tenantId,
@@ -412,7 +393,7 @@ Deno.serve(async (req) => {
           total: results.length,
           success: successCount,
           failed: failCount,
-          results: results.slice(0, 20), // Limit stored results
+          results: results.slice(0, 20),
         },
       });
     }
