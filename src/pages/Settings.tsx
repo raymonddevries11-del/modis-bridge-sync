@@ -40,6 +40,19 @@ const BATCH_OPTIONS = [
   { value: '100', label: '100 products' },
 ];
 
+const MAX_QUEUE_OPTIONS = [
+  { value: '5', label: '5 jobs' },
+  { value: '10', label: '10 jobs' },
+  { value: '20', label: '20 jobs' },
+  { value: '50', label: '50 jobs' },
+];
+
+const MAX_DRAIN_OPTIONS = [
+  { value: '100', label: '100 products' },
+  { value: '200', label: '200 products' },
+  { value: '500', label: '500 products' },
+];
+
 function BatchSyncConfig() {
   const queryClient = useQueryClient();
   const { data: config, isLoading } = useQuery({
@@ -49,12 +62,12 @@ function BatchSyncConfig() {
         body: { action: 'get', key: 'batch_sync_config' },
       });
       if (error) throw error;
-      return (data as { window_seconds?: number; batch_size?: number }) || {};
+      return (data as { window_seconds?: number; batch_size?: number; max_queue_size?: number; max_products_per_drain?: number }) || {};
     },
   });
 
   const saveMutation = useMutation({
-    mutationFn: async (value: { window_seconds: number; batch_size: number }) => {
+    mutationFn: async (value: { window_seconds: number; batch_size: number; max_queue_size: number; max_products_per_drain: number }) => {
       const { error } = await supabase.functions.invoke('settings', {
         body: { action: 'save', key: 'batch_sync_config', value },
       });
@@ -85,6 +98,11 @@ function BatchSyncConfig() {
 
   const windowSeconds = config?.window_seconds || 60;
   const batchSize = config?.batch_size || 50;
+  const maxQueueSize = config?.max_queue_size || 10;
+  const maxProductsPerDrain = config?.max_products_per_drain || 200;
+
+  const save = (overrides: Partial<{ window_seconds: number; batch_size: number; max_queue_size: number; max_products_per_drain: number }>) =>
+    saveMutation.mutate({ window_seconds: windowSeconds, batch_size: batchSize, max_queue_size: maxQueueSize, max_products_per_drain: maxProductsPerDrain, ...overrides });
 
   if (isLoading) return <Card><CardContent className="p-6"><Loader2 className="h-5 w-5 animate-spin" /></CardContent></Card>;
 
@@ -93,44 +111,50 @@ function BatchSyncConfig() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Zap className="h-5 w-5" /> Batch Sync Configuration</CardTitle>
         <CardDescription>
-          Price and stock changes are buffered and synced to WooCommerce in batches. Configure the batch window and size.
+          Price and stock changes are buffered and synced to WooCommerce in batches. Configure the batch window, size, and queue limits.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Batch Window</Label>
-            <Select
-              value={String(windowSeconds)}
-              onValueChange={(v) => saveMutation.mutate({ window_seconds: Number(v), batch_size: batchSize })}
-            >
+            <Select value={String(windowSeconds)} onValueChange={(v) => save({ window_seconds: Number(v) })}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {WINDOW_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                ))}
+                {WINDOW_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              Changes within this window are grouped into a single sync job.
-            </p>
+            <p className="text-xs text-muted-foreground">Changes within this window are grouped into a single sync job.</p>
           </div>
           <div className="space-y-2">
             <Label>Batch Size</Label>
-            <Select
-              value={String(batchSize)}
-              onValueChange={(v) => saveMutation.mutate({ window_seconds: windowSeconds, batch_size: Number(v) })}
-            >
+            <Select value={String(batchSize)} onValueChange={(v) => save({ batch_size: Number(v) })}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {BATCH_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                ))}
+                {BATCH_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              Max products per sync job.
-            </p>
+            <p className="text-xs text-muted-foreground">Max products per sync job.</p>
+          </div>
+          <div className="space-y-2">
+            <Label>Max Queue Size</Label>
+            <Select value={String(maxQueueSize)} onValueChange={(v) => save({ max_queue_size: Number(v) })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {MAX_QUEUE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Maximaal aantal actieve jobs in de wachtrij. Nieuwe jobs worden uitgesteld als dit limiet bereikt is.</p>
+          </div>
+          <div className="space-y-2">
+            <Label>Max Products per Drain</Label>
+            <Select value={String(maxProductsPerDrain)} onValueChange={(v) => save({ max_products_per_drain: Number(v) })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {MAX_DRAIN_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Max producten per drain-cyclus om overbelasting te voorkomen.</p>
           </div>
         </div>
         <div className="flex items-center gap-3 pt-2 border-t">
@@ -138,9 +162,7 @@ function BatchSyncConfig() {
             {drainMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
             Drain Pending Now
           </Button>
-          <p className="text-xs text-muted-foreground">
-            Manually flush all pending changes into sync jobs.
-          </p>
+          <p className="text-xs text-muted-foreground">Manually flush all pending changes into sync jobs.</p>
         </div>
       </CardContent>
     </Card>

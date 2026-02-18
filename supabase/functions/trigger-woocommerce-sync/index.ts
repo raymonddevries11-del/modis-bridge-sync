@@ -18,6 +18,30 @@ Deno.serve(async (req) => {
   try {
     console.log('Triggering WooCommerce sync jobs...');
 
+    // Load config for max queue size
+    const { data: batchConfig } = await supabase
+      .from('config')
+      .select('value')
+      .eq('key', 'batch_sync_config')
+      .maybeSingle();
+
+    const config = (batchConfig?.value as Record<string, number>) || {};
+    const MAX_QUEUE_SIZE = config.max_queue_size || 10;
+
+    // Check current queue depth
+    const { count: currentQueueSize } = await supabase
+      .from('jobs')
+      .select('id', { count: 'exact', head: true })
+      .eq('type', 'SYNC_TO_WOO')
+      .in('state', ['ready', 'processing']);
+
+    if ((currentQueueSize || 0) >= MAX_QUEUE_SIZE) {
+      return new Response(
+        JSON.stringify({ success: false, reason: 'queue_full', currentQueueSize, maxQueueSize: MAX_QUEUE_SIZE }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Get active tenant
     const { data: tenant, error: tenantError } = await supabase
       .from('tenants')
@@ -30,7 +54,6 @@ Deno.serve(async (req) => {
       throw new Error('No active tenant found');
     }
 
-    // Get all products for this tenant
     const { data: products, error: productsError } = await supabase
       .from('products')
       .select('id')
@@ -49,9 +72,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`Creating sync jobs for ${products.length} products`);
+    console.log(`Creating sync job for ${products.length} products`);
 
-    // Create a single job with all product IDs
     const productIds = products.map(p => p.id);
     
     const { error: jobError } = await supabase
