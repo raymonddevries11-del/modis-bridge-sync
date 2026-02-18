@@ -270,7 +270,14 @@ const ProductDetail = () => {
         tenant_id: product.tenant_id,
         payload: { productIds: [product.id] },
       });
-      if (error) throw error;
+      if (error) {
+        // Handle duplicate job constraint - job already exists
+        if (error.message?.includes("idx_jobs_dedupe") || error.code === "23505") {
+          toast.info("Er staat al een sync-job klaar voor dit product");
+          return;
+        }
+        throw error;
+      }
     },
     onSuccess: () => {
       toast.success("Sync-job aangemaakt — product wordt naar WooCommerce gepusht");
