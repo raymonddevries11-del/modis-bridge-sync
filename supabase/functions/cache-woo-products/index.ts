@@ -9,6 +9,7 @@ interface WooProduct {
   id: number;
   sku: string;
   type: string;
+  status: string;
   stock_quantity: number;
 }
 
@@ -19,7 +20,7 @@ interface WooVariation {
 }
 
 interface CacheData {
-  products: { sku: string; id: number; type: string; stock_quantity: number }[];
+  products: { sku: string; id: number; type: string; status: string; stock_quantity: number }[];
   variations: { sku: string; id: number; parent_id: number; stock_quantity: number }[];
   cached_at: string;
   product_count: number;
@@ -75,7 +76,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    let wooProducts: { sku: string; id: number; type: string; stock_quantity: number }[] = existingCache?.products ?? [];
+    let wooProducts: { sku: string; id: number; type: string; status: string; stock_quantity: number }[] = existingCache?.products ?? [];
     let wooVariations: { sku: string; id: number; parent_id: number; stock_quantity: number }[] = existingCache?.variations ?? [];
     
     // STEP 1: Fetch ALL WooCommerce products (only if starting fresh)
@@ -91,6 +92,7 @@ Deno.serve(async (req) => {
         url.searchParams.append('consumer_secret', tenantConfig.woocommerce_consumer_secret);
         url.searchParams.append('per_page', String(perPage));
         url.searchParams.append('page', String(page));
+        url.searchParams.append('status', 'any');
 
         const response = await fetch(url.toString());
         if (!response.ok) {
@@ -106,6 +108,7 @@ Deno.serve(async (req) => {
               sku: product.sku,
               id: product.id,
               type: product.type,
+              status: product.status || 'publish',
               stock_quantity: product.stock_quantity || 0,
             });
           }
