@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Progress } from "@/components/ui/progress";
 import { RefreshCw, Trash2, RotateCw, Clock, Loader2, CheckCircle2, XCircle, Package, ChevronDown, ChevronRight, Layers } from "lucide-react";
 import { toast } from "sonner";
 
@@ -201,41 +202,65 @@ export const SyncQueueViewer = ({ tenantId, maxItems = 50 }: SyncQueueViewerProp
     });
   };
 
+  const getProgress = (job: JobRow) => {
+    const progress = (job.payload as any)?.progress;
+    if (!progress || !progress.total) return null;
+    return progress as { processed: number; total: number; synced: number; failed: number };
+  };
+
   const renderSingleJob = (job: JobRow, compact = false) => {
     const config = stateConfig[job.state] || stateConfig.ready;
     const productCount = getProductCount(job);
+    const progress = getProgress(job);
+    const progressPct = progress ? Math.round((progress.processed / progress.total) * 100) : 0;
 
     return (
-      <div key={job.id} className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${compact ? "ml-4 border-dashed" : ""}`}>
-        <Badge variant="outline" className={`${config.className} gap-1 text-xs flex-shrink-0`}>
-          {config.icon}
-          {config.label}
-        </Badge>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-medium truncate">
-              {productCount} product{productCount !== 1 ? "en" : ""}
-            </span>
-            {job.attempts > 0 && <span className="text-xs text-muted-foreground">poging {job.attempts}</span>}
+      <div key={job.id} className={`rounded-lg border p-3 text-sm ${compact ? "ml-4 border-dashed" : ""}`}>
+        <div className="flex items-center gap-3">
+          <Badge variant="outline" className={`${config.className} gap-1 text-xs flex-shrink-0`}>
+            {config.icon}
+            {config.label}
+          </Badge>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-medium truncate">
+                {productCount} product{productCount !== 1 ? "en" : ""}
+              </span>
+              {job.attempts > 0 && <span className="text-xs text-muted-foreground">poging {job.attempts}</span>}
+            </div>
+            {job.error && <p className="text-xs text-destructive truncate mt-0.5">{job.error.slice(0, 100)}</p>}
           </div>
-          {job.error && <p className="text-xs text-destructive truncate mt-0.5">{job.error.slice(0, 100)}</p>}
+          <div className="text-xs text-muted-foreground flex-shrink-0 text-right">
+            <div>{new Date(job.created_at).toLocaleString("nl-NL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
+            {job.state === "done" && <div className="text-success">{getDuration(job)}</div>}
+          </div>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {job.state === "error" && (
+              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => retryMutation.mutate(job.id)} disabled={retryMutation.isPending} title="Opnieuw proberen">
+                <RotateCw className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {(job.state === "ready" || job.state === "error" || job.state === "done") && (
+              <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => setCancelTarget({ id: job.id, productCount })} disabled={cancelMutation.isPending} title="Annuleren">
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
         </div>
-        <div className="text-xs text-muted-foreground flex-shrink-0 text-right">
-          <div>{new Date(job.created_at).toLocaleString("nl-NL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
-          {job.state === "done" && <div className="text-success">{getDuration(job)}</div>}
-        </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {job.state === "error" && (
-            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => retryMutation.mutate(job.id)} disabled={retryMutation.isPending} title="Opnieuw proberen">
-              <RotateCw className="h-3.5 w-3.5" />
-            </Button>
-          )}
-          {(job.state === "ready" || job.state === "error" || job.state === "done") && (
-            <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => setCancelTarget({ id: job.id, productCount })} disabled={cancelMutation.isPending} title="Annuleren">
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
+        {/* Live progress bar for processing jobs */}
+        {job.state === "processing" && progress && (
+          <div className="mt-2 space-y-1">
+            <Progress value={progressPct} className="h-1.5" />
+            <div className="flex justify-between text-[10px] text-muted-foreground">
+              <span>{progress.processed}/{progress.total} verwerkt</span>
+              <div className="flex gap-2">
+                {progress.synced > 0 && <span className="text-success">{progress.synced} ✓</span>}
+                {progress.failed > 0 && <span className="text-destructive">{progress.failed} ✗</span>}
+                <span>{progressPct}%</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -289,6 +314,24 @@ export const SyncQueueViewer = ({ tenantId, maxItems = 50 }: SyncQueueViewerProp
                 // Grouped view
                 const doneCount = group.jobs.filter(j => j.state === "done").length;
                 const canCancelAll = group.jobs.some(j => j.state === "ready" || j.state === "error");
+
+                // Aggregate progress across all jobs in the group
+                const groupProgress = group.jobs.reduce((acc, j) => {
+                  const p = getProgress(j);
+                  if (p) {
+                    acc.processed += p.processed;
+                    acc.total += p.total;
+                    acc.synced += p.synced;
+                    acc.failed += p.failed;
+                    acc.hasProgress = true;
+                  } else {
+                    const count = getProductCount(j);
+                    acc.total += count;
+                    if (j.state === "done") { acc.processed += count; acc.synced += count; acc.hasProgress = true; }
+                  }
+                  return acc;
+                }, { processed: 0, total: 0, synced: 0, failed: 0, hasProgress: false });
+                const groupPct = groupProgress.total > 0 ? Math.round((groupProgress.processed / groupProgress.total) * 100) : 0;
 
                 return (
                   <Collapsible key={group.id} open={isExpanded} onOpenChange={() => toggleGroup(group.id)}>
@@ -345,6 +388,20 @@ export const SyncQueueViewer = ({ tenantId, maxItems = 50 }: SyncQueueViewerProp
                           )}
                         </div>
                       </CollapsibleTrigger>
+                      {/* Group-level progress bar */}
+                      {(group.state === "processing" || group.state === "ready") && groupProgress.hasProgress && (
+                        <div className="mt-2 space-y-1 px-1">
+                          <Progress value={groupPct} className="h-1.5" />
+                          <div className="flex justify-between text-[10px] text-muted-foreground">
+                            <span>{groupProgress.processed}/{groupProgress.total} verwerkt</span>
+                            <div className="flex gap-2">
+                              {groupProgress.synced > 0 && <span className="text-success">{groupProgress.synced} ✓</span>}
+                              {groupProgress.failed > 0 && <span className="text-destructive">{groupProgress.failed} ✗</span>}
+                              <span>{groupPct}%</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <CollapsibleContent>
                         <div className="mt-2 space-y-1.5">
                           {group.jobs.map((job) => renderSingleJob(job, true))}
