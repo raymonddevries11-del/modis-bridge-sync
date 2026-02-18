@@ -17,6 +17,31 @@ Deno.serve(async (req) => {
 
     console.log('Starting daily bulk sync...');
 
+    // Load config for max queue size
+    const { data: batchConfig } = await supabase
+      .from('config')
+      .select('value')
+      .eq('key', 'batch_sync_config')
+      .maybeSingle();
+
+    const config = (batchConfig?.value as Record<string, number>) || {};
+    const MAX_QUEUE_SIZE = config.max_queue_size || 10;
+
+    // Check current queue depth
+    const { count: currentQueueSize } = await supabase
+      .from('jobs')
+      .select('id', { count: 'exact', head: true })
+      .eq('type', 'SYNC_TO_WOO')
+      .in('state', ['ready', 'processing']);
+
+    if ((currentQueueSize || 0) >= MAX_QUEUE_SIZE) {
+      console.log(`Queue already has ${currentQueueSize} jobs (max ${MAX_QUEUE_SIZE}) — skipping daily bulk sync`);
+      return new Response(
+        JSON.stringify({ success: false, reason: 'queue_full', currentQueueSize }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+      );
+    }
+
     // Get all active tenants
     const { data: tenants, error: tenantsError } = await supabase
       .from('tenants')
@@ -32,9 +57,7 @@ Deno.serve(async (req) => {
 
     let totalJobsCreated = 0;
 
-    // For each tenant, create a bulk sync job
     for (const tenant of tenants || []) {
-      // Get all product IDs for this tenant
       const { data: products, error: productsError } = await supabase
         .from('products')
         .select('id')
@@ -53,7 +76,7 @@ Deno.serve(async (req) => {
       const productIds = products.map(p => p.id);
       console.log(`Creating bulk sync job for ${productIds.length} products (tenant: ${tenant.name})`);
 
-      // Create a single bulk sync job for all products
+      // Create a single job with ALL product IDs — the sync function handles internal batching
       const { error: jobError } = await supabase
         .from('jobs')
         .insert({
