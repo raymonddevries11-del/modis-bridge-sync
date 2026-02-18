@@ -556,16 +556,24 @@ const ProductDetail = () => {
               <span className="text-sm">
                 Dit product is <strong>nog niet gekoppeld aan WooCommerce</strong>. Het is nog niet aangemaakt in de webshop.
               </span>
-              <Button
-                size="sm"
-                variant="default"
-                onClick={() => pushToWooMutation.mutate()}
-                disabled={pushToWooMutation.isPending}
-                className="ml-4 flex-shrink-0"
-              >
-                <Send className="h-4 w-4 mr-1" />
-                {pushToWooMutation.isPending ? "Bezig..." : "Nu naar WooCommerce pushen"}
-              </Button>
+              <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+                {pendingSyncJob && pendingSyncJob.state !== 'error' && (
+                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs">
+                    <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                    {pendingSyncJob.state === 'processing' ? 'Wordt verwerkt' : 'In wachtrij'}
+                  </Badge>
+                )}
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={() => pushToWooMutation.mutate()}
+                  disabled={pushToWooMutation.isPending || (!!pendingSyncJob && pendingSyncJob.state !== 'error')}
+                  className="flex-shrink-0"
+                >
+                  <Send className="h-4 w-4 mr-1" />
+                  {pushToWooMutation.isPending ? "Bezig..." : "Nu naar WooCommerce pushen"}
+                </Button>
+              </div>
             </AlertDescription>
           </Alert>
         )}
@@ -578,6 +586,12 @@ const ProductDetail = () => {
                 {wooLink.last_pushed_at && <span className="text-muted-foreground ml-2">· Laatst gepusht: {new Date(wooLink.last_pushed_at).toLocaleString("nl-NL")}</span>}
               </span>
               <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+                {pendingSyncJob && pendingSyncJob.state !== 'error' && (
+                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs">
+                    <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                    {pendingSyncJob.state === 'processing' ? 'Wordt verwerkt' : 'In wachtrij'}
+                  </Badge>
+                )}
                 {wooLink.permalink && (
                   <Button size="sm" variant="outline" asChild>
                     <a href={wooLink.permalink} target="_blank" rel="noopener noreferrer">Bekijk in webshop</a>
@@ -587,7 +601,7 @@ const ProductDetail = () => {
                   size="sm"
                   variant="outline"
                   onClick={() => pushToWooMutation.mutate()}
-                  disabled={pushToWooMutation.isPending}
+                  disabled={pushToWooMutation.isPending || (!!pendingSyncJob && pendingSyncJob.state !== 'error')}
                 >
                   <RefreshCw className="h-4 w-4 mr-1" />
                   {pushToWooMutation.isPending ? "Bezig..." : "Opnieuw pushen"}
