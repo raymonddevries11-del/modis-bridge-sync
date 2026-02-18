@@ -66,12 +66,38 @@ Deno.serve(async (req) => {
 
     console.log(`Draining ${pending.length} pending syncs (window=${WINDOW_SECONDS}s, batch=${BATCH_SIZE}, slots=${slotsAvailable})`);
 
-    // Group by tenant
+    // Build set of product IDs already in queued jobs to avoid duplicates
+    const alreadyQueued = new Set<string>();
+    const { data: existingJobs } = await supabase
+      .from('jobs')
+      .select('payload')
+      .eq('type', 'SYNC_TO_WOO')
+      .in('state', ['ready', 'processing']);
+
+    if (existingJobs) {
+      for (const job of existingJobs) {
+        const ids = (job.payload as any)?.productIds;
+        if (Array.isArray(ids)) {
+          for (const id of ids) alreadyQueued.add(id);
+        }
+      }
+    }
+
+    // Group by tenant, filtering out already-queued products
     const byTenant = new Map<string, Set<string>>();
+    let skippedCount = 0;
     for (const row of pending) {
+      if (alreadyQueued.has(row.product_id)) {
+        skippedCount++;
+        continue;
+      }
       const tid = row.tenant_id;
       if (!byTenant.has(tid)) byTenant.set(tid, new Set());
       byTenant.get(tid)!.add(row.product_id);
+    }
+
+    if (skippedCount > 0) {
+      console.log(`Dedup: skipped ${skippedCount} products already in queued jobs`);
     }
 
     let jobsCreated = 0;
@@ -124,6 +150,7 @@ Deno.serve(async (req) => {
 
     return new Response(JSON.stringify({
       drained: pending.length,
+      skipped: skippedCount,
       jobs: jobsCreated,
       tenants: byTenant.size,
       batchSize: BATCH_SIZE,

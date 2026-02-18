@@ -75,7 +75,29 @@ const ChannelWooCommerce = () => {
       if (productsError) throw productsError;
       if (!products || products.length === 0) { toast.error("Geen producten gevonden"); return; }
 
-      const productIds = products.map(p => p.id);
+      // Dedup: find products already in queued jobs
+      const { data: existingJobs } = await supabase
+        .from("jobs")
+        .select("payload")
+        .eq("type", "SYNC_TO_WOO")
+        .in("state", ["ready", "processing"]);
+
+      const alreadyQueued = new Set<string>();
+      if (existingJobs) {
+        for (const job of existingJobs) {
+          const ids = (job.payload as any)?.productIds;
+          if (Array.isArray(ids)) ids.forEach((id: string) => alreadyQueued.add(id));
+        }
+      }
+
+      const productIds = products.map(p => p.id).filter(id => !alreadyQueued.has(id));
+      const skipped = products.length - productIds.length;
+
+      if (productIds.length === 0) {
+        toast.info(`Alle ${products.length} producten staan al in de wachtrij`);
+        return;
+      }
+
       const BATCH_SIZE = 50;
       const jobs = [];
       for (let i = 0; i < productIds.length; i += BATCH_SIZE) {
@@ -83,7 +105,10 @@ const ChannelWooCommerce = () => {
       }
       const { error } = await supabase.from("jobs").insert(jobs);
       if (error) throw error;
-      toast.success(`${jobs.length} sync jobs aangemaakt voor ${productIds.length} producten`, { action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") } });
+      const msg = skipped > 0
+        ? `${jobs.length} sync jobs aangemaakt voor ${productIds.length} producten (${skipped} al in wachtrij)`
+        : `${jobs.length} sync jobs aangemaakt voor ${productIds.length} producten`;
+      toast.success(msg, { action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") } });
       refetchStats();
     } catch (e: any) { toast.error(`Fout: ${e.message}`); }
     finally { setFullSyncing(false); }

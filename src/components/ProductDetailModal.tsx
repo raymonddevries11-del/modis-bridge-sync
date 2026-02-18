@@ -40,17 +40,29 @@ const VariantStockCard = ({ variant, tenantId, productSku }: VariantStockCardPro
 
       if (stockError) throw stockError;
 
-      // Create SYNC_TO_WOO job for this variant
-      const { error: jobError } = await supabase
+      // Dedup: check for existing queued job containing this variant
+      const { data: existingJobs } = await supabase
         .from("jobs")
-        .insert({
-          type: "SYNC_TO_WOO",
-          state: "ready",
-          tenant_id: tenantId,
-          payload: { variantIds: [variant.id] },
-        });
+        .select("payload")
+        .eq("type", "SYNC_TO_WOO")
+        .in("state", ["ready", "processing"]);
 
-      if (jobError) throw jobError;
+      const alreadyQueued = existingJobs?.some((job: any) => {
+        const ids = (job.payload as any)?.variantIds;
+        return Array.isArray(ids) && ids.includes(variant.id);
+      });
+
+      if (!alreadyQueued) {
+        const { error: jobError } = await supabase
+          .from("jobs")
+          .insert({
+            type: "SYNC_TO_WOO",
+            state: "ready",
+            tenant_id: tenantId,
+            payload: { variantIds: [variant.id] },
+          });
+        if (jobError && jobError.code !== "23505") throw jobError;
+      }
     },
     onSuccess: () => {
       toast.success(`Voorraad bijgewerkt naar ${stockValue} - sync naar WooCommerce gepland`);
