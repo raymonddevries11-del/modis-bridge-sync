@@ -469,7 +469,9 @@ const ProductDetail = () => {
     ? (product.images as string[]).map((img) => {
         if (typeof img !== 'string' || !img) return '';
         if (img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:')) return img;
-        return `${storageBaseUrl}${img}`;
+        // Strip legacy modis/foto/ prefix — files live at bucket root
+        const cleaned = img.replace(/^modis\/foto\//i, '');
+        return `${storageBaseUrl}${cleaned}`;
       }).filter(Boolean)
     : [];
   const imageCount = images.length;
@@ -493,7 +495,17 @@ const ProductDetail = () => {
         <div className="flex items-start gap-5">
           <div className="h-24 w-24 rounded-xl border border-border bg-muted/50 flex items-center justify-center flex-shrink-0 overflow-hidden">
             {images.length > 0 ? (
-              <img src={images[0]} alt={product.title} className="h-full w-full object-cover" onError={(e) => { (e.target as HTMLImageElement).src = "/placeholder.svg"; }} />
+              <img src={images[0]} alt={product.title} className="h-full w-full object-cover" onError={(e) => {
+                const img = e.target as HTMLImageElement;
+                const rootUrl = img.src;
+                const filename = rootUrl.split("/").pop() || "";
+                if (!rootUrl.includes("modis/foto/") && !img.dataset.retried) {
+                  img.dataset.retried = "1";
+                  img.src = rootUrl.replace(`/product-images/${filename}`, `/product-images/modis/foto/${filename}`);
+                } else {
+                  img.src = "/placeholder.svg";
+                }
+              }} />
             ) : (
               <ImageIcon className="h-8 w-8 text-muted-foreground/40" />
             )}
@@ -913,7 +925,30 @@ const ProductDetail = () => {
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                 {images.map((url, i) => (
                   <div key={i} className="card-elevated rounded-xl overflow-hidden">
-                    <img src={url} alt={`${product.title} ${i + 1}`} className="w-full h-48 object-cover" onError={(e) => { (e.target as HTMLImageElement).src = "/placeholder.svg"; }} />
+                    <img
+                      src={url}
+                      alt={`${product.title} ${i + 1}`}
+                      className="w-full h-48 object-cover"
+                      onError={(e) => {
+                        const img = e.target as HTMLImageElement;
+                        // Try modis/foto/ fallback if root path failed
+                        const rootUrl = img.src;
+                        const filename = rootUrl.split("/").pop() || "";
+                        if (!rootUrl.includes("modis/foto/") && !img.dataset.retried) {
+                          img.dataset.retried = "1";
+                          img.src = rootUrl.replace(`/product-images/${filename}`, `/product-images/modis/foto/${filename}`);
+                        } else {
+                          img.style.display = "none";
+                          const parent = img.parentElement;
+                          if (parent && !parent.querySelector(".img-missing")) {
+                            const notice = document.createElement("div");
+                            notice.className = "img-missing w-full h-48 flex flex-col items-center justify-center bg-muted/30 text-muted-foreground";
+                            notice.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mb-2 opacity-40"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg><span class="text-xs">Niet in storage</span>`;
+                            parent.insertBefore(notice, img);
+                          }
+                        }
+                      }}
+                    />
                     <div className="p-2"><p className="text-[11px] text-muted-foreground truncate">{String(url).split("/").pop()}</p></div>
                   </div>
                 ))}
