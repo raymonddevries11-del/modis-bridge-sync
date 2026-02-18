@@ -10,6 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2, Copy, Loader2, Zap } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { useState } from "react";
 
 interface SftpFormData {
@@ -62,12 +63,12 @@ function BatchSyncConfig() {
         body: { action: 'get', key: 'batch_sync_config' },
       });
       if (error) throw error;
-      return (data as { window_seconds?: number; batch_size?: number; max_queue_size?: number; max_products_per_drain?: number }) || {};
+      return (data as { window_seconds?: number; batch_size?: number; max_queue_size?: number; max_products_per_drain?: number; split_mode?: string }) || {};
     },
   });
 
   const saveMutation = useMutation({
-    mutationFn: async (value: { window_seconds: number; batch_size: number; max_queue_size: number; max_products_per_drain: number }) => {
+    mutationFn: async (value: { window_seconds: number; batch_size: number; max_queue_size: number; max_products_per_drain: number; split_mode: string }) => {
       const { error } = await supabase.functions.invoke('settings', {
         body: { action: 'save', key: 'batch_sync_config', value },
       });
@@ -100,9 +101,10 @@ function BatchSyncConfig() {
   const batchSize = config?.batch_size || 50;
   const maxQueueSize = config?.max_queue_size || 10;
   const maxProductsPerDrain = config?.max_products_per_drain || 200;
+  const splitMode = config?.split_mode || 'internal';
 
-  const save = (overrides: Partial<{ window_seconds: number; batch_size: number; max_queue_size: number; max_products_per_drain: number }>) =>
-    saveMutation.mutate({ window_seconds: windowSeconds, batch_size: batchSize, max_queue_size: maxQueueSize, max_products_per_drain: maxProductsPerDrain, ...overrides });
+  const save = (overrides: Partial<{ window_seconds: number; batch_size: number; max_queue_size: number; max_products_per_drain: number; split_mode: string }>) =>
+    saveMutation.mutate({ window_seconds: windowSeconds, batch_size: batchSize, max_queue_size: maxQueueSize, max_products_per_drain: maxProductsPerDrain, split_mode: splitMode, ...overrides });
 
   if (isLoading) return <Card><CardContent className="p-6"><Loader2 className="h-5 w-5 animate-spin" /></CardContent></Card>;
 
@@ -156,6 +158,19 @@ function BatchSyncConfig() {
             </Select>
             <p className="text-xs text-muted-foreground">Max producten per drain-cyclus om overbelasting te voorkomen.</p>
           </div>
+        </div>
+        <div className="flex items-center justify-between pt-2 border-t">
+          <div className="space-y-1">
+            <Label htmlFor="split-mode">Job Split Mode</Label>
+            <p className="text-xs text-muted-foreground">
+              <strong>Internal iteration</strong> processes all products inside one job. <strong>Split mode</strong> creates separate jobs per batch.
+            </p>
+          </div>
+          <Switch
+            id="split-mode"
+            checked={splitMode === 'split'}
+            onCheckedChange={(checked) => save({ split_mode: checked ? 'split' : 'internal' })}
+          />
         </div>
         <div className="flex items-center gap-3 pt-2 border-t">
           <Button variant="outline" onClick={() => drainMutation.mutate()} disabled={drainMutation.isPending}>
