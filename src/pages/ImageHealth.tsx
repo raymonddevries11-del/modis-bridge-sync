@@ -16,6 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  Zap,
   Image,
   ImageOff,
   CheckCircle2,
@@ -70,6 +71,13 @@ export default function ImageHealth() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "ok" | "missing" | "no_images">("all");
   const [isFixing, setIsFixing] = useState(false);
+  const [isReconciling, setIsReconciling] = useState(false);
+  const [reconcileResult, setReconcileResult] = useState<{
+    productsFixed: number;
+    urlsFixed: number;
+    urlsNotFound: number;
+    storageFilesIndexed: number;
+  } | null>(null);
 
   // Fetch all products with images info
   const { data: products, isLoading, refetch } = useQuery({
@@ -172,6 +180,31 @@ export default function ImageHealth() {
     }
   };
 
+  const handleReconcile = async () => {
+    setIsReconciling(true);
+    setReconcileResult(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("reconcile-images", {
+        body: { tenant: "kosterschoenmode", dryRun: false },
+      });
+      if (error) throw error;
+      setReconcileResult(data);
+      toast({
+        title: "Reconcile voltooid",
+        description: `${data?.productsFixed || 0} producten bijgewerkt, ${data?.urlsFixed || 0} URLs gefixt, ${data?.urlsNotFound || 0} niet gevonden`,
+      });
+      refetch();
+    } catch (err) {
+      toast({
+        title: "Fout bij reconcile",
+        description: err instanceof Error ? err.message : "Onbekende fout",
+        variant: "destructive",
+      });
+    } finally {
+      setIsReconciling(false);
+    }
+  };
+
   // Compute stats
   const stats = products
     ? {
@@ -210,10 +243,16 @@ export default function ImageHealth() {
               Beschikbaarheid van afbeeldingen per product en storage status
             </p>
           </div>
-          <Button onClick={handleManualFix} disabled={isFixing} size="sm">
-            <RefreshCw className={`h-4 w-4 mr-2 ${isFixing ? "animate-spin" : ""}`} />
-            {isFixing ? "Fixing…" : "Auto-fix uitvoeren"}
-          </Button>
+          <div className="flex gap-2">
+            <Button onClick={handleReconcile} disabled={isReconciling} size="sm" variant="default">
+              <Zap className={`h-4 w-4 mr-2 ${isReconciling ? "animate-spin" : ""}`} />
+              {isReconciling ? "Reconciling…" : "Reconcile alle images"}
+            </Button>
+            <Button onClick={handleManualFix} disabled={isFixing} size="sm" variant="outline">
+              <RefreshCw className={`h-4 w-4 mr-2 ${isFixing ? "animate-spin" : ""}`} />
+              {isFixing ? "Fixing…" : "Auto-fix"}
+            </Button>
+          </div>
         </div>
 
         {/* Summary Cards */}
@@ -281,6 +320,21 @@ export default function ImageHealth() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Reconcile result */}
+        {reconcileResult && (
+          <Card className="border-primary/30 bg-primary/5">
+            <CardContent className="py-3 px-4">
+              <div className="flex items-center gap-4 text-sm">
+                <Zap className="h-4 w-4 text-primary" />
+                <span><strong>{reconcileResult.productsFixed}</strong> producten bijgewerkt</span>
+                <span><strong>{reconcileResult.urlsFixed}</strong> URLs gefixt</span>
+                <span><strong>{reconcileResult.urlsNotFound}</strong> niet gevonden</span>
+                <span className="text-muted-foreground">({reconcileResult.storageFilesIndexed} bestanden geïndexeerd)</span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Last auto-fix info */}
         {lastFix && (
