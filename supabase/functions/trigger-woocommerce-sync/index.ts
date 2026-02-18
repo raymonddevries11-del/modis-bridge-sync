@@ -72,21 +72,28 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`Creating sync job for ${products.length} products`);
-
+    const BATCH_SIZE = config.batch_size || 25;
     const productIds = products.map(p => p.id);
-    
+    const batches: string[][] = [];
+    for (let i = 0; i < productIds.length; i += BATCH_SIZE) {
+      batches.push(productIds.slice(i, i + BATCH_SIZE));
+    }
+
+    console.log(`Creating ${batches.length} sync jobs for ${products.length} products (batch size ${BATCH_SIZE})`);
+
+    const jobRows = batches.map(batch => ({
+      type: 'SYNC_TO_WOO',
+      state: 'ready' as const,
+      tenant_id: tenant.id,
+      payload: { productIds: batch },
+    }));
+
     const { error: jobError } = await supabase
       .from('jobs')
-      .insert({
-        type: 'SYNC_TO_WOO',
-        state: 'ready',
-        tenant_id: tenant.id,
-        payload: { productIds },
-      });
+      .insert(jobRows);
 
     if (jobError) {
-      console.error('Error creating job:', jobError);
+      console.error('Error creating jobs:', jobError);
       throw jobError;
     }
 
@@ -103,9 +110,10 @@ Deno.serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Created sync job for ${products.length} products`,
-        jobsCreated: 1,
+        message: `Created ${batches.length} sync jobs for ${products.length} products`,
+        jobsCreated: batches.length,
         productsQueued: products.length,
+        batchSize: BATCH_SIZE,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
