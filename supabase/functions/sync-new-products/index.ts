@@ -92,8 +92,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Create jobs for new products (in batches of 10)
-    const BATCH_SIZE = 10;
+    // Create jobs for new products (in batches of 3 to avoid 504 timeouts)
+    const BATCH_SIZE = 3;
     let jobsCreated = 0;
 
     for (let i = 0; i < missingProducts.length; i += BATCH_SIZE) {
