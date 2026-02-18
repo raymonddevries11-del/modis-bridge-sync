@@ -583,8 +583,8 @@ const ProductDetail = () => {
               <Card className="card-elevated">
                 <CardHeader><CardTitle className="text-base">Kleur</CardTitle></CardHeader>
                 <CardContent className="grid grid-cols-2 gap-4 text-sm">
-                  <div><span className="text-muted-foreground">Kleur:</span> <span className="font-medium ml-2">{color.label || "—"}</span></div>
-                  <div><span className="text-muted-foreground">Filter:</span> <span className="font-medium ml-2">{color.filter || "—"}</span></div>
+                  <div><span className="text-muted-foreground">Webshop:</span> <span className="font-medium ml-2">{color.webshop || "—"}</span></div>
+                  <div><span className="text-muted-foreground">Artikel:</span> <span className="font-medium ml-2">{color.article || "—"}</span></div>
                 </CardContent>
               </Card>
             )}
