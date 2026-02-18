@@ -454,6 +454,8 @@ async function processJob(
 
     console.log(`Processing ${totalProducts} products in internal batches of ${BATCH_SIZE}`);
     let totalSynced = 0;
+    let totalFailed = 0;
+    const failedProducts: Array<{ sku: string; productId: string; error: string; errorType: string }> = [];
 
     // Process in sequential batches without creating new jobs
     for (let offset = 0; offset < Math.max(totalProducts, 1); offset += BATCH_SIZE) {
@@ -503,10 +505,48 @@ async function processJob(
         continue;
       }
 
-      // Process each product in this batch with delay
+      // Process each product in this batch with delay — ISOLATE errors per product
       for (let i = 0; i < products.length; i++) {
-        await syncProductToWooCommerce(products[i], wooConfig, variantIds, supabase, job.tenant_id);
-        totalSynced++;
+        const product = products[i];
+        try {
+          await syncProductToWooCommerce(product, wooConfig, variantIds, supabase, job.tenant_id);
+          totalSynced++;
+        } catch (productError: any) {
+          totalFailed++;
+          const errMsg = productError instanceof Error ? productError.message : String(productError);
+          const errType = classifyWooError(errMsg);
+          
+          console.error(`✗ Product ${product.sku} failed (${errType}): ${errMsg}`);
+          failedProducts.push({
+            sku: product.sku,
+            productId: product.id,
+            error: errMsg.substring(0, 500),
+            errorType: errType,
+          });
+
+          // Log individual product failure to changelog
+          await logChangeToChangelog(supabase, job.tenant_id, 'WOO_PUSH_FAILED', 
+            `Push mislukt voor ${product.sku}: ${errType} — ${errMsg.substring(0, 150)}`,
+            {
+              productId: product.id,
+              sku: product.sku,
+              errorType: errType,
+              error: errMsg.substring(0, 500),
+              jobId: job.id,
+              retryable: errType !== 'validation',
+            }
+          );
+
+          // Queue retryable failures for automatic retry
+          if (errType !== 'validation') {
+            await supabase.from('pending_product_syncs').upsert({
+              product_id: product.id,
+              tenant_id: job.tenant_id,
+              reason: `auto_retry:${errType}`,
+              created_at: new Date().toISOString(),
+            }, { onConflict: 'product_id,reason' }).catch(() => {});
+          }
+        }
         
         // 3s delay between products to respect rate limits
         if (i < products.length - 1) {
@@ -521,77 +561,92 @@ async function processJob(
       }
     }
 
-    console.log(`All batches complete: ${totalSynced}/${totalProducts} products synced`);
+    console.log(`All batches complete: ${totalSynced} synced, ${totalFailed} failed out of ${totalProducts}`);
 
-    // Always mark job as done on success
-    await supabase.from('jobs').update({ state: 'done', error: null }).eq('id', job.id);
+    // Determine job final state
+    const jobError = totalFailed > 0
+      ? `${totalSynced}/${totalProducts} synced, ${totalFailed} failed: ${failedProducts.slice(0, 3).map(f => `${f.sku}(${f.errorType})`).join(', ')}${failedProducts.length > 3 ? '...' : ''}`
+      : null;
+
+    // Mark job as done (even with partial failures — failed products are queued for retry)
+    await supabase.from('jobs').update({ 
+      state: totalSynced === 0 && totalFailed > 0 ? 'error' : 'done', 
+      error: jobError,
+      updated_at: new Date().toISOString(),
+    }).eq('id', job.id);
       
-    // Add changelog entry only if NOT invoked by scheduler
-    if (!isSchedulerInvoked) {
-      await supabase.from('changelog').insert({
-        tenant_id: job.tenant_id,
-        event_type: 'SYNC_COMPLETED',
-        description: `${products.length} producten gesynchroniseerd naar WooCommerce`,
-        metadata: {
-          productCount: products.length,
-          jobId: job.id
-        }
-      });
-    }
+    // Log summary to changelog
+    await logChangeToChangelog(supabase, job.tenant_id, 
+      totalFailed > 0 ? 'SYNC_PARTIAL' : 'SYNC_COMPLETED',
+      totalFailed > 0
+        ? `WooCommerce sync: ${totalSynced}/${totalProducts} gelukt, ${totalFailed} mislukt`
+        : `${totalSynced} producten gesynchroniseerd naar WooCommerce`,
+      {
+        productCount: totalProducts,
+        synced: totalSynced,
+        failed: totalFailed,
+        jobId: job.id,
+        failedProducts: failedProducts.slice(0, 10),
+      }
+    );
     
-    console.log(`Job ${job.id} completed successfully`);
+    console.log(`Job ${job.id} completed: ${totalSynced} synced, ${totalFailed} failed`);
   } catch (error) {
     console.error(`Job ${job.id} failed:`, error);
 
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    const errorStatus = (error as any)?.status;
+    const errorType = classifyWooError(errorMessage);
     const attempts = (job as any).attempts + 1;
     const maxRetries = 5;
 
-    // Check if we should retry
-    const shouldRetry = 
-      attempts < maxRetries && 
-      (errorStatus === 429 || (errorStatus >= 500 && errorStatus < 600));
+    // Retry transient errors (timeouts, rate limits, network issues)
+    const shouldRetry = attempts < maxRetries && errorType !== 'validation';
 
     if (shouldRetry) {
-      // Exponential backoff: reset to ready for retry
-      const backoffSeconds = Math.pow(2, attempts); // 1, 2, 4, 8, 16 seconds
-      console.log(`Retrying job ${job.id} in ${backoffSeconds}s (attempt ${attempts}/${maxRetries})`);
+      const backoffSeconds = Math.min(Math.pow(2, attempts) * 15, 600);
+      console.log(`Retrying job ${job.id} in ${backoffSeconds}s (attempt ${attempts}/${maxRetries}, type: ${errorType})`);
       
       await supabase
         .from('jobs')
         .update({ 
           state: 'ready', 
-          error: `Retry ${attempts}/${maxRetries}: ${errorMessage}` 
+          error: `Retry ${attempts}/${maxRetries} (${errorType}): ${errorMessage.substring(0, 200)}`,
+          updated_at: new Date(Date.now() + backoffSeconds * 1000).toISOString(),
         })
         .eq('id', job.id);
+
+      await logChangeToChangelog(supabase, job.tenant_id, 'WOO_JOB_RETRY',
+        `Job retry ${attempts}/${maxRetries}: ${errorType} — ${errorMessage.substring(0, 100)}`,
+        { jobId: job.id, attempts, maxRetries, errorType, error: errorMessage.substring(0, 500) }
+      );
     } else {
-      // Permanent failure - always update to error state
       await supabase
         .from('jobs')
-        .update({ 
-          state: 'error', 
-          error: errorMessage 
-        })
+        .update({ state: 'error', error: `${errorType}: ${errorMessage}` })
         .eq('id', job.id);
       
-      // Log failed sync to changelog only if not scheduler invoked
-      if (!isSchedulerInvoked) {
-        await supabase.from('changelog').insert({
-          tenant_id: job.tenant_id,
-          event_type: 'SYNC_FAILED',
-          description: `WooCommerce synchronisatie mislukt na ${maxRetries} pogingen`,
-          metadata: {
-            error: errorMessage,
-            attempts: attempts,
-            jobId: job.id
-          }
-        });
-      }
+      await logChangeToChangelog(supabase, job.tenant_id, 'SYNC_FAILED',
+        `WooCommerce sync definitief mislukt (${errorType}) na ${attempts} pogingen`,
+        { error: errorMessage, attempts, jobId: job.id, errorType }
+      );
     }
 
     throw error;
   }
+}
+
+/** Classify WooCommerce errors for smart retry decisions */
+function classifyWooError(msg: string): string {
+  const lower = msg.toLowerCase();
+  if (lower.includes('504') || lower.includes('timeout') || lower.includes('etimedout')) return 'timeout';
+  if (lower.includes('429') || lower.includes('rate limit')) return 'rate_limit';
+  if (lower.includes('502') || lower.includes('503') || lower.includes('529')) return 'server_error';
+  if (lower.includes('bot protection') || lower.includes('blocked') || lower.includes('captcha') || lower.includes('cloudflare')) return 'bot_protection';
+  if (lower.includes('econnreset') || lower.includes('network') || lower.includes('fetch') || lower.includes('peer closed') || lower.includes('unexpected eof')) return 'network';
+  if (lower.includes('400') || lower.includes('bad request') || lower.includes('invalid')) return 'validation';
+  if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid_username')) return 'auth';
+  if (lower.includes('403') || lower.includes('forbidden')) return 'forbidden';
+  return 'unknown';
 }
 
 async function syncProductToWooCommerce(

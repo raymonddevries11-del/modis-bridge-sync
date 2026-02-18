@@ -123,25 +123,48 @@ serve(async (req) => {
       const updatedAt = new Date(job.updated_at).getTime();
       if (now.getTime() - updatedAt < 10 * 60_000) continue;
 
-      // Check if it's a transient error (not a permanent/validation error)
-      const permanentPatterns = ["Unknown job type", "Invalid", "Forbidden", "Unauthorized"];
-      const isPermanent = permanentPatterns.some((p) => job.error?.includes(p));
-      if (isPermanent) continue;
+      // Classify the error for smart retry decisions
+      const errorType = classifyError(job.error || '');
+      
+      // Never retry permanent errors
+      if (errorType === 'permanent') continue;
+      
+      // For validation errors (400/Bad Request), only retry once more with longer backoff
+      const effectiveMaxRetries = errorType === 'validation' ? Math.min(attempts + 1, 2) : config.maxRetries;
+      if (attempts >= effectiveMaxRetries) continue;
 
       const delaySec = Math.min(
-        config.backoffBaseSec * Math.pow(2, attempts),
+        config.backoffBaseSec * Math.pow(2, attempts) * (errorType === 'bot_protection' ? 2 : 1),
         config.backoffMaxSec,
       );
       const nextRetryAt = new Date(now.getTime() + delaySec * 1000).toISOString();
 
       await supabase.from("jobs").update({
         state: "ready",
-        error: `Retry monitor: auto-retry from error #${attempts + 1} — ${job.error?.slice(0, 100)}`,
+        error: `Retry monitor: auto-retry from ${errorType} #${attempts + 1} — ${job.error?.slice(0, 100)}`,
         updated_at: nextRetryAt,
       }).eq("id", job.id);
 
+      // Log detailed retry to changelog
+      if (job.tenant_id) {
+        await supabase.from("changelog").insert({
+          tenant_id: job.tenant_id,
+          event_type: "JOB_AUTO_RETRY",
+          description: `Auto-retry ${job.type} (${errorType}): poging ${attempts + 1}, backoff ${delaySec}s`,
+          metadata: {
+            jobId: job.id,
+            jobType: job.type,
+            errorType,
+            attempts: attempts + 1,
+            backoffSec: delaySec,
+            originalError: job.error?.slice(0, 300),
+            productIds: (job.payload as any)?.productIds?.slice(0, 5),
+          },
+        }).catch(() => {});
+      }
+
       retriedCount++;
-      actions.push({ jobId: job.id, type: job.type, action: "retried_from_error", reason: `attempt ${attempts + 1}` });
+      actions.push({ jobId: job.id, type: job.type, action: `retried_from_${errorType}`, reason: `attempt ${attempts + 1}, backoff ${delaySec}s` });
     }
 
     // Save monitor state for the UI widget
@@ -178,3 +201,21 @@ serve(async (req) => {
     );
   }
 });
+
+/** Classify job errors for smart retry decisions */
+function classifyError(msg: string): string {
+  const lower = msg.toLowerCase();
+  // Permanent — never retry
+  if (lower.includes('unknown job type') || lower.includes('tenant configuration not found')) return 'permanent';
+  if (lower.includes('unauthorized') || lower.includes('invalid_username') || lower.includes('401')) return 'permanent';
+  if (lower.includes('forbidden') || lower.includes('403')) return 'permanent';
+  // Validation — limited retry  
+  if (lower.includes('bad request') || lower.includes('400') || lower.includes('invalid')) return 'validation';
+  // Transient — full retry
+  if (lower.includes('504') || lower.includes('timeout') || lower.includes('etimedout')) return 'timeout';
+  if (lower.includes('429') || lower.includes('rate limit')) return 'rate_limit';
+  if (lower.includes('502') || lower.includes('503') || lower.includes('529')) return 'server_error';
+  if (lower.includes('bot protection') || lower.includes('blocked') || lower.includes('captcha')) return 'bot_protection';
+  if (lower.includes('econnreset') || lower.includes('network') || lower.includes('peer closed')) return 'network';
+  return 'transient';
+}
