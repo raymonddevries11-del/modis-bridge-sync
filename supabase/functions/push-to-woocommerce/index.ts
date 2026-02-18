@@ -993,11 +993,19 @@ Deno.serve(async (req) => {
         }
 
         // --- Sale / Promotion tag ---
+        const existingTags = desiredData.tags || [];
         if (pim.is_promotion) {
-          const existingTags = desiredData.tags || [];
           const hasSaleTag = existingTags.some((t: any) => t.name?.toLowerCase() === 'sale');
           if (!hasSaleTag) {
             desiredData.tags = [...existingTags, { name: 'Sale' }];
+            console.log(`[${pim.sku}] Added 'Sale' tag (is_promotion=true)`);
+          }
+        } else {
+          // Remove Sale tag if product is no longer on promotion
+          const filtered = existingTags.filter((t: any) => t.name?.toLowerCase() !== 'sale');
+          if (filtered.length !== existingTags.length) {
+            desiredData.tags = filtered;
+            console.log(`[${pim.sku}] Removed 'Sale' tag (is_promotion=false)`);
           }
         }
 
