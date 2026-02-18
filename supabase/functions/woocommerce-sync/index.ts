@@ -455,7 +455,19 @@ async function processJob(
     console.log(`Processing ${totalProducts} products in internal batches of ${BATCH_SIZE}`);
     let totalSynced = 0;
     let totalFailed = 0;
+    let totalProcessed = 0;
     const failedProducts: Array<{ sku: string; productId: string; error: string; errorType: string }> = [];
+
+    // Helper: write progress to job payload so the UI can show a live progress bar
+    const updateProgress = async () => {
+      await supabase.from('jobs').update({
+        payload: {
+          ...job.payload,
+          progress: { processed: totalProcessed, total: totalProducts, synced: totalSynced, failed: totalFailed },
+        },
+        updated_at: new Date().toISOString(),
+      }).eq('id', job.id);
+    };
 
     // Process in sequential batches without creating new jobs
     for (let offset = 0; offset < Math.max(totalProducts, 1); offset += BATCH_SIZE) {
@@ -511,8 +523,12 @@ async function processJob(
         try {
           await syncProductToWooCommerce(product, wooConfig, variantIds, supabase, job.tenant_id);
           totalSynced++;
+          totalProcessed++;
+          await updateProgress();
         } catch (productError: any) {
           totalFailed++;
+          totalProcessed++;
+          await updateProgress();
           const errMsg = productError instanceof Error ? productError.message : String(productError);
           const errType = classifyWooError(errMsg);
           
