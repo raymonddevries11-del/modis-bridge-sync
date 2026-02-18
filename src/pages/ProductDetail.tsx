@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { invokeEdgeFunction } from "@/lib/edge-function-client";
 import { Layout } from "@/components/Layout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -441,9 +442,7 @@ const ProductDetail = () => {
   const { data: compareData, isLoading: isComparing, refetch: refetchCompare } = useQuery({
     queryKey: ["product-compare", id],
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke("compare-product", { body: { productId: id, tenantId: product?.tenant_id } });
-      if (error) throw error;
-      return data;
+      return await invokeEdgeFunction<{ differences: { exists: boolean; fields: Record<string, any> } }>("compare-product", { body: { productId: id, tenantId: product?.tenant_id }, maxRetries: 2 });
     },
     enabled: false,
   });

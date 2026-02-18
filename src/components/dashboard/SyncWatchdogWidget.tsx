@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { invokeEdgeFunction } from "@/lib/edge-function-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,9 +33,7 @@ export const SyncWatchdogWidget = () => {
 
   const runMutation = useMutation({
     mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke("sync-watchdog");
-      if (error) throw error;
-      return data;
+      return await invokeEdgeFunction<{ alerts: any[] }>("sync-watchdog", { maxRetries: 2 });
     },
     onSuccess: (data) => {
       if (data.alerts?.length > 0) {
