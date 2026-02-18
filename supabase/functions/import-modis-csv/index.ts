@@ -83,7 +83,14 @@ function parseAllRows(rows: string[][], headers: string[]) {
   const parentIdx = col('Parent');
   const eanIdx = headers.findIndex(h => h.includes('_ywbc_barcode'));
   const colorArticleIdx = col('Color-article');
+  // Attribute 21 has header "Attribute 21 Color-webshop" (single column, not name/value pair)
+  const attr21Idx = headers.findIndex(h => h.trim().toLowerCase().includes('attribute 21'));
+  // Legacy dedicated Color-webshop column
   const colorWebshopIdx = col('Color-webshop');
+  // Attribute 22 = shoe type, Attribute 23 = (extra), Attribute 24 = sale flag
+  const attr22Idx = headers.findIndex(h => h.trim() === 'Attribute 22');
+  const attr23Idx = headers.findIndex(h => h.trim() === 'Attribute 23');
+  const attr24Idx = headers.findIndex(h => h.trim() === 'Attribute 24');
   const maatAlfaIdx = col('Maat-alfa');
 
   const parentMap = new Map<string, ParentProduct>();
@@ -110,20 +117,25 @@ function parseAllRows(rows: string[][], headers: string[]) {
       const cats = row[categoriesIdx]?.trim() || '';
       const imgs = row[imagesIdx]?.trim() || '';
 
-      // Extract special attributes from Attribute 21-24 and merge into color/flags
-      const attrColorWebshop = attributes['Color-webshop'] || '';
-      const attrSale = attributes['sale'] || attributes['Sale'] || '';
-      // Remove special attrs from the generic attributes map (they go into dedicated fields)
-      delete attributes['Color-webshop'];
-      if (attributes['sale']) delete attributes['sale'];
-      if (attributes['Sale']) delete attributes['Sale'];
+      // Extract special single-column attributes 21-24
+      const attr21Val = attr21Idx >= 0 ? (row[attr21Idx]?.trim() || '') : '';
+      const attr22Val = attr22Idx >= 0 ? (row[attr22Idx]?.trim() || '') : '';
+      const attr23Val = attr23Idx >= 0 ? (row[attr23Idx]?.trim() || '') : '';
+      const attr24Val = attr24Idx >= 0 ? (row[attr24Idx]?.trim() || '') : '';
 
-      // Determine color-webshop: prefer dedicated column, fallback to attribute
+      // Determine color-webshop: prefer dedicated column, then attr 21
       const csvColorWebshop = colorWebshopIdx >= 0 ? (row[colorWebshopIdx]?.trim() || '') : '';
-      const finalColorWebshop = csvColorWebshop || attrColorWebshop;
+      const finalColorWebshop = csvColorWebshop || attr21Val;
 
-      // Sale flag: "Ja" / "ja" / "yes" / "1" → true
-      const isSale = ['ja', 'yes', '1'].includes(attrSale.toLowerCase());
+      // Attribute 22 = shoe type → store as attribute
+      if (attr22Val) attributes['Type schoen'] = attr22Val;
+
+      // Attribute 23 → store if non-empty (generic extra attribute)
+      // (column header doesn't specify a name, skip if empty)
+
+      // Attribute 24 = Sale flag: "Sale" / "Ja" / "yes" / "1" → true
+      const saleRaw = attr24Val.toLowerCase();
+      const isSale = ['sale', 'ja', 'yes', '1'].includes(saleRaw);
 
       const parent: ParentProduct = {
         sku,
