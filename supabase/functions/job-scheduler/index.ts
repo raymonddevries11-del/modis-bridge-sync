@@ -28,19 +28,23 @@ const DEFAULT_POLICY: RetryPolicy = {
 
 // ── Auto-scaling config ────────────────────────────────────────
 interface ScalingConfig {
-  queueAlertThreshold: number;   // queue size that triggers alert (default 50)
-  scaleBatchSize: number;        // batch size when queue > threshold (default 15)
-  normalBatchSize: number;       // normal batch size (default 5)
-  maxChainedInvocations: number; // max re-invocations per run (default 3)
-  graceWindowMin: number;        // minutes before alert fires (default 5)
+  queueAlertThreshold: number;
+  scaleBatchSize: number;
+  normalBatchSize: number;
+  maxChainedInvocations: number;
+  graceWindowMin: number;
+  concurrency: number;          // max parallel job invocations (default 3)
+  interJobDelayMs: number;      // delay between sequential jobs (default 500)
 }
 
 const DEFAULT_SCALING: ScalingConfig = {
   queueAlertThreshold: 50,
   scaleBatchSize: 15,
-  normalBatchSize: 5,
-  maxChainedInvocations: 3,
+  normalBatchSize: 8,
+  maxChainedInvocations: 5,
   graceWindowMin: 5,
+  concurrency: 3,
+  interJobDelayMs: 500,
 };
 
 async function loadRetryPolicy(supabase: any): Promise<RetryPolicy> {
@@ -103,6 +107,21 @@ async function alertPermanentFailure(supabase: any, job: any, errorMsg: string) 
   }
 }
 
+function resolveFunction(type: string): string {
+  switch (type) {
+    case 'IMPORT_ARTICLES_XML': return 'process-articles';
+    case 'EXPORT_ORDER_XML': return 'export-orders';
+    case 'SYNC_TO_WOO':
+    case 'CREATE_NEW_PRODUCTS':
+    case 'UPDATE_PRODUCTS': return 'woocommerce-sync';
+    case 'FIX_URL_KEYS':
+    case 'DRY_RUN_FIX_URL_KEYS': return 'fix-url-keys';
+    case 'SYNC_WOO_SLUGS': return 'sync-woo-slugs';
+    case 'SFTP_SCAN': return 'sftp-watcher';
+    default: throw new Error(`Unknown job type: ${type}`);
+  }
+}
+
 /** Check queue health and update alert state with grace period */
 async function checkQueueHealth(supabase: any, queueSize: number, scaling: ScalingConfig) {
   const alertKey = 'job_queue_health';
@@ -117,13 +136,11 @@ async function checkQueueHealth(supabase: any, queueSize: number, scaling: Scali
     const currentState = existing?.value as any || {};
 
     if (queueSize >= scaling.queueAlertThreshold) {
-      // Queue is high — check grace period
       const graceStartedAt = currentState.grace_started_at
         ? new Date(currentState.grace_started_at)
         : null;
 
       if (!graceStartedAt) {
-        // Start grace period
         await supabase.from('config').upsert({
           key: alertKey,
           value: {
@@ -139,7 +156,6 @@ async function checkQueueHealth(supabase: any, queueSize: number, scaling: Scali
       } else {
         const graceElapsedMin = (now.getTime() - graceStartedAt.getTime()) / 60000;
         if (graceElapsedMin >= scaling.graceWindowMin && !currentState.alert_active) {
-          // Grace period expired — activate alert
           await supabase.from('config').upsert({
             key: alertKey,
             value: {
@@ -154,7 +170,6 @@ async function checkQueueHealth(supabase: any, queueSize: number, scaling: Scali
           }, { onConflict: 'key' });
           console.log(`🚨 Queue alert activated — ${queueSize} jobs (grace expired after ${Math.round(graceElapsedMin)}min)`);
         } else {
-          // Update queue size during grace/alert
           await supabase.from('config').upsert({
             key: alertKey,
             value: { ...currentState, queue_size: queueSize },
@@ -163,7 +178,6 @@ async function checkQueueHealth(supabase: any, queueSize: number, scaling: Scali
         }
       }
     } else if (currentState.alert_active || currentState.grace_started_at) {
-      // Queue is healthy — clear alert
       await supabase.from('config').upsert({
         key: alertKey,
         value: {
@@ -183,11 +197,94 @@ async function checkQueueHealth(supabase: any, queueSize: number, scaling: Scali
   }
 }
 
-/** Process a single batch of jobs, returns counts */
+/** Execute a single job — returns true on success */
+async function executeJob(
+  supabase: any,
+  job: any,
+  policy: RetryPolicy,
+): Promise<boolean> {
+  try {
+    // Claim the job
+    const { error: claimErr } = await supabase
+      .from('jobs')
+      .update({
+        state: 'processing',
+        attempts: (job.attempts || 0) + 1,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', job.id)
+      .eq('state', 'ready');
+
+    if (claimErr) {
+      console.error(`Failed to claim job ${job.id}:`, claimErr);
+      return false;
+    }
+
+    const functionName = resolveFunction(job.type);
+    const attempts = (job.attempts || 0) + 1;
+    console.log(`→ ${functionName} for ${job.id} (attempt ${attempts}/${policy.maxAttempts})`);
+
+    const response = await fetch(
+      `${SUPABASE_URL}/functions/v1/${functionName}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ jobId: job.id, ...job.payload }),
+      }
+    );
+
+    const responseText = await response.text();
+    let result;
+    try {
+      result = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      throw new Error(`Invalid JSON response: ${responseText.substring(0, 200)}`);
+    }
+
+    if (!response.ok) {
+      throw new Error(result.error || `Function failed with status ${response.status}`);
+    }
+
+    await supabase.from('jobs')
+      .update({ state: 'done', updated_at: new Date().toISOString() })
+      .eq('id', job.id);
+
+    console.log(`✓ Job ${job.id} done`);
+    return true;
+  } catch (error: any) {
+    console.error(`✗ Job ${job.id}:`, error.message);
+    const attempts = (job.attempts || 0) + 1;
+
+    if (attempts >= policy.maxAttempts) {
+      await supabase.from('jobs')
+        .update({ state: 'error', error: error.message, updated_at: new Date().toISOString() })
+        .eq('id', job.id);
+      await alertPermanentFailure(supabase, { ...job, attempts }, error.message);
+    } else {
+      const delay = backoffMs(attempts, policy);
+      const nextRetryAt = new Date(Date.now() + delay).toISOString();
+      await supabase.from('jobs')
+        .update({
+          state: 'ready',
+          error: `Attempt ${attempts}/${policy.maxAttempts}: ${error.message}. Retry after ${Math.round(delay / 1000)}s.`,
+          updated_at: nextRetryAt,
+        })
+        .eq('id', job.id);
+    }
+    return false;
+  }
+}
+
+/** Process a batch of jobs with configurable concurrency */
 async function processBatch(
   supabase: any,
   policy: RetryPolicy,
   batchSize: number,
+  concurrency: number,
+  interJobDelayMs: number,
 ): Promise<{ processed: number; errors: number; remaining: number }> {
   // Handle stuck jobs
   const stuckCutoff = new Date(Date.now() - policy.stuckTimeoutMin * 60 * 1000).toISOString();
@@ -212,10 +309,9 @@ async function processBatch(
         const nextRetryAt = new Date(Date.now() + backoffMs(attempts, policy)).toISOString();
         await supabase.from('jobs').update({
           state: 'ready',
-          error: `Reset from stuck (attempt ${attempts}/${policy.maxAttempts}), next retry after backoff`,
+          error: `Reset from stuck (attempt ${attempts}/${policy.maxAttempts})`,
           updated_at: nextRetryAt,
         }).eq('id', stuckJob.id);
-        console.log(`Job ${stuckJob.id} reset to ready with backoff (attempt ${attempts}/${policy.maxAttempts})`);
       }
     }
   }
@@ -230,110 +326,38 @@ async function processBatch(
     .limit(batchSize);
 
   if (jobsError) throw jobsError;
-
   if (!jobs || jobs.length === 0) {
     return { processed: 0, errors: 0, remaining: 0 };
   }
 
-  console.log(`Processing ${jobs.length} jobs (batch size: ${batchSize})`);
+  console.log(`Processing ${jobs.length} jobs (batch=${batchSize}, concurrency=${concurrency})`);
 
   let processedCount = 0;
   let errorCount = 0;
 
-  for (const job of jobs) {
-    try {
-      const { error: updateError } = await supabase
-        .from('jobs')
-        .update({
-          state: 'processing',
-          attempts: (job.attempts || 0) + 1,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', job.id)
-        .eq('state', 'ready');
+  // Process in concurrent chunks
+  for (let i = 0; i < jobs.length; i += concurrency) {
+    const chunk = jobs.slice(i, i + concurrency);
 
-      if (updateError) {
-        console.error(`Error updating job ${job.id}:`, updateError);
-        continue;
-      }
+    const results = await Promise.allSettled(
+      chunk.map(job => executeJob(supabase, job, policy))
+    );
 
-      let functionName: string;
-      switch (job.type) {
-        case 'IMPORT_ARTICLES_XML': functionName = 'process-articles'; break;
-        case 'EXPORT_ORDER_XML': functionName = 'export-orders'; break;
-        case 'SYNC_TO_WOO':
-        case 'CREATE_NEW_PRODUCTS':
-        case 'UPDATE_PRODUCTS': functionName = 'woocommerce-sync'; break;
-        case 'FIX_URL_KEYS':
-        case 'DRY_RUN_FIX_URL_KEYS': functionName = 'fix-url-keys'; break;
-        case 'SYNC_WOO_SLUGS': functionName = 'sync-woo-slugs'; break;
-        case 'SFTP_SCAN': functionName = 'sftp-watcher'; break;
-        default: throw new Error(`Unknown job type: ${job.type}`);
-      }
-
-      console.log(`Invoking ${functionName} for job ${job.id} (attempt ${(job.attempts || 0) + 1}/${policy.maxAttempts})`);
-
-      const response = await fetch(
-        `${SUPABASE_URL}/functions/v1/${functionName}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({ jobId: job.id, ...job.payload }),
-        }
-      );
-
-      const responseText = await response.text();
-      let result;
-      try {
-        result = responseText ? JSON.parse(responseText) : {};
-      } catch {
-        throw new Error(`Invalid JSON response: ${responseText.substring(0, 200)}`);
-      }
-
-      if (!response.ok) {
-        throw new Error(result.error || `Function failed with status ${response.status}`);
-      }
-
-      await supabase.from('jobs')
-        .update({ state: 'done', updated_at: new Date().toISOString() })
-        .eq('id', job.id);
-
-      console.log(`Job ${job.id} completed successfully`);
-      processedCount++;
-
-      if (jobs.indexOf(job) < jobs.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-    } catch (error: any) {
-      console.error(`Error processing job ${job.id}:`, error);
-      const attempts = (job.attempts || 0) + 1;
-
-      if (attempts >= policy.maxAttempts) {
-        await supabase.from('jobs')
-          .update({ state: 'error', error: error.message, updated_at: new Date().toISOString() })
-          .eq('id', job.id);
-        await alertPermanentFailure(supabase, { ...job, attempts }, error.message);
-        console.log(`Job ${job.id} permanently failed after ${attempts} attempts`);
-        errorCount++;
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) {
+        processedCount++;
       } else {
-        const delay = backoffMs(attempts, policy);
-        const nextRetryAt = new Date(Date.now() + delay).toISOString();
-        await supabase.from('jobs')
-          .update({
-            state: 'ready',
-            error: `Attempt ${attempts}/${policy.maxAttempts} failed: ${error.message}. Retry after ${Math.round(delay / 1000)}s backoff.`,
-            updated_at: nextRetryAt,
-          })
-          .eq('id', job.id);
-        console.log(`Job ${job.id} scheduled for retry in ${Math.round(delay / 1000)}s (attempt ${attempts}/${policy.maxAttempts})`);
+        errorCount++;
       }
+    }
+
+    // Small delay between concurrent chunks to avoid overwhelming WooCommerce
+    if (i + concurrency < jobs.length && interJobDelayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, interJobDelayMs));
     }
   }
 
-  // Count remaining ready jobs
+  // Count remaining
   const { count: remaining } = await supabase
     .from('jobs')
     .select('id', { count: 'exact', head: true })
@@ -351,22 +375,18 @@ serve(async (req) => {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   try {
-    // Parse optional chaining depth from body
     let chainDepth = 0;
     try {
       const body = await req.json();
       chainDepth = body?.chainDepth ?? 0;
     } catch { /* no body */ }
 
-    console.log(`Starting job scheduler (chain depth: ${chainDepth})...`);
+    console.log(`Job scheduler (chain=${chainDepth})...`);
 
     const [policy, scaling] = await Promise.all([
       loadRetryPolicy(supabase),
       loadScalingConfig(supabase),
     ]);
-
-    console.log(`Retry policy: maxAttempts=${policy.maxAttempts}, baseDelay=${policy.baseDelaySec}s`);
-    console.log(`Scaling: threshold=${scaling.queueAlertThreshold}, normal=${scaling.normalBatchSize}, scaled=${scaling.scaleBatchSize}`);
 
     // Get current queue size for scaling decision
     const { count: queueSize } = await supabase
@@ -378,24 +398,22 @@ serve(async (req) => {
     const currentQueueSize = queueSize ?? 0;
     const isHighLoad = currentQueueSize >= scaling.queueAlertThreshold;
     const batchSize = isHighLoad ? scaling.scaleBatchSize : scaling.normalBatchSize;
+    const concurrency = isHighLoad ? Math.min(scaling.concurrency + 1, 5) : scaling.concurrency;
 
     if (isHighLoad) {
-      console.log(`⚡ High load detected: ${currentQueueSize} jobs — scaling batch to ${batchSize}`);
+      console.log(`⚡ High load: ${currentQueueSize} jobs — batch=${batchSize}, concurrency=${concurrency}`);
     }
 
-    // Update queue health alert (with grace period)
     await checkQueueHealth(supabase, currentQueueSize, scaling);
 
-    // Process batch
-    const result = await processBatch(supabase, policy, batchSize);
+    const result = await processBatch(supabase, policy, batchSize, concurrency, scaling.interJobDelayMs);
 
-    console.log(`Batch complete. Processed: ${result.processed}, Errors: ${result.errors}, Remaining: ${result.remaining}`);
+    console.log(`Done: ${result.processed} ok, ${result.errors} err, ${result.remaining} remaining`);
 
-    // Chain re-invocation if there are more jobs and we haven't exceeded max chains
+    // Chain re-invocation if there are more jobs
     if (result.remaining > 0 && chainDepth < scaling.maxChainedInvocations) {
-      console.log(`🔄 Chaining re-invocation (depth ${chainDepth + 1}/${scaling.maxChainedInvocations}), ${result.remaining} jobs remaining`);
-      
-      // Fire-and-forget the next invocation
+      console.log(`🔄 Chain ${chainDepth + 1}/${scaling.maxChainedInvocations}, ${result.remaining} remaining`);
+
       fetch(`${SUPABASE_URL}/functions/v1/job-scheduler`, {
         method: 'POST',
         headers: {
@@ -404,9 +422,8 @@ serve(async (req) => {
         },
         body: JSON.stringify({ chainDepth: chainDepth + 1 }),
       }).catch(e => console.error('Failed to chain scheduler:', e));
-      
-      // Small delay to let the chained call start
-      await new Promise(resolve => setTimeout(resolve, 500));
+
+      await new Promise(resolve => setTimeout(resolve, 300));
     }
 
     return new Response(
@@ -416,6 +433,7 @@ serve(async (req) => {
         errors: result.errors,
         remaining: result.remaining,
         batchSize,
+        concurrency,
         chainDepth,
         scaled: isHighLoad,
       }),
