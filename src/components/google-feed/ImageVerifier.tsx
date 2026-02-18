@@ -26,7 +26,9 @@ import {
   ChevronRight,
   Loader2,
   FileWarning,
+  Wrench,
 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
 
 interface UrlResult {
@@ -59,7 +61,9 @@ const STATUS_CONFIG = {
 } as const;
 
 export function ImageVerifier() {
+  const { toast } = useToast();
   const [isVerifying, setIsVerifying] = useState(false);
+  const [isRepairing, setIsRepairing] = useState(false);
   const [result, setResult] = useState<VerifyResponse | null>(null);
   const [verifyFilter, setVerifyFilter] = useState<"all" | "missing" | "case_mismatch" | "external">("all");
   const [expandedProduct, setExpandedProduct] = useState<string | null>(null);
@@ -88,6 +92,30 @@ export function ImageVerifier() {
     }
   };
 
+  const runRepair = async () => {
+    setIsRepairing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("reconcile-images", {
+        body: { tenant: "kosterschoenmode", dryRun: false },
+      });
+      if (error) throw error;
+      toast({
+        title: "Repair voltooid",
+        description: `${data?.productsFixed || 0} producten bijgewerkt, ${data?.urlsFixed || 0} URLs gefixt`,
+      });
+      // Re-run verification to show updated state
+      await runVerification(verifyFilter);
+    } catch (err) {
+      toast({
+        title: "Repair mislukt",
+        description: err instanceof Error ? err.message : "Onbekende fout",
+        variant: "destructive",
+      });
+    } finally {
+      setIsRepairing(false);
+    }
+  };
+
   const filteredProducts = result?.products.filter((p) => {
     if (verifyFilter === "all") return true;
     return p.urls.some((u) => u.status === verifyFilter);
@@ -104,18 +132,36 @@ export function ImageVerifier() {
             <ScanSearch className="h-4 w-4 text-primary" />
             Image Existence Verifier
           </CardTitle>
-          <Button
-            onClick={() => runVerification(verifyFilter)}
-            disabled={isVerifying}
-            size="sm"
-          >
-            {isVerifying ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <ScanSearch className="h-4 w-4 mr-2" />
+          <div className="flex gap-2">
+            {result && (result.totals.case_mismatch > 0 || result.totals.missing > 0) && (
+              <Button
+                onClick={runRepair}
+                disabled={isRepairing || isVerifying}
+                size="sm"
+                variant="default"
+              >
+                {isRepairing ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Wrench className="h-4 w-4 mr-2" />
+                )}
+                {isRepairing ? "Repairing…" : `Repair ${result.totals.case_mismatch + result.totals.missing} issues`}
+              </Button>
             )}
-            {isVerifying ? "Verifiëren…" : "Verify nu"}
-          </Button>
+            <Button
+              onClick={() => runVerification(verifyFilter)}
+              disabled={isVerifying || isRepairing}
+              size="sm"
+              variant="outline"
+            >
+              {isVerifying ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <ScanSearch className="h-4 w-4 mr-2" />
+              )}
+              {isVerifying ? "Verifiëren…" : "Verify nu"}
+            </Button>
+          </div>
         </div>
         <p className="text-xs text-muted-foreground">
           Controleert elke DB image URL tegen de storage bucket en rapporteert ontbrekende of mismatched bestanden
