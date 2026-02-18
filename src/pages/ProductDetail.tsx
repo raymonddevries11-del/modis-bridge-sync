@@ -247,6 +247,38 @@ const ProductDetail = () => {
     enabled: !!id,
   });
 
+  const { data: wooLink } = useQuery({
+    queryKey: ["woo-link", id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("woo_products")
+        .select("woo_id, status, permalink, last_pushed_at")
+        .eq("product_id", id!)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!id,
+  });
+
+  const pushToWooMutation = useMutation({
+    mutationFn: async () => {
+      if (!product) throw new Error("Geen product");
+      const { error } = await supabase.from("jobs").insert({
+        type: "SYNC_TO_WOO",
+        state: "ready",
+        tenant_id: product.tenant_id,
+        payload: { productIds: [product.id] },
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Sync-job aangemaakt — product wordt naar WooCommerce gepusht");
+      queryClient.invalidateQueries({ queryKey: ["woo-link", id] });
+    },
+    onError: (e: any) => toast.error(`Fout: ${e.message}`),
+  });
+
   const { data: aiContentForScore } = useQuery({
     queryKey: ["ai-content", id],
     queryFn: async () => {
@@ -472,6 +504,55 @@ const ProductDetail = () => {
             </Collapsible>
           );
         })()}
+
+        {/* WooCommerce Sync Status */}
+        {wooLink === null && (
+          <Alert className="border-warning/50 bg-warning/10">
+            <AlertTriangle className="h-4 w-4 text-warning" />
+            <AlertDescription className="flex items-center justify-between">
+              <span className="text-sm">
+                Dit product is <strong>nog niet gekoppeld aan WooCommerce</strong>. Het is nog niet aangemaakt in de webshop.
+              </span>
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => pushToWooMutation.mutate()}
+                disabled={pushToWooMutation.isPending}
+                className="ml-4 flex-shrink-0"
+              >
+                <Send className="h-4 w-4 mr-1" />
+                {pushToWooMutation.isPending ? "Bezig..." : "Nu naar WooCommerce pushen"}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+        {wooLink && (
+          <Alert className="border-success/50 bg-success/10">
+            <CheckCircle2 className="h-4 w-4 text-success" />
+            <AlertDescription className="flex items-center justify-between">
+              <span className="text-sm">
+                Gekoppeld aan WooCommerce (ID: {wooLink.woo_id}) — Status: <strong>{wooLink.status}</strong>
+                {wooLink.last_pushed_at && <span className="text-muted-foreground ml-2">· Laatst gepusht: {new Date(wooLink.last_pushed_at).toLocaleString("nl-NL")}</span>}
+              </span>
+              <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+                {wooLink.permalink && (
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={wooLink.permalink} target="_blank" rel="noopener noreferrer">Bekijk in webshop</a>
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => pushToWooMutation.mutate()}
+                  disabled={pushToWooMutation.isPending}
+                >
+                  <RefreshCw className="h-4 w-4 mr-1" />
+                  {pushToWooMutation.isPending ? "Bezig..." : "Opnieuw pushen"}
+                </Button>
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Tabs */}
         <Tabs defaultValue="info" className="space-y-4">
