@@ -412,6 +412,7 @@ const ProductDetail = () => {
               <span className="badge-info">{variantCount} varianten</span>
               <Badge variant="outline" className="text-[11px]">{(product as any).product_type === "simple" ? "Simple" : "Variable"}</Badge>
               {imageCount > 0 ? <span className="badge-neutral">{imageCount} afbeeldingen</span> : <span className="badge-warning">Geen afbeeldingen</span>}
+              {product.is_promotion && !productTags.includes("Sale") && <Badge className="bg-destructive text-destructive-foreground text-[11px]">Sale</Badge>}
               {productTags.map((t) => <Badge key={t} variant="outline" className="text-[11px]">{t}</Badge>)}
             </div>
           </div>
