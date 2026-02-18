@@ -17,6 +17,7 @@ import { JobHealthWidget } from "@/components/dashboard/JobHealthWidget";
 import { RetryMonitorWidget } from "@/components/dashboard/RetryMonitorWidget";
 import { TriggerConflictAlert } from "@/components/dashboard/TriggerConflictAlert";
 import { SyncWatchdogWidget } from "@/components/dashboard/SyncWatchdogWidget";
+import { EdgeFunctionHealthBanner } from "@/components/dashboard/EdgeFunctionHealthBanner";
 
 // --- Helpers ---
 function timeAgo(dateStr: string): string {
@@ -263,6 +264,7 @@ const Dashboard = () => {
 
         {/* Trigger Conflict Alert */}
         <TriggerConflictAlert />
+        <EdgeFunctionHealthBanner />
 
         {/* KPI Row */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
