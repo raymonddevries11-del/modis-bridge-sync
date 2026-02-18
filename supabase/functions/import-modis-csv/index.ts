@@ -68,6 +68,34 @@ function parseSemicolonCSV(text: string): string[][] {
   return result;
 }
 
+/**
+ * Normalize and validate a single image URL/path.
+ * - Strips whitespace and quotes
+ * - Removes legacy "modis/foto/" prefix (storage root is canonical)
+ * - Converts backslashes to forward slashes
+ * - Rejects data-URIs, empty strings, and obviously broken paths
+ * - Returns null for invalid entries
+ */
+function normalizeImagePath(raw: string): string | null {
+  let path = raw.trim().replace(/^["']+|["']+$/g, '').trim();
+  if (!path || path.length < 3) return null;
+  // Reject data-URIs (base64 blobs shouldn't be stored as image paths)
+  if (path.startsWith('data:')) return null;
+  // Normalize separators
+  path = path.replace(/\\/g, '/');
+  // Strip legacy subdirectory prefix (case-insensitive)
+  path = path.replace(/^modis\/foto\//i, '');
+  // Strip leading slash
+  path = path.replace(/^\/+/, '');
+  // Must have a recognizable image extension or be a URL
+  const isUrl = path.startsWith('http://') || path.startsWith('https://');
+  if (!isUrl) {
+    const hasImageExt = /\.(jpe?g|png|gif|webp|avif|svg|bmp|tiff?)$/i.test(path);
+    if (!hasImageExt) return null;
+  }
+  return path;
+}
+
 function parseAllRows(rows: string[][], headers: string[]) {
   const col = (name: string) => headers.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
   const typeIdx = col('Type');
@@ -115,7 +143,12 @@ function parseAllRows(rows: string[][], headers: string[]) {
       }
 
       const cats = row[categoriesIdx]?.trim() || '';
-      const imgs = row[imagesIdx]?.trim() || '';
+      const imgsRaw = row[imagesIdx]?.trim() || '';
+      const imgsSplit = imgsRaw ? imgsRaw.split(';').map(i => i.trim()).filter(Boolean) : [];
+      const normalizedImages = imgsSplit.map(normalizeImagePath).filter((p): p is string => p !== null);
+      if (imgsSplit.length > normalizedImages.length) {
+        console.warn(`[import-modis-csv] Product ${sku}: dropped ${imgsSplit.length - normalizedImages.length} invalid image path(s)`);
+      }
 
       // Extract special single-column attributes 21-24
       const attr21Val = attr21Idx >= 0 ? (row[attr21Idx]?.trim() || '') : '';
@@ -145,7 +178,7 @@ function parseAllRows(rows: string[][], headers: string[]) {
         salePrice: parsePrice(row[salePriceIdx] || ''),
         categories: cats ? cats.split('>').map(c => c.trim()).filter(Boolean) : [],
         brand: row[brandsIdx]?.trim() || '',
-        images: imgs ? imgs.split(';').map(i => i.trim()).filter(Boolean) : [],
+        images: normalizedImages,
         attributes,
         colorArticle: colorArticleIdx >= 0 ? (row[colorArticleIdx]?.trim() || '') : '',
         colorWebshop: finalColorWebshop,
