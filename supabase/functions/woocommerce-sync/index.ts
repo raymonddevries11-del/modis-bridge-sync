@@ -1177,9 +1177,9 @@ async function createVariationsInWooCommerce(
     console.log(`Ensured ${sizeLabels.length} size terms exist for pa_maat (ID ${globalMaatId})`);
   }
 
+  // Build all variation payloads for batch API
+  const batchCreate: any[] = [];
   for (const variant of variants) {
-    // Build variation SKU in format: productSku-suffix (e.g., "101069102000-071041")
-    // maat_id may already contain the parent SKU prefix, so extract only the suffix
     const maatSuffix = variant.maat_id && variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id;
     const variationSku = parentSku && maatSuffix ? `${parentSku}-${maatSuffix}` : (variant.ean || '');
     
@@ -1193,40 +1193,65 @@ async function createVariationsInWooCommerce(
       stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
     };
 
-    // Set prices on the variation
     if (product_prices?.regular) {
       variationData.regular_price = product_prices.regular.toString();
     }
     if (product_prices?.list) {
       variationData.sale_price = product_prices.list.toString();
     }
-
-    // Add EAN to meta_data
     if (variant.ean) {
-      variationData.meta_data = [
-        { key: 'ean', value: variant.ean }
-      ];
+      variationData.meta_data = [{ key: 'ean', value: variant.ean }];
     }
 
-    const createVariationUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
-    createVariationUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-    createVariationUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+    batchCreate.push(variationData);
+  }
 
-    const createResponse = await fetchWithRetry(createVariationUrl.toString(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(variationData),
-    });
+  // Use WooCommerce Batch API to create all variations in one call
+  const batchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations/batch`);
+  batchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  batchUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
 
-    if (!createResponse.ok) {
-      const errorText = await createResponse.text();
-      console.error(`Failed to create variation ${variant.size_label}: ${errorText}`);
-      continue;
+  const batchResponse = await fetchWithRetry(batchUrl.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ create: batchCreate }),
+  });
+
+  if (!batchResponse.ok) {
+    const errorText = await batchResponse.text();
+    console.error(`Batch variation create failed: ${errorText.substring(0, 300)}`);
+    // Fallback: create one by one
+    console.log('Falling back to individual variation creation...');
+    for (const variationData of batchCreate) {
+      const createVariationUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
+      createVariationUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+      createVariationUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+      const createResponse = await fetchWithRetry(createVariationUrl.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(variationData),
+      });
+
+      if (!createResponse.ok) {
+        const errText = await createResponse.text();
+        console.error(`Failed to create variation ${variationData.attributes?.[0]?.option}: ${errText}`);
+        continue;
+      }
+      console.log(`Created variation ${variationData.attributes?.[0]?.option} for product ${wooProductId}`);
     }
+    return;
+  }
 
-    console.log(`Created variation ${variant.size_label} for product ${wooProductId}`);
+  const batchResult = await batchResponse.json();
+  const created = batchResult.create || [];
+  console.log(`Batch created ${created.length}/${batchCreate.length} variations for product ${wooProductId}`);
+  
+  // Log any individual errors from the batch response
+  for (const item of created) {
+    if (item.error) {
+      console.error(`Batch variation error (${item.sku || 'unknown'}): ${item.error.message}`);
+    }
   }
 }
 
@@ -1827,24 +1852,210 @@ async function updateProductInWooCommerce(
 
   console.log(`Updating product ${sku}, will set prices on variations`);
 
-  // Update variants (WooCommerce variations) including their prices
+  // Update variants using WooCommerce Batch API for efficiency
   if (variants && variants.length > 0) {
     const variantsToSync = variantIdsFilter 
       ? variants.filter((v: any) => variantIdsFilter.includes(v.id))
       : variants;
 
-    for (const variant of variantsToSync) {
-      await syncVariantToWooCommerce(
-        wooProductId,
-        variant,
-        product_prices,
-        wooConfig,
-        supabase,
-        tenantId,
-        sku,
-        title,
-        globalMaatId
+    await batchSyncVariantsToWooCommerce(
+      wooProductId,
+      variantsToSync,
+      product_prices,
+      wooConfig,
+      supabase,
+      tenantId,
+      sku,
+      title,
+      globalMaatId
+    );
+  }
+}
+
+/** Batch sync all variants for a product using WooCommerce /variations/batch API */
+async function batchSyncVariantsToWooCommerce(
+  wooProductId: number,
+  variants: any[],
+  product_prices: any,
+  wooConfig: WooCommerceConfig,
+  supabase?: any,
+  tenantId?: string,
+  productSku?: string,
+  productTitle?: string,
+  globalMaatId: number = 0
+) {
+  // 1. Fetch ALL WooCommerce variations for this product ONCE
+  const variationsUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations`);
+  variationsUrl.searchParams.append('per_page', '100');
+  variationsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  variationsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+  
+  const variationsResponse = await fetchWithRetry(variationsUrl.toString(), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!variationsResponse.ok) {
+    console.error(`Failed to fetch variations for product ${wooProductId}, falling back to individual sync`);
+    for (const variant of variants) {
+      await syncVariantToWooCommerce(wooProductId, variant, product_prices, wooConfig, supabase, tenantId, productSku, productTitle, globalMaatId);
+    }
+    return;
+  }
+
+  const wooVariations = await variationsResponse.json();
+  console.log(`Fetched ${wooVariations.length} WooCommerce variations for batch processing (product ${wooProductId})`);
+
+  const normalizeSize = (size: string): string => size?.toLowerCase().trim().replace(/\s+/g, ' ') || '';
+
+  // 2. Ensure all size terms exist BEFORE batching
+  if (globalMaatId > 0) {
+    for (const variant of variants) {
+      if (variant.size_label) {
+        await ensureSizeTermExists(globalMaatId, variant.size_label, wooConfig);
+      }
+    }
+  }
+
+  // 3. Match each DB variant to a WC variation and build batch payloads
+  const batchUpdate: any[] = [];
+  const batchCreate: any[] = [];
+
+  for (const variant of variants) {
+    const maatSuffix = variant.maat_id && variant.maat_id.includes('-') ? variant.maat_id.split('-').pop() : variant.maat_id;
+    const expectedFullSku = productSku && maatSuffix ? `${productSku}-${maatSuffix}` : null;
+    const legacyFullSku = productSku ? `${productSku}-${variant.size_label}` : null;
+
+    // Find matching WC variation
+    let matchingVariation = null;
+    for (const wv of wooVariations) {
+      // SKU match (new format)
+      if (wv.sku && expectedFullSku && normalizeSize(wv.sku) === normalizeSize(expectedFullSku)) {
+        matchingVariation = wv;
+        break;
+      }
+      // Legacy SKU match
+      if (wv.sku && legacyFullSku && normalizeSize(wv.sku) === normalizeSize(legacyFullSku)) {
+        matchingVariation = wv;
+        break;
+      }
+      // SKU suffix match
+      if (wv.sku && wv.sku.endsWith(variant.size_label)) {
+        matchingVariation = wv;
+        break;
+      }
+      // Size attribute match
+      const sizeAttr = wv.attributes?.find((a: any) => 
+        ['size', 'maat', 'pa_size', 'pa_maat'].includes(a.name?.toLowerCase())
       );
+      if (sizeAttr?.option && normalizeSize(variant.size_label) === normalizeSize(sizeAttr.option)) {
+        matchingVariation = wv;
+        break;
+      }
+    }
+
+    // Build attribute reference
+    const attrRef: any = globalMaatId > 0 ? { id: globalMaatId } : { name: 'pa_maat' };
+
+    const variationPayload: any = {
+      manage_stock: true,
+      stock_quantity: variant.stock_totals?.qty || 0,
+      stock_status: (variant.stock_totals?.qty || 0) > 0 ? 'instock' : 'outofstock',
+      attributes: [{ ...attrRef, option: variant.size_label }],
+    };
+
+    if (product_prices?.regular) variationPayload.regular_price = product_prices.regular.toString();
+    if (product_prices?.list) variationPayload.sale_price = product_prices.list.toString();
+    if (variant.ean) variationPayload.meta_data = [{ key: 'ean', value: variant.ean }];
+
+    if (matchingVariation) {
+      // Update existing variation
+      variationPayload.id = matchingVariation.id;
+      // Update SKU if needed
+      if (expectedFullSku && maatSuffix && maatSuffix.length === 6 && matchingVariation.sku !== expectedFullSku) {
+        variationPayload.sku = expectedFullSku;
+      }
+      batchUpdate.push({ payload: variationPayload, old: matchingVariation, variant });
+    } else {
+      // Check if size already exists (prevent duplicates)
+      const sizeExists = wooVariations.some((wv: any) => {
+        const sa = wv.attributes?.find((a: any) => ['maat', 'pa_maat', 'size', 'pa_size'].includes(a.name?.toLowerCase()));
+        return sa?.option && normalizeSize(sa.option) === normalizeSize(variant.size_label);
+      });
+      if (sizeExists) {
+        console.warn(`Variation size "${variant.size_label}" already exists for WC #${wooProductId} — skipping`);
+        continue;
+      }
+      // Create new variation
+      const variationSku = expectedFullSku || (variant.ean || '');
+      variationPayload.sku = variationSku;
+      batchCreate.push({ payload: variationPayload, variant });
+    }
+  }
+
+  // 4. Send batch request
+  if (batchUpdate.length === 0 && batchCreate.length === 0) {
+    console.log(`No variation changes needed for product ${wooProductId}`);
+    return;
+  }
+
+  const batchBody: any = {};
+  if (batchUpdate.length > 0) batchBody.update = batchUpdate.map(b => b.payload);
+  if (batchCreate.length > 0) batchBody.create = batchCreate.map(b => b.payload);
+
+  console.log(`Batch variations for WC #${wooProductId}: ${batchUpdate.length} update, ${batchCreate.length} create`);
+
+  const batchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}/variations/batch`);
+  batchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  batchUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+  const batchResponse = await fetchWithRetry(batchUrl.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(batchBody),
+  });
+
+  if (!batchResponse.ok) {
+    const errorText = await batchResponse.text();
+    console.error(`Batch variation update failed: ${errorText.substring(0, 300)}, falling back to individual sync`);
+    for (const variant of variants) {
+      await syncVariantToWooCommerce(wooProductId, variant, product_prices, wooConfig, supabase, tenantId, productSku, productTitle, globalMaatId);
+    }
+    return;
+  }
+
+  const batchResult = await batchResponse.json();
+  const updatedItems = batchResult.update || [];
+  const createdItems = batchResult.create || [];
+  console.log(`Batch result: ${updatedItems.length} updated, ${createdItems.length} created for WC #${wooProductId}`);
+
+  // 5. Log changes to changelog
+  if (supabase && tenantId) {
+    // Log updates
+    for (let i = 0; i < batchUpdate.length; i++) {
+      const { old: oldVar, variant } = batchUpdate[i];
+      const changesArray = [];
+      const newQty = variant.stock_totals?.qty || 0;
+      if (oldVar.stock_quantity !== newQty) changesArray.push(`voorraad ${oldVar.stock_quantity} → ${newQty}`);
+      if (product_prices?.regular && oldVar.regular_price !== product_prices.regular.toString()) {
+        changesArray.push(`prijs ${oldVar.regular_price} → ${product_prices.regular}`);
+      }
+      if (changesArray.length > 0) {
+        await logChangeToChangelog(supabase, tenantId, 'WOO_VARIANT_UPDATED',
+          `Variant geüpdatet in WooCommerce: ${productTitle || 'Product'} (${productSku || 'N/A'}) - Maat ${variant.size_label}: ${changesArray.join(', ')}`,
+          { variantId: variant.id, productSku, size: variant.size_label, wooProductId, wooVariationId: oldVar.id, changes: changesArray }
+        );
+      }
+    }
+    // Log creations
+    for (let i = 0; i < batchCreate.length; i++) {
+      const { variant } = batchCreate[i];
+      const created = createdItems[i];
+      if (created && !created.error) {
+        await logChangeToChangelog(supabase, tenantId, 'WOO_VARIANT_CREATED',
+          `Ontbrekende variatie aangemaakt in WooCommerce: ${productTitle || productSku} - Maat ${variant.size_label}`,
+          { wooProductId, wooVariationId: created.id, size_label: variant.size_label, stock_quantity: variant.stock_totals?.qty || 0 }
+        );
+      }
     }
   }
 }
