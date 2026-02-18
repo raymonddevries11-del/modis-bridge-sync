@@ -31,6 +31,25 @@ jobs:
           npm init -y
           npm install ssh2-sftp-client node-fetch
 
+      - name: Pre-sync - Normalize image URLs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          echo "Normalizing image URL extensions before sync..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "${SUPABASE_URL}/functions/v1/normalize-image-urls" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            -d '{"tenant":"kosterschoenmode","dryRun":false}')
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          echo "Status: $HTTP_CODE"
+          echo "$BODY" | jq . 2>/dev/null || echo "$BODY"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::Pre-sync normalization returned $HTTP_CODE - continuing anyway"
+          fi
+
       - name: Sync ALL Images from SFTP to Storage
         env:
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
