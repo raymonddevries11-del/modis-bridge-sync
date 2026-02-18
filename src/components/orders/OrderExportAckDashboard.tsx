@@ -1,8 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, Clock, AlertTriangle, Upload, Package, ShieldAlert, RotateCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { CheckCircle2, Clock, AlertTriangle, Upload, Package, ShieldAlert, RotateCw, Archive, Loader2 } from "lucide-react";
+import { toast } from "@/hooks/use-toast";
 
 interface ExportFile {
   id: string;
@@ -17,12 +19,15 @@ interface ExportFile {
   retry_count: number;
   max_retries: number;
   last_retry_at: string | null;
+  reconciled_at: string | null;
+  archived_at: string | null;
 }
 
 const statusConfig: Record<string, { label: string; icon: React.ElementType; color: string }> = {
   pending: { label: "Wacht op upload", icon: Clock, color: "bg-muted text-muted-foreground" },
   uploaded: { label: "Op SFTP, wacht op ACK", icon: Upload, color: "bg-warning/10 text-warning border-warning/20" },
-  acked: { label: "Opgepikt door Modis", icon: CheckCircle2, color: "bg-success/10 text-success border-success/20" },
+  acked: { label: "Opgepikt, wacht op validatie", icon: CheckCircle2, color: "bg-blue-500/10 text-blue-600 border-blue-500/20" },
+  reconciled: { label: "Gevalideerd & gearchiveerd", icon: Archive, color: "bg-success/10 text-success border-success/20" },
   timeout: { label: "Timeout – wordt herstart", icon: RotateCw, color: "bg-orange-500/10 text-orange-600 border-orange-500/20" },
   quarantined: { label: "Quarantaine", icon: ShieldAlert, color: "bg-destructive/10 text-destructive border-destructive/20" },
 };
@@ -37,6 +42,8 @@ function timeAgo(date: string) {
 }
 
 export function OrderExportAckDashboard({ tenantId }: { tenantId: string }) {
+  const queryClient = useQueryClient();
+
   const { data: exports, isLoading } = useQuery({
     queryKey: ["export-files-ack", tenantId],
     queryFn: async () => {
@@ -52,10 +59,29 @@ export function OrderExportAckDashboard({ tenantId }: { tenantId: string }) {
     refetchInterval: 30000,
   });
 
+  const reconcileMutation = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke('reconcile-orders');
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast({
+        title: `Reconciliatie voltooid`,
+        description: `${data.reconciled} gevalideerd, ${data.failed} mislukt, ${data.skipped} overgeslagen`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["export-files-ack"] });
+    },
+    onError: (e: any) => {
+      toast({ title: "Reconciliatie mislukt", description: e.message, variant: "destructive" });
+    },
+  });
+
   const stats = {
     pending: exports?.filter(e => e.ack_status === "pending").length || 0,
     uploaded: exports?.filter(e => e.ack_status === "uploaded").length || 0,
     acked: exports?.filter(e => e.ack_status === "acked").length || 0,
+    reconciled: exports?.filter(e => e.ack_status === "reconciled").length || 0,
     timeout: exports?.filter(e => e.ack_status === "timeout").length || 0,
     quarantined: exports?.filter(e => e.ack_status === "quarantined").length || 0,
   };
@@ -67,7 +93,7 @@ export function OrderExportAckDashboard({ tenantId }: { tenantId: string }) {
   return (
     <div className="space-y-6">
       {/* KPI cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {Object.entries(statusConfig).map(([key, cfg]) => {
           const Icon = cfg.icon;
           const count = stats[key as keyof typeof stats] || 0;
@@ -86,6 +112,28 @@ export function OrderExportAckDashboard({ tenantId }: { tenantId: string }) {
           );
         })}
       </div>
+
+      {/* Reconcile action */}
+      {stats.acked > 0 && (
+        <Card className="border-blue-500/20 bg-blue-500/5">
+          <CardContent className="py-4 flex items-center justify-between">
+            <div>
+              <p className="font-medium">{stats.acked} order(s) wachten op validatie</p>
+              <p className="text-sm text-muted-foreground">
+                Valideer XML-inhoud en archiveer afgehandelde exports
+              </p>
+            </div>
+            <Button onClick={() => reconcileMutation.mutate()} disabled={reconcileMutation.isPending}>
+              {reconcileMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Archive className="mr-2 h-4 w-4" />
+              )}
+              Valideer & Archiveer
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Export list */}
       <Card>
@@ -117,6 +165,11 @@ export function OrderExportAckDashboard({ tenantId }: { tenantId: string }) {
                       {showRetry && (
                         <span className="text-xs text-muted-foreground">
                           poging {exp.retry_count}/{exp.max_retries}
+                        </span>
+                      )}
+                      {exp.reconciled_at && (
+                        <span className="text-xs text-muted-foreground">
+                          ✓ {timeAgo(exp.reconciled_at)}
                         </span>
                       )}
                       <Badge variant="outline" className={cfg.color}>

@@ -185,3 +185,6 @@ verify_jwt = false
 
 [functions.drain-pending-syncs]
 verify_jwt = false
+
+[functions.reconcile-orders]
+verify_jwt = false
