@@ -1214,6 +1214,14 @@ Deno.serve(async (req) => {
                   totalVariationAudit.created += varResult.audit.created;
                 }
 
+                // Cache invalidation: upsert woo_products so sync-new-products won't re-queue
+                await supabase.from('woo_products').upsert({
+                  tenant_id: tenantId, woo_id: created.id, product_id: pim.id,
+                  sku: pim.sku, name: pim.title, slug: created.slug || '',
+                  status: created.status || 'publish', type: created.type || 'variable',
+                  last_pushed_at: new Date().toISOString(),
+                }, { onConflict: 'tenant_id,woo_id' });
+
                 results.push({ sku: pim.sku, action: 'created', changes: [{ field: 'images', old_value: null, new_value: 'skipped (upload error)' }], message: `Created without images (WC #${created.id})` });
                 continue;
               }
