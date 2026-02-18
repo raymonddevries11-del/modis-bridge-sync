@@ -582,9 +582,23 @@ const ProductDetail = () => {
             {color && (
               <Card className="card-elevated">
                 <CardHeader><CardTitle className="text-base">Kleur</CardTitle></CardHeader>
-                <CardContent className="grid grid-cols-2 gap-4 text-sm">
-                  <div><span className="text-muted-foreground">Webshop:</span> <span className="font-medium ml-2">{color.webshop || "—"}</span></div>
-                  <div><span className="text-muted-foreground">Artikel:</span> <span className="font-medium ml-2">{color.article || "—"}</span></div>
+                <CardContent className="space-y-3">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Webshop</span>
+                      <span className="font-medium">{color.webshop || "—"}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">Artikel</span>
+                      <span className="font-medium">{color.article || "—"}</span>
+                    </div>
+                  </div>
+                  {color.webshop && color.article && color.webshop !== color.article && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <span>ℹ️</span>
+                      <span>De <strong>webshop</strong>-kleur (&quot;{color.webshop}&quot;) wordt getoond op de website en naar WooCommerce gestuurd. De <strong>artikel</strong>-kleur (&quot;{color.article}&quot;) is de interne leverancierskleur.</span>
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             )}
