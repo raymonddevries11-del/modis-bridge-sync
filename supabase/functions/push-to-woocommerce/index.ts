@@ -653,7 +653,7 @@ Deno.serve(async (req) => {
     const { data: pimProducts, error: pimErr } = await supabase
       .from('products')
       .select(`
-        id, sku, title, webshop_text, meta_title, meta_description, images, categories, attributes, url_key,
+        id, sku, title, webshop_text, meta_title, meta_description, images, categories, attributes, url_key, color, is_promotion,
         brands!products_brand_id_fkey (name),
         product_prices (regular, list),
         variants (id, size_label, maat_id, ean, active, stock_totals (qty)),
@@ -904,12 +904,13 @@ Deno.serve(async (req) => {
         const unmappedAttrs: Array<{ key: string; value: string; slug: string }> = [];
         const mappedAttrs: Array<{ key: string; wc_id: number; wc_name: string; value: string; term_id: number | null }> = [];
 
+        // Track which attr IDs/names are already in attrs to prevent duplicates
+        const usedAttrIds = new Set<number>(attrs.filter(a => a.id > 0).map(a => a.id));
+        const usedAttrNames = new Set<string>(attrs.map(a => (a.name || '').toLowerCase()).filter(Boolean));
+
         if (pim.attributes && typeof pim.attributes === 'object') {
           const pimAttrs = pim.attributes as Record<string, any>;
           let pos = 1;
-          // Track which attr IDs are already in attrs to prevent duplicates
-          const usedAttrIds = new Set<number>(attrs.filter(a => a.id > 0).map(a => a.id));
-          const usedAttrNames = new Set<string>(attrs.map(a => (a.name || '').toLowerCase()).filter(Boolean));
           for (const [key, val] of Object.entries(pimAttrs)) {
             if (!val) continue;
             // Skip Maat (handled above) and Merk (handled below)
@@ -970,6 +971,33 @@ Deno.serve(async (req) => {
           } else {
             attrs.push({ name: 'Merk', position: attrs.length, visible: true, variation: false, options: [brand] });
             unmappedAttrs.push({ key: 'Merk', value: brand, slug: 'merk' });
+          }
+        }
+
+        // --- Color-webshop attribute ---
+        const pimColor = pim.color as any;
+        const colorWebshop = pimColor?.webshop;
+        if (colorWebshop) {
+          const colorAttr = globalAttrMap.get('color-webshop') || globalAttrMap.get('kleur-webshop') || pimToWooMap.get('color-webshop');
+          if (colorAttr && colorAttr.id > 0 && !usedAttrIds.has(colorAttr.id)) {
+            const colorTermDetails = await ensureAttributeTerms(config.woocommerce_url, wooAuth, colorAttr.id, colorAttr.name, [colorWebshop], rateLimiter, cachedTermsByAttrId.get(colorAttr.id) || null, supabase, tenantId, true) as TermResult;
+            const termId = colorTermDetails.termMap.get(colorWebshop.toLowerCase()) || null;
+            attrs.push({ id: colorAttr.id, name: colorAttr.name, position: attrs.length, visible: true, variation: false, options: [colorWebshop] });
+            usedAttrIds.add(colorAttr.id);
+            mappedAttrs.push({ key: 'Color-webshop', wc_id: colorAttr.id, wc_name: colorAttr.name, value: colorWebshop, term_id: termId });
+          } else if (!usedAttrNames.has('color-webshop')) {
+            attrs.push({ name: 'Color-webshop', position: attrs.length, visible: true, variation: false, options: [colorWebshop] });
+            usedAttrNames.add('color-webshop');
+            unmappedAttrs.push({ key: 'Color-webshop', value: colorWebshop, slug: 'color-webshop' });
+          }
+        }
+
+        // --- Sale / Promotion tag ---
+        if (pim.is_promotion) {
+          const existingTags = desiredData.tags || [];
+          const hasSaleTag = existingTags.some((t: any) => t.name?.toLowerCase() === 'sale');
+          if (!hasSaleTag) {
+            desiredData.tags = [...existingTags, { name: 'Sale' }];
           }
         }
 
