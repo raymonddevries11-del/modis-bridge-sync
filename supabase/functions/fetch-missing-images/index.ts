@@ -26,8 +26,38 @@ Deno.serve(async (req) => {
 
     const bucketBase = `${supabaseUrl}/storage/v1/object/public/product-images/`;
 
-    // Step 1: Get ALL products with images, paginated
-    const allProducts: { id: string; sku: string; images: string[] }[] = [];
+    // Step 1: Build a set of all filenames that exist in storage (case-sensitive)
+    console.log('Building storage file index...');
+    const storageFiles = new Set<string>();
+    let storageOffset = 0;
+    while (true) {
+      const { data } = await supabase.storage
+        .from('product-images')
+        .list('', { limit: 1000, offset: storageOffset });
+      if (!data || data.length === 0) break;
+      for (const f of data) {
+        if (f.name && !f.name.startsWith('.')) storageFiles.add(f.name);
+      }
+      if (data.length < 1000) break;
+      storageOffset += 1000;
+    }
+    // Also list modis/foto/ subdir
+    storageOffset = 0;
+    while (true) {
+      const { data } = await supabase.storage
+        .from('product-images')
+        .list('modis/foto', { limit: 1000, offset: storageOffset });
+      if (!data || data.length === 0) break;
+      for (const f of data) {
+        if (f.name && !f.name.startsWith('.')) storageFiles.add(`modis/foto/${f.name}`);
+      }
+      if (data.length < 1000) break;
+      storageOffset += 1000;
+    }
+    console.log(`Storage index: ${storageFiles.size} files`);
+
+    // Step 2: Get ALL products with images, find ones with broken refs
+    const allBroken: { id: string; sku: string; images: string[]; brokenIndices: number[] }[] = [];
     let offset = 0;
     while (true) {
       const { data, error } = await supabase
@@ -39,25 +69,39 @@ Deno.serve(async (req) => {
         .range(offset, offset + 999);
       if (error) throw new Error(`DB error: ${error.message}`);
       if (!data || data.length === 0) break;
+
       for (const p of data) {
         const imgs = p.images as string[] | null;
         if (!imgs || !Array.isArray(imgs) || imgs.length === 0) continue;
-        // Check if any image is non-bucket
-        const hasNonBucket = imgs.some((img: string) => 
-          typeof img === 'string' && img && !img.includes('supabase.co/storage')
-        );
-        if (hasNonBucket) {
-          allProducts.push({ id: p.id, sku: p.sku, images: imgs });
+        const brokenIndices: number[] = [];
+        for (let i = 0; i < imgs.length; i++) {
+          const img = imgs[i];
+          if (!img || typeof img !== 'string') continue;
+          
+          // Case 1: non-bucket URL (relative path, WC URL, etc.)
+          if (!img.includes('supabase.co/storage')) {
+            brokenIndices.push(i);
+            continue;
+          }
+          
+          // Case 2: bucket URL but file doesn't exist
+          const path = img.replace(bucketBase, '');
+          if (path && !storageFiles.has(path)) {
+            brokenIndices.push(i);
+          }
+        }
+        if (brokenIndices.length > 0) {
+          allBroken.push({ id: p.id, sku: p.sku, images: imgs, brokenIndices });
         }
       }
       if (data.length < 1000) break;
       offset += 1000;
     }
 
-    console.log(`Found ${allProducts.length} products with non-bucket images`);
+    console.log(`Found ${allBroken.length} products with broken image refs`);
 
-    // Step 2: Get woo_products for these products (batch lookup)
-    const productIds = allProducts.map(p => p.id);
+    // Step 3: Get woo_products for these products
+    const productIds = allBroken.map(p => p.id);
     const wooMap = new Map<string, { src: string; name?: string }[]>();
     
     for (let i = 0; i < productIds.length; i += 200) {
@@ -81,30 +125,20 @@ Deno.serve(async (req) => {
 
     console.log(`Found WC images for ${wooMap.size} products`);
 
-    // Step 3: Build list of products to fix
+    // Step 4: Build fix list (only products with WC images)
     interface ToFix {
       id: string;
       sku: string;
       images: string[];
-      missingIndices: number[];
+      brokenIndices: number[];
       wcImages: { src: string; name?: string }[];
     }
 
     const toFix: ToFix[] = [];
-    for (const p of allProducts) {
-      const missingIndices: number[] = [];
-      for (let i = 0; i < p.images.length; i++) {
-        const img = p.images[i];
-        if (!img || typeof img !== 'string') continue;
-        if (img.includes('supabase.co/storage')) continue;
-        missingIndices.push(i);
-      }
-      if (missingIndices.length === 0) continue;
-
+    for (const p of allBroken) {
       const wcImages = wooMap.get(p.id);
       if (!wcImages || wcImages.length === 0) continue;
-
-      toFix.push({ id: p.id, sku: p.sku, images: p.images, missingIndices, wcImages });
+      toFix.push({ ...p, wcImages });
     }
 
     console.log(`${toFix.length} products fixable from WC`);
@@ -117,7 +151,7 @@ Deno.serve(async (req) => {
     for (const product of batch) {
       stats.processed++;
 
-      // Build WC image map: lowercase base filename -> src URL
+      // Build WC image map
       const wcMap = new Map<string, string>();
       for (const wcImg of product.wcImages) {
         const wcFilename = wcImg.src.split('/').pop()?.split('?')[0] || '';
@@ -129,29 +163,26 @@ Deno.serve(async (req) => {
       let changed = false;
       let fixedCount = 0;
 
-      for (const idx of product.missingIndices) {
+      for (const idx of product.brokenIndices) {
         const origUrl = product.images[idx];
         let filename = origUrl.split('/').pop() || '';
         if (filename.includes('?')) filename = filename.split('?')[0];
         const fileBase = filename.replace(/\.\w+$/, '').toLowerCase();
 
-        // Try exact match
         let wcSrc = wcMap.get(fileBase);
 
-        // Try article number match (W-1_233761111 -> look for anything with 233761111)
+        // Article number match
         if (!wcSrc) {
           const articleMatch = fileBase.match(/w-(\d+)_(\d+)/);
           if (articleMatch) {
             const imgNum = parseInt(articleMatch[1]);
             const articleNum = articleMatch[2];
-            // Find WC image that matches this article and image number
             for (const [wcBase, wcUrl] of wcMap) {
               if (wcBase.includes(articleNum) && wcBase.includes(`w-${imgNum}`)) {
                 wcSrc = wcUrl;
                 break;
               }
             }
-            // Fallback: any WC image with this article number, pick by position
             if (!wcSrc) {
               const articleImages = [...wcMap.entries()]
                 .filter(([k]) => k.includes(articleNum))
@@ -163,12 +194,12 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Fallback: if only one WC image and one missing, use it
-        if (!wcSrc && product.wcImages.length === 1 && product.missingIndices.length === 1) {
+        // Single image fallback
+        if (!wcSrc && product.wcImages.length === 1 && product.brokenIndices.length === 1) {
           wcSrc = product.wcImages[0].src;
         }
 
-        // Fallback: match by position (W-N -> Nth WC image)
+        // Position fallback
         if (!wcSrc) {
           const posMatch = fileBase.match(/w-(\d+)/);
           if (posMatch) {
@@ -190,7 +221,6 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Download from WC and upload to bucket
         try {
           const response = await fetch(wcSrc, {
             headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -208,7 +238,6 @@ Deno.serve(async (req) => {
             continue;
           }
 
-          // Normalize filename to lowercase
           const normalizedFilename = filename.toLowerCase().replace(/\.jpeg$/, '.jpg');
           const contentType = response.headers.get('content-type') || 'image/jpeg';
           const { error: uploadErr } = await supabase.storage
@@ -238,14 +267,19 @@ Deno.serve(async (req) => {
         else errors.push(`${product.sku}: DB update failed`);
       }
 
-      results.push({ sku: product.sku, status: changed ? 'fixed' : (fixedCount > 0 ? 'dry_run' : 'no_match'), fixed: fixedCount });
+      results.push({
+        sku: product.sku,
+        status: changed ? 'fixed' : (fixedCount > 0 ? 'dry_run' : 'no_match'),
+        fixed: fixedCount,
+      });
     }
 
     return new Response(JSON.stringify({
       success: true,
       dryRun,
-      totalWithMissing: allProducts.length,
+      totalBroken: allBroken.length,
       totalFixable: toFix.length,
+      totalUnfixable: allBroken.length - toFix.length,
       ...stats,
       errors: errors.slice(0, 20),
       results,
