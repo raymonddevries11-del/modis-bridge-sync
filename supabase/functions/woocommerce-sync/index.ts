@@ -355,26 +355,24 @@ Deno.serve(async (req) => {
       });
     }
 
-    console.log(`Processing ${jobs.length} sync jobs in background`);
+    console.log(`Processing ${jobs.length} sync jobs sequentially`);
 
-    // Start background processing without awaiting
-    // This allows us to return a response immediately
-    Promise.allSettled(
+    // Process all jobs sequentially and await completion
+    // Edge functions terminate async work after returning, so we must await
+    const results = await Promise.allSettled(
       jobs.map((job) => processJob(job, supabase, isSchedulerInvoked))
-    ).then(results => {
-      const successCount = results.filter((r) => r.status === 'fulfilled').length;
-      const failureCount = results.filter((r) => r.status === 'rejected').length;
-      console.log(`Background sync complete: ${successCount} succeeded, ${failureCount} failed`);
-    }).catch(err => {
-      console.error('Background sync error:', err);
-    });
+    );
+    const successCount = results.filter((r) => r.status === 'fulfilled').length;
+    const failureCount = results.filter((r) => r.status === 'rejected').length;
+    console.log(`Sync complete: ${successCount} succeeded, ${failureCount} failed`);
 
-    // Return immediate response so job-scheduler doesn't timeout
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Started processing ${jobs.length} sync jobs in background`,
+        message: `Processed ${jobs.length} sync jobs: ${successCount} succeeded, ${failureCount} failed`,
         jobIds: jobs.map((j: any) => j.id),
+        successCount,
+        failureCount,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
@@ -443,91 +441,87 @@ async function processJob(
     } as WooCommerceConfig;
     const { productIds, variantIds } = job.payload;
 
-    // CRITICAL: Very small batches to prevent overwhelming hosting provider
-    // SiteGround has blocked us for making too many requests (19/sec)
+    // Process all products internally in sequential batches to avoid creating extra jobs
     const BATCH_SIZE = 5;
-    let productIdsToProcess = productIds || [];
+    const allProductIds = productIds || [];
+    const totalProducts = allProductIds.length;
     
-    // If we have more products than batch size, split the job
-    if (productIdsToProcess.length > BATCH_SIZE) {
-      const currentBatch = productIdsToProcess.slice(0, BATCH_SIZE);
-      const remainingIds = productIdsToProcess.slice(BATCH_SIZE);
-      
-      // Create a new job for remaining products
-      console.log(`Splitting job: processing ${currentBatch.length} now, ${remainingIds.length} in new job`);
-      await supabase.from('jobs').insert({
-        type: 'SYNC_TO_WOO',
-        tenant_id: job.tenant_id,
-        state: 'ready',
-        payload: {
-          productIds: remainingIds,
-          variantIds: variantIds
-        }
-      });
-      
-      productIdsToProcess = currentBatch;
-    }
-
-    // Fetch products with their prices, variants, brands, and other needed data (filtered by tenant)
-    let query = supabase
-      .from('products')
-      .select(`
-        *,
-        brands(id, name),
-        product_prices(*),
-        variants(
-          *,
-          stock_totals(*)
-        ),
-        product_ai_content!product_ai_content_product_id_fkey (
-          status, ai_title, ai_short_description, ai_long_description,
-          ai_meta_title, ai_meta_description
-        )
-      `)
-      .eq('tenant_id', job.tenant_id);
-
-    // CRITICAL: Only process products if specific IDs are provided
-    if (productIdsToProcess && productIdsToProcess.length > 0) {
-      query = query.in('id', productIdsToProcess);
-    } else if (variantIds && variantIds.length > 0) {
-      // If only variant IDs, fetch their parent products
-      const { data: variantData } = await supabase
-        .from('variants')
-        .select('product_id')
-        .in('id', variantIds);
-      
-      if (variantData && variantData.length > 0) {
-        const parentIds = [...new Set(variantData.map((v: any) => v.product_id))];
-        query = query.in('id', parentIds);
-      }
-    } else {
-      // No specific products or variants to sync - job is invalid
+    if (totalProducts === 0 && (!variantIds || variantIds.length === 0)) {
       console.log('No productIds or variantIds in job payload - marking as done');
       await supabase.from('jobs').update({ state: 'done', error: 'No products specified' }).eq('id', job.id);
       return;
     }
 
-    const { data: products, error: productsError } = await query;
+    console.log(`Processing ${totalProducts} products in internal batches of ${BATCH_SIZE}`);
+    let totalSynced = 0;
 
-    if (productsError) throw productsError;
-    if (!products || products.length === 0) {
-      console.log('No products found for sync');
-      await supabase.from('jobs').update({ state: 'done' }).eq('id', job.id);
-      return;
-    }
-
-    console.log(`Syncing ${products.length} products to WooCommerce`);
-
-    // CRITICAL: Process very slowly to avoid overwhelming hosting provider
-    // SiteGround blocked us for 19 req/sec - now we do max ~0.5 req/sec
-    for (const product of products) {
-      await syncProductToWooCommerce(product, wooConfig, variantIds, supabase, job.tenant_id);
+    // Process in sequential batches without creating new jobs
+    for (let offset = 0; offset < Math.max(totalProducts, 1); offset += BATCH_SIZE) {
+      const batchIds = totalProducts > 0 ? allProductIds.slice(offset, offset + BATCH_SIZE) : [];
+      const batchNum = Math.floor(offset / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(totalProducts / BATCH_SIZE) || 1;
       
-      // Add substantial delay between products (3 seconds)
-      if (products.indexOf(product) < products.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
+      console.log(`── Batch ${batchNum}/${totalBatches} (${batchIds.length} products) ──`);
+
+      // Fetch products for this batch
+      let query = supabase
+        .from('products')
+        .select(`
+          *,
+          brands(id, name),
+          product_prices(*),
+          variants(
+            *,
+            stock_totals(*)
+          ),
+          product_ai_content!product_ai_content_product_id_fkey (
+            status, ai_title, ai_short_description, ai_long_description,
+            ai_meta_title, ai_meta_description
+          )
+        `)
+        .eq('tenant_id', job.tenant_id);
+
+      if (batchIds.length > 0) {
+        query = query.in('id', batchIds);
+      } else if (variantIds && variantIds.length > 0) {
+        const { data: variantData } = await supabase
+          .from('variants')
+          .select('product_id')
+          .in('id', variantIds);
+        if (variantData && variantData.length > 0) {
+          const parentIds = [...new Set(variantData.map((v: any) => v.product_id))];
+          query = query.in('id', parentIds);
+        } else {
+          break;
+        }
+      }
+
+      const { data: products, error: productsError } = await query;
+      if (productsError) throw productsError;
+      if (!products || products.length === 0) {
+        console.log(`Batch ${batchNum}: no products found, skipping`);
+        continue;
+      }
+
+      // Process each product in this batch with delay
+      for (let i = 0; i < products.length; i++) {
+        await syncProductToWooCommerce(products[i], wooConfig, variantIds, supabase, job.tenant_id);
+        totalSynced++;
+        
+        // 3s delay between products to respect rate limits
+        if (i < products.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+      }
+
+      // 5s cooldown between batches to prevent SiteGround blocks
+      if (offset + BATCH_SIZE < totalProducts) {
+        console.log(`Batch ${batchNum} done, cooling down 5s before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
     }
+
+    console.log(`All batches complete: ${totalSynced}/${totalProducts} products synced`);
 
     // Always mark job as done on success
     await supabase.from('jobs').update({ state: 'done', error: null }).eq('id', job.id);
