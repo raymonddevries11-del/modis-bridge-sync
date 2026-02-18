@@ -191,3 +191,6 @@ verify_jwt = false
 
 [functions.reconcile-product-cache]
 verify_jwt = false
+
+[functions.dedupe-ready-jobs]
+verify_jwt = false
