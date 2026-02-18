@@ -16,6 +16,7 @@ import { PushHealthWidget } from "@/components/woocommerce/PushHealthWidget";
 import { JobHealthWidget } from "@/components/dashboard/JobHealthWidget";
 import { RetryMonitorWidget } from "@/components/dashboard/RetryMonitorWidget";
 import { TriggerConflictAlert } from "@/components/dashboard/TriggerConflictAlert";
+import { SyncWatchdogWidget } from "@/components/dashboard/SyncWatchdogWidget";
 
 // --- Helpers ---
 function timeAgo(dateStr: string): string {
@@ -338,11 +339,12 @@ const Dashboard = () => {
         </div>
 
 
-        {/* Push Health + Job Health + Retry Monitor */}
-        <div className="grid gap-4 lg:grid-cols-3">
+        {/* Push Health + Job Health + Retry Monitor + Watchdog */}
+        <div className="grid gap-4 lg:grid-cols-2">
           <PushHealthWidget />
           <JobHealthWidget />
           <RetryMonitorWidget />
+          <SyncWatchdogWidget />
         </div>
 
         {/* Bottom row: Activity Feed + Job Queue */}
