@@ -13,6 +13,7 @@ import { CircuitBreakerAlert } from "@/components/woocommerce/CircuitBreakerAler
 import { QueueHealthAlert } from "@/components/woocommerce/QueueHealthAlert";
 import { VariationAuditAlert } from "@/components/woocommerce/VariationAuditAlert";
 import { ImageSyncDashboard } from "@/components/woocommerce/ImageSyncDashboard";
+import { SyncQueueViewer } from "@/components/woocommerce/SyncQueueViewer";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -196,6 +197,10 @@ const ChannelWooCommerce = () => {
         <Tabs defaultValue="delta" className="space-y-4">
           <TabsList>
             <TabsTrigger value="delta">Delta Tracking</TabsTrigger>
+            <TabsTrigger value="queue" className="flex items-center gap-1.5">
+              <Package className="h-3.5 w-3.5" />
+              Sync Wachtrij
+            </TabsTrigger>
             <TabsTrigger value="products">WooCommerce Producten</TabsTrigger>
             <TabsTrigger value="link-status" className="flex items-center gap-1.5">
               <Unlink className="h-3.5 w-3.5" />
@@ -211,6 +216,16 @@ const ChannelWooCommerce = () => {
             </TabsTrigger>
             <TabsTrigger value="actions">Acties & Tools</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="queue">
+            {tenantId ? (
+              <SyncQueueViewer tenantId={tenantId} />
+            ) : (
+              <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">
+                Selecteer een tenant om de sync wachtrij te bekijken.
+              </CardContent></Card>
+            )}
+          </TabsContent>
 
           <TabsContent value="delta">
             <Card className="card-elevated">
