@@ -372,12 +372,12 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
                 <Label>Kleur Informatie</Label>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
-                    <span className="text-muted-foreground">Kleur:</span>
-                    <p className="font-medium">{product.color.label || "N/A"}</p>
+                    <span className="text-muted-foreground">Webshop:</span>
+                    <p className="font-medium">{product.color.webshop || "N/A"}</p>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">Filter:</span>
-                    <p className="font-medium">{product.color.filter || "N/A"}</p>
+                    <span className="text-muted-foreground">Artikel:</span>
+                    <p className="font-medium">{product.color.article || "N/A"}</p>
                   </div>
                 </div>
               </div>
