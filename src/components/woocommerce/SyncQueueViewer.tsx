@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { RefreshCw, Trash2, RotateCw, Clock, Loader2, CheckCircle2, XCircle, Package } from "lucide-react";
 import { toast } from "sonner";
 
@@ -14,6 +16,7 @@ interface SyncQueueViewerProps {
 
 export const SyncQueueViewer = ({ tenantId, maxItems = 25 }: SyncQueueViewerProps) => {
   const queryClient = useQueryClient();
+  const [cancelTarget, setCancelTarget] = useState<{ id: string; productCount: number } | null>(null);
 
   const { data: queueJobs, isLoading } = useQuery({
     queryKey: ["sync-queue", tenantId],
@@ -237,9 +240,9 @@ export const SyncQueueViewer = ({ tenantId, maxItems = 25 }: SyncQueueViewerProp
                           size="icon"
                           variant="ghost"
                           className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                          onClick={() => cancelMutation.mutate(job.id)}
+                          onClick={() => setCancelTarget({ id: job.id, productCount })}
                           disabled={cancelMutation.isPending}
-                          title="Verwijderen"
+                          title="Annuleren"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -251,6 +254,37 @@ export const SyncQueueViewer = ({ tenantId, maxItems = 25 }: SyncQueueViewerProp
             </div>
           </ScrollArea>
         )}
+
+        {/* Cancel confirmation dialog */}
+        <AlertDialog open={!!cancelTarget} onOpenChange={(open) => !open && setCancelTarget(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Sync-job annuleren?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Weet je zeker dat je deze sync-job wilt annuleren?
+                {cancelTarget && cancelTarget.productCount > 0 && (
+                  <span className="block mt-1 font-medium">
+                    {cancelTarget.productCount} product{cancelTarget.productCount !== 1 ? "en" : ""} zal niet naar WooCommerce worden gesynchroniseerd.
+                  </span>
+                )}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Behouden</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => {
+                  if (cancelTarget) {
+                    cancelMutation.mutate(cancelTarget.id);
+                    setCancelTarget(null);
+                  }
+                }}
+              >
+                Annuleren
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CardContent>
     </Card>
   );
