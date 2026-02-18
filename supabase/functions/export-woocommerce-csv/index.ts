@@ -81,6 +81,11 @@ serve(async (req) => {
         .eq('id', tenantId)
         .single();
       tenantSlug = tenant?.slug;
+
+      // Support missingOnly flag to export only products not yet in WooCommerce
+      if (body.missingOnly) {
+        exportType = 'missing';
+      }
     }
 
     if (!tenantId) {
@@ -95,7 +100,32 @@ serve(async (req) => {
       return await handleStockExport(supabase, tenantId, tenantSlug);
     }
 
-    console.log(`Exporting WooCommerce CSV for tenant ${tenantId}`);
+    console.log(`Exporting WooCommerce CSV for tenant ${tenantId} (type: ${exportType})`);
+
+    // If missingOnly, first get product_ids that already exist in woo_products
+    let existingProductIds: Set<string> | null = null;
+    if (exportType === 'missing') {
+      const existingIds = new Set<string>();
+      let wpOffset = 0;
+      let wpHasMore = true;
+      while (wpHasMore) {
+        const { data: wpRows } = await supabase
+          .from('woo_products')
+          .select('product_id')
+          .eq('tenant_id', tenantId)
+          .not('product_id', 'is', null)
+          .range(wpOffset, wpOffset + 999);
+        if (wpRows && wpRows.length > 0) {
+          for (const r of wpRows) if (r.product_id) existingIds.add(r.product_id);
+          wpOffset += 1000;
+          wpHasMore = wpRows.length === 1000;
+        } else {
+          wpHasMore = false;
+        }
+      }
+      existingProductIds = existingIds;
+      console.log(`Found ${existingIds.size} products already in WooCommerce, will export only missing ones`);
+    }
 
     // Fetch all products with pagination
     const allProducts: any[] = [];
@@ -133,8 +163,12 @@ serve(async (req) => {
       }
 
       if (products && products.length > 0) {
-        allProducts.push(...products);
-        console.log(`Fetched ${products.length} products (offset: ${offset}, total: ${allProducts.length})`);
+        for (const p of products) {
+          // If missingOnly, skip products that already exist in WooCommerce
+          if (existingProductIds && existingProductIds.has(p.id)) continue;
+          allProducts.push(p);
+        }
+        console.log(`Fetched ${products.length} products (offset: ${offset}, kept: ${allProducts.length})`);
         offset += pageSize;
         hasMore = products.length === pageSize;
       } else {
@@ -142,13 +176,14 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Found ${allProducts.length} total products to export`);
+    console.log(`Found ${allProducts.length} products to export${exportType === 'missing' ? ' (missing only)' : ''}`);
 
     // Generate CSV
     const csv = generateWooCommerceCSV(allProducts);
     
     // Save to storage
-    const fileName = tenantSlug ? `woocommerce-import-${tenantSlug}.csv` : 'woocommerce-import.csv';
+    const filePrefix = exportType === 'missing' ? 'woocommerce-missing' : 'woocommerce-import';
+    const fileName = tenantSlug ? `${filePrefix}-${tenantSlug}.csv` : `${filePrefix}.csv`;
     const encoder = new TextEncoder();
     const csvBytes = encoder.encode(csv);
     
