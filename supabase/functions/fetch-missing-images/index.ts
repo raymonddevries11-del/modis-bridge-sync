@@ -1,0 +1,202 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, serviceKey);
+
+    const body = await req.json().catch(() => ({}));
+    const tenantSlug = body.tenant || 'kosterschoenmode';
+    const batchSize = Math.min(body.batchSize || 20, 50);
+    const dryRun = body.dryRun ?? false;
+
+    const { data: tenant } = await supabase
+      .from('tenants').select('id').eq('slug', tenantSlug).single();
+    if (!tenant) throw new Error('Tenant not found');
+
+    const bucketBase = `${supabaseUrl}/storage/v1/object/public/product-images/`;
+
+    // Get products with missing images that are linked to woo_products
+    const { data: products, error: dbErr } = await supabase
+      .from('products')
+      .select('id, sku, images, woo_products!inner(woo_id, images)')
+      .eq('tenant_id', tenant.id)
+      .not('images', 'is', null)
+      .limit(1000);
+    if (dbErr) throw new Error(`DB error: ${dbErr.message}`);
+
+    // Filter to products with non-bucket images
+    interface ToFix {
+      id: string;
+      sku: string;
+      images: string[];
+      missingIndices: number[];
+      wcImages: { src: string; name?: string }[];
+    }
+
+    const toFix: ToFix[] = [];
+    for (const p of (products || [])) {
+      const imgs = p.images as string[] | null;
+      if (!imgs || !Array.isArray(imgs)) continue;
+      const missingIndices: number[] = [];
+      for (let i = 0; i < imgs.length; i++) {
+        if (!imgs[i] || typeof imgs[i] !== 'string') continue;
+        if (imgs[i].includes('supabase.co/storage')) continue;
+        missingIndices.push(i);
+      }
+      if (missingIndices.length === 0) continue;
+
+      // Get WC images from the joined woo_products
+      const wpArr = p.woo_products as any;
+      const wp = Array.isArray(wpArr) ? wpArr[0] : wpArr;
+      if (!wp?.images) continue;
+      const wcImgs = (wp.images as any[] || []).filter((i: any) => i?.src);
+      if (wcImgs.length === 0) continue;
+
+      toFix.push({ id: p.id, sku: p.sku, images: imgs, missingIndices, wcImages: wcImgs });
+    }
+
+    const batch = toFix.slice(0, batchSize);
+    const stats = { processed: 0, downloaded: 0, updated: 0, skipped: 0, failed: 0 };
+    const errors: string[] = [];
+    const results: { sku: string; status: string; fixed: number }[] = [];
+
+    for (const product of batch) {
+      stats.processed++;
+
+      // Build WC image map: lowercase base filename -> src URL
+      const wcMap = new Map<string, string>();
+      for (const wcImg of product.wcImages) {
+        const wcFilename = wcImg.src.split('/').pop()?.split('?')[0] || '';
+        const wcBase = wcFilename.replace(/\.\w+$/, '').replace(/-\d+x\d+$/, '').toLowerCase();
+        wcMap.set(wcBase, wcImg.src);
+      }
+
+      const newImages = [...product.images];
+      let changed = false;
+      let fixedCount = 0;
+
+      for (const idx of product.missingIndices) {
+        const origUrl = product.images[idx];
+        let filename = origUrl.split('/').pop() || '';
+        if (filename.includes('?')) filename = filename.split('?')[0];
+        const fileBase = filename.replace(/\.\w+$/, '').toLowerCase();
+
+        // Try exact match
+        let wcSrc = wcMap.get(fileBase);
+
+        // Try article number match (W-1_233761111 -> look for anything with 233761111)
+        if (!wcSrc) {
+          const articleMatch = fileBase.match(/w-(\d+)_(\d+)/);
+          if (articleMatch) {
+            const imgNum = parseInt(articleMatch[1]);
+            const articleNum = articleMatch[2];
+            // Find WC image that matches this article and image number
+            for (const [wcBase, wcUrl] of wcMap) {
+              if (wcBase.includes(articleNum) && wcBase.includes(`w-${imgNum}`)) {
+                wcSrc = wcUrl;
+                break;
+              }
+            }
+            // Fallback: any WC image with this article number, pick by position
+            if (!wcSrc) {
+              const articleImages = [...wcMap.entries()]
+                .filter(([k]) => k.includes(articleNum))
+                .sort(([a], [b]) => a.localeCompare(b));
+              if (articleImages.length > 0 && imgNum <= articleImages.length) {
+                wcSrc = articleImages[imgNum - 1]?.[1];
+              }
+            }
+          }
+        }
+
+        if (!wcSrc) {
+          stats.skipped++;
+          continue;
+        }
+
+        if (dryRun) {
+          fixedCount++;
+          stats.downloaded++;
+          continue;
+        }
+
+        // Download from WC and upload to bucket
+        try {
+          const response = await fetch(wcSrc, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            redirect: 'follow',
+          });
+          if (!response.ok) {
+            stats.failed++;
+            errors.push(`${product.sku}: HTTP ${response.status} for ${filename}`);
+            continue;
+          }
+
+          const blob = await response.arrayBuffer();
+          if (blob.byteLength < 100) {
+            stats.failed++;
+            continue;
+          }
+
+          const contentType = response.headers.get('content-type') || 'image/jpeg';
+          const { error: uploadErr } = await supabase.storage
+            .from('product-images')
+            .upload(filename, blob, { contentType, upsert: true });
+
+          if (uploadErr) {
+            stats.failed++;
+            errors.push(`${product.sku}: Upload error: ${uploadErr.message}`);
+            continue;
+          }
+
+          newImages[idx] = `${bucketBase}${filename}`;
+          changed = true;
+          fixedCount++;
+          stats.downloaded++;
+        } catch (e) {
+          stats.failed++;
+          errors.push(`${product.sku}: ${e instanceof Error ? e.message : 'Unknown'}`);
+        }
+      }
+
+      if (changed && !dryRun) {
+        const { error: updateErr } = await supabase
+          .from('products').update({ images: newImages }).eq('id', product.id);
+        if (!updateErr) stats.updated++;
+        else errors.push(`${product.sku}: DB update failed`);
+      }
+
+      results.push({ sku: product.sku, status: changed ? 'fixed' : (fixedCount > 0 ? 'dry_run' : 'no_match'), fixed: fixedCount });
+    }
+
+    return new Response(JSON.stringify({
+      success: true,
+      dryRun,
+      totalWithMissing: toFix.length,
+      ...stats,
+      errors: errors.slice(0, 20),
+      results,
+    }, null, 2), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    console.error('fetch-missing-images error:', error);
+    return new Response(JSON.stringify({
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+});
