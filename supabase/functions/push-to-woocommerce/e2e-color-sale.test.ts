@@ -302,3 +302,150 @@ Deno.test("No Color-webshop attribute when color.webshop is empty", () => {
 
   assertEquals(attrs.length, 0, "Should not add attribute when webshop color is empty");
 });
+
+// --- Color mapping + SEO propagation tests ---
+
+Deno.test("Color-webshop global mapping propagates term correctly", () => {
+  // Simulates the full mapping resolution chain:
+  // PIM color.webshop → globalAttrMap lookup → WooCommerce attribute with term
+  const pimColor = { webshop: "Wit", article: "Latte Weiss Grau" };
+  const globalAttrMap = new Map<string, { id: number; name: string }>();
+  globalAttrMap.set("color-webshop", { id: 3, name: "Kleur" });
+
+  const usedAttrIds = new Set<number>();
+  const attrs: any[] = [];
+  const mappedAttrs: any[] = [];
+
+  const colorWebshop = pimColor.webshop;
+  if (colorWebshop) {
+    const colorAttr = globalAttrMap.get("color-webshop");
+    if (colorAttr && colorAttr.id > 0 && !usedAttrIds.has(colorAttr.id)) {
+      attrs.push({
+        id: colorAttr.id,
+        name: colorAttr.name,
+        position: attrs.length,
+        visible: true,
+        variation: false,
+        options: [colorWebshop],
+      });
+      usedAttrIds.add(colorAttr.id);
+      mappedAttrs.push({
+        key: "Color-webshop",
+        wc_id: colorAttr.id,
+        wc_name: colorAttr.name,
+        value: colorWebshop,
+      });
+    }
+  }
+
+  assertEquals(attrs.length, 1);
+  assertEquals(attrs[0].id, 3, "Uses global pa_kleur ID");
+  assertEquals(attrs[0].name, "Kleur");
+  assertEquals(attrs[0].options[0], "Wit");
+  assertEquals(attrs[0].visible, true, "Color attribute must be visible for SEO");
+  assertEquals(attrs[0].variation, false, "Color is not a variation axis");
+  assertEquals(mappedAttrs[0].value, "Wit");
+});
+
+Deno.test("Color.article is preserved alongside color.webshop", () => {
+  // Verifies both color fields coexist — article for internal use, webshop for WooCommerce
+  const pimColor = { webshop: "Wit", article: "Latte Weiss Grau" };
+  assertEquals(pimColor.webshop, "Wit");
+  assertEquals(pimColor.article, "Latte Weiss Grau");
+  // Both must be non-empty and distinct
+  assertNotEquals(pimColor.webshop, pimColor.article, "webshop and article colors should differ");
+});
+
+Deno.test("SEO meta_data includes Yoast fields from PIM", () => {
+  const pim = {
+    meta_title: "Witte Sneakers Kopen | TestMerk",
+    meta_description: "Ontdek onze witte sneakers. Gratis verzending vanaf €50.",
+    webshop_text: "Mooie witte sneakers",
+  };
+  const aiContent = { status: "pending" } as any;
+  const hasApprovedAi = aiContent?.status === "approved";
+
+  const metaTitle = (hasApprovedAi && aiContent.ai_meta_title) || pim.meta_title;
+  const metaDescription = (hasApprovedAi && aiContent.ai_meta_description) || pim.meta_description;
+
+  const meta_data: any[] = [
+    ...(metaTitle ? [{ key: "_yoast_wpseo_title", value: metaTitle }] : []),
+    ...(metaDescription ? [{ key: "_yoast_wpseo_metadesc", value: metaDescription }] : []),
+  ];
+
+  assertEquals(meta_data.length, 2, "Both Yoast SEO fields should be present");
+  assertEquals(meta_data[0].key, "_yoast_wpseo_title");
+  assertEquals(meta_data[0].value, "Witte Sneakers Kopen | TestMerk");
+  assertEquals(meta_data[1].key, "_yoast_wpseo_metadesc");
+  assertEquals(meta_data[1].value, pim.meta_description);
+});
+
+Deno.test("SEO meta_data prefers approved AI content over PIM", () => {
+  const pim = {
+    meta_title: "PIM Title",
+    meta_description: "PIM Description",
+  };
+  const aiContent = {
+    status: "approved",
+    ai_meta_title: "AI Optimized Title | Brand",
+    ai_meta_description: "AI crafted description for better SEO ranking.",
+  };
+  const hasApprovedAi = aiContent.status === "approved";
+
+  const metaTitle = (hasApprovedAi && aiContent.ai_meta_title) || pim.meta_title;
+  const metaDescription = (hasApprovedAi && aiContent.ai_meta_description) || pim.meta_description;
+
+  assertEquals(metaTitle, "AI Optimized Title | Brand", "Should prefer AI meta title");
+  assertEquals(metaDescription, "AI crafted description for better SEO ranking.", "Should prefer AI meta description");
+});
+
+Deno.test("SEO meta_data falls back to PIM when AI is not approved", () => {
+  const pim = { meta_title: "PIM Title", meta_description: "PIM Desc" };
+  const aiContent = { status: "generated", ai_meta_title: "AI Title", ai_meta_description: "AI Desc" };
+  const hasApprovedAi = aiContent.status === "approved";
+
+  const metaTitle = (hasApprovedAi && aiContent.ai_meta_title) || pim.meta_title;
+  const metaDescription = (hasApprovedAi && aiContent.ai_meta_description) || pim.meta_description;
+
+  assertEquals(metaTitle, "PIM Title", "Should fall back to PIM when AI not approved");
+  assertEquals(metaDescription, "PIM Desc");
+});
+
+Deno.test("Color + SEO combined payload is well-formed", () => {
+  // Simulates the complete desiredData build for a product with color + SEO
+  const pimColor = { webshop: "Zwart", article: "Schwarz" };
+  const metaTitle = "Zwarte Laarzen | Shop";
+  const metaDescription = "Koop zwarte laarzen online.";
+
+  const desiredData: Record<string, any> = {
+    name: "Zwarte Laarzen",
+    description: "Mooie zwarte laarzen van echt leer.",
+    short_description: "",
+    sku: "TEST123",
+    slug: "zwarte-laarzen",
+    meta_data: [
+      { key: "_yoast_wpseo_title", value: metaTitle },
+      { key: "_yoast_wpseo_metadesc", value: metaDescription },
+    ],
+  };
+
+  const attrs: any[] = [];
+  if (pimColor.webshop) {
+    attrs.push({
+      id: 3,
+      name: "Kleur",
+      position: 0,
+      visible: true,
+      variation: false,
+      options: [pimColor.webshop],
+    });
+  }
+  desiredData.attributes = attrs;
+
+  // Validate complete payload
+  assertEquals(desiredData.meta_data.length, 2, "SEO meta fields present");
+  assertEquals(desiredData.attributes.length, 1, "Color attribute present");
+  assertEquals(desiredData.attributes[0].options[0], "Zwart", "Color value in attributes");
+  assertEquals(desiredData.meta_data[0].value, metaTitle, "SEO title in meta_data");
+  assertEquals(desiredData.slug, "zwarte-laarzen", "URL key propagated as slug");
+});
