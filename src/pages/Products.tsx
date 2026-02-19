@@ -421,19 +421,6 @@ const Products = () => {
     enabled: !!selectedTenant,
   });
 
-  const updatePrices = useMutation({
-    mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke("update-woo-prices");
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: (data) => {
-      toast.success(`Prijzen bijgewerkt: ${data.updated} producten. ${data.notFound} niet gevonden in WooCommerce.`);
-    },
-    onError: (error: any) => {
-      toast.error(`Update mislukt: ${error.message}`);
-    },
-  });
 
   const syncToWooCommerce = useMutation({
     mutationFn: async () => {
@@ -1050,14 +1037,6 @@ const Products = () => {
         {/* Row 2: Actions */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Primary actions exposed */}
-          <Button
-            onClick={() => updatePrices.mutate()}
-            disabled={updatePrices.isPending}
-            size="sm"
-          >
-            <RefreshCw className={`h-4 w-4 mr-1.5 ${updatePrices.isPending ? "animate-spin" : ""}`} />
-            Update Prijzen
-          </Button>
 
           <Button
             onClick={() => syncToWooCommerce.mutate()}
