@@ -618,11 +618,15 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
-    const { tenantId, productIds } = await req.json();
+    const { tenantId, productIds, syncScope } = await req.json();
     if (!tenantId) throw new Error('tenantId is required');
     if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
       throw new Error('productIds array is required');
     }
+    // Scope determines which fields to push: PRICE_STOCK, CONTENT, TAXONOMY, MEDIA, VARIATIONS, or FULL (default)
+    const scope = (syncScope || 'FULL').toUpperCase();
+    const isScopedPush = scope !== 'FULL';
+    console.log(`Push scope: ${scope} for ${productIds.length} products`);
 
     const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
@@ -844,23 +848,48 @@ Deno.serve(async (req) => {
           console.log(`Using approved AI content for ${pim.sku}: title="${productName}"`);
         }
 
-        const desiredData: Record<string, any> = {
-          name: productName,
-          description: longDescription,
-          short_description: shortDescription,
-          sku: pim.sku,
-          slug: pim.url_key || undefined,
-          meta_data: [
-            ...(metaTitle ? [{ key: '_yoast_wpseo_title', value: metaTitle }] : []),
-            ...(metaDescription ? [{ key: '_yoast_wpseo_metadesc', value: metaDescription }] : []),
-          ],
-        };
+        // --- Scope-aware payload construction ---
+        const desiredData: Record<string, any> = {};
 
-        if (!isVariable) {
-          desiredData.regular_price = regularPrice;
-          desiredData.sale_price = salePrice;
+        // PRICE_STOCK scope: only prices (for simple products)
+        if (scope === 'FULL' || scope === 'PRICE_STOCK') {
+          if (!isVariable) {
+            desiredData.regular_price = regularPrice;
+            desiredData.sale_price = salePrice;
+          }
         }
 
+        // CONTENT scope: name, description, meta
+        if (scope === 'FULL' || scope === 'CONTENT') {
+          desiredData.name = productName;
+          desiredData.description = longDescription;
+          desiredData.short_description = shortDescription;
+          desiredData.sku = pim.sku;
+          desiredData.slug = pim.url_key || undefined;
+          desiredData.meta_data = [
+            ...(metaTitle ? [{ key: '_yoast_wpseo_title', value: metaTitle }] : []),
+            ...(metaDescription ? [{ key: '_yoast_wpseo_metadesc', value: metaDescription }] : []),
+          ];
+        }
+
+        // For FULL scope without CONTENT fields already set, ensure SKU is present
+        if (scope === 'FULL' && !desiredData.sku) {
+          desiredData.sku = pim.sku;
+          desiredData.name = productName;
+          desiredData.description = longDescription;
+          desiredData.short_description = shortDescription;
+          desiredData.slug = pim.url_key || undefined;
+          desiredData.meta_data = [
+            ...(metaTitle ? [{ key: '_yoast_wpseo_title', value: metaTitle }] : []),
+            ...(metaDescription ? [{ key: '_yoast_wpseo_metadesc', value: metaDescription }] : []),
+          ];
+          if (!isVariable) {
+            desiredData.regular_price = regularPrice;
+            desiredData.sale_price = salePrice;
+          }
+        }
+
+        // MEDIA scope: images
         const pimImages = Array.isArray(pim.images) ? pim.images : [];
         const storageBaseUrl = `${Deno.env.get('SUPABASE_URL')}/storage/v1/object/public/product-images/`;
         let validImages = pimImages
@@ -871,13 +900,10 @@ Deno.serve(async (req) => {
             return `${storageBaseUrl}${src}`;
           });
 
-        // Upload Supabase storage images to WordPress Media Library to bypass SiteGround firewall
-        if (validImages.length > 0) {
+        if ((scope === 'FULL' || scope === 'MEDIA') && validImages.length > 0) {
           const wpImages = await uploadImagesToWordPress(validImages, supabase, config.woocommerce_url, rateLimiter);
           if (wpImages.length > 0) {
             desiredData.images = wpImages.map((img) => {
-              // If we have a WP media ID, use it (WooCommerce will link directly)
-              // Otherwise fall back to src URL for sideloading
               if (img.id > 0) {
                 return { id: img.id, position: img.position };
               }
@@ -886,8 +912,10 @@ Deno.serve(async (req) => {
           }
         }
 
+        // --- Attributes, taxonomy, tags: skip for PRICE_STOCK and MEDIA scopes ---
         const attrs: any[] = [];
-        if (sizeOptions.length > 0) {
+        const skipAttrTaxonomy = (scope === 'PRICE_STOCK' || scope === 'MEDIA');
+        if (!skipAttrTaxonomy && sizeOptions.length > 0) {
           const maatAttrDef: any = { position: 0, visible: true, variation: true, options: sizeOptions };
           if (maatAttrId) {
             maatAttrDef.id = maatAttrId;
@@ -908,7 +936,7 @@ Deno.serve(async (req) => {
         const usedAttrIds = new Set<number>(attrs.filter(a => a.id > 0).map(a => a.id));
         const usedAttrNames = new Set<string>(attrs.map(a => (a.name || '').toLowerCase()).filter(Boolean));
 
-        if (pim.attributes && typeof pim.attributes === 'object') {
+        if (!skipAttrTaxonomy && pim.attributes && typeof pim.attributes === 'object') {
           const pimAttrs = pim.attributes as Record<string, any>;
           let pos = 1;
           for (const [key, val] of Object.entries(pimAttrs)) {
@@ -953,7 +981,7 @@ Deno.serve(async (req) => {
             }
           }
         }
-        if (brand) {
+        if (!skipAttrTaxonomy && brand) {
           const merkAttr = globalAttrMap.get('merk');
           if (merkAttr) {
             const merkTermDetails = await ensureAttributeTerms(config.woocommerce_url, wooAuth, merkAttr.id, 'Merk', [brand], rateLimiter, cachedTermsByAttrId.get(merkAttr.id) || null, supabase, tenantId, true) as TermResult;
@@ -977,7 +1005,7 @@ Deno.serve(async (req) => {
         // --- Color-webshop attribute ---
         const pimColor = pim.color as any;
         const colorWebshop = pimColor?.webshop;
-        if (colorWebshop) {
+        if (!skipAttrTaxonomy && colorWebshop) {
           const colorAttr = globalAttrMap.get('color-webshop') || globalAttrMap.get('kleur-webshop') || pimToWooMap.get('color-webshop');
           if (colorAttr && colorAttr.id > 0 && !usedAttrIds.has(colorAttr.id)) {
             const colorTermDetails = await ensureAttributeTerms(config.woocommerce_url, wooAuth, colorAttr.id, colorAttr.name, [colorWebshop], rateLimiter, cachedTermsByAttrId.get(colorAttr.id) || null, supabase, tenantId, true) as TermResult;
@@ -992,20 +1020,21 @@ Deno.serve(async (req) => {
           }
         }
 
-        // --- Sale / Promotion tag ---
-        const existingTags = desiredData.tags || [];
-        if (pim.is_promotion) {
-          const hasSaleTag = existingTags.some((t: any) => t.name?.toLowerCase() === 'sale');
-          if (!hasSaleTag) {
-            desiredData.tags = [...existingTags, { name: 'Sale' }];
-            console.log(`[${pim.sku}] Added 'Sale' tag (is_promotion=true)`);
-          }
-        } else {
-          // Remove Sale tag if product is no longer on promotion
-          const filtered = existingTags.filter((t: any) => t.name?.toLowerCase() !== 'sale');
-          if (filtered.length !== existingTags.length) {
-            desiredData.tags = filtered;
-            console.log(`[${pim.sku}] Removed 'Sale' tag (is_promotion=false)`);
+        // --- Sale / Promotion tag (only for TAXONOMY/FULL scope) ---
+        if (!skipAttrTaxonomy) {
+          const existingTags = desiredData.tags || [];
+          if (pim.is_promotion) {
+            const hasSaleTag = existingTags.some((t: any) => t.name?.toLowerCase() === 'sale');
+            if (!hasSaleTag) {
+              desiredData.tags = [...existingTags, { name: 'Sale' }];
+              console.log(`[${pim.sku}] Added 'Sale' tag (is_promotion=true)`);
+            }
+          } else {
+            const filtered = existingTags.filter((t: any) => t.name?.toLowerCase() !== 'sale');
+            if (filtered.length !== existingTags.length) {
+              desiredData.tags = filtered;
+              console.log(`[${pim.sku}] Removed 'Sale' tag (is_promotion=false)`);
+            }
           }
         }
 
@@ -1295,6 +1324,22 @@ Deno.serve(async (req) => {
         } else {
           // UPDATE existing product
           const woo = wooProducts[0];
+
+          // VARIATIONS or PRICE_STOCK scope on variable product: skip parent PUT, only sync variations
+          if ((scope === 'VARIATIONS' || (scope === 'PRICE_STOCK' && isVariable)) && woo.type === 'variable' && pim.variants && pim.variants.length > 0) {
+            const varResult = await createOrUpdateVariations(
+              config.woocommerce_url, wooAuth, woo.id, pim, rateLimiter, supabase, tenantId, maatAttrId, cachedTermsByAttrId
+            );
+            variationAudits.push(varResult.audit);
+            results.push({
+              sku: pim.sku, action: 'updated',
+              changes: [{ field: 'variations', old_value: null, new_value: `${varResult.synced} variaties gesynchroniseerd (scope: ${scope})` }],
+              message: `Variations-only update on WC #${woo.id} (${varResult.synced} synced)`,
+            });
+            await rateLimiter.wait();
+            continue;
+          }
+
           const changes: FieldChange[] = [];
 
           if (woo.name !== desiredData.name) changes.push({ field: 'name', old_value: woo.name, new_value: desiredData.name });
@@ -1505,6 +1550,82 @@ Deno.serve(async (req) => {
       } catch (e) {
         results.push({ sku: pim.sku, action: 'error', changes: [], message: e instanceof Error ? e.message : 'Unknown error' });
       }
+    }
+
+    // --- Post-push: update product_sync_status and clear dirty flags per scope ---
+    const successfulProducts = results.filter(r => r.action === 'created' || r.action === 'updated');
+    if (successfulProducts.length > 0) {
+      const now = new Date().toISOString();
+      const scopeTimestampCol = {
+        'PRICE_STOCK': 'last_synced_at_price_stock',
+        'CONTENT': 'last_synced_at_content',
+        'TAXONOMY': 'last_synced_at_taxonomy',
+        'MEDIA': 'last_synced_at_media',
+        'VARIATIONS': 'last_synced_at_variations',
+      } as Record<string, string>;
+
+      const dirtyFlagCol = {
+        'PRICE_STOCK': 'dirty_price_stock',
+        'CONTENT': 'dirty_content',
+        'TAXONOMY': 'dirty_taxonomy',
+        'MEDIA': 'dirty_media',
+        'VARIATIONS': 'dirty_variations',
+      } as Record<string, string>;
+
+      for (const r of successfulProducts) {
+        const pim = pimProducts.find((p: any) => p.sku === r.sku);
+        if (!pim) continue;
+
+        try {
+          // Update product_sync_status
+          const syncStatusUpdate: Record<string, any> = {
+            last_synced_at: now,
+            sync_count: 1, // will be incremented via upsert
+          };
+          if (scope === 'FULL') {
+            // Update all scope timestamps
+            for (const col of Object.values(scopeTimestampCol)) {
+              syncStatusUpdate[col] = now;
+            }
+          } else if (scopeTimestampCol[scope]) {
+            syncStatusUpdate[scopeTimestampCol[scope]] = now;
+          }
+
+          await supabase.from('product_sync_status').upsert({
+            product_id: pim.id,
+            tenant_id: tenantId,
+            ...syncStatusUpdate,
+          }, { onConflict: 'product_id' });
+
+          // Clear dirty flags on products table
+          const productUpdate: Record<string, any> = {};
+          if (scope === 'FULL') {
+            for (const col of Object.values(dirtyFlagCol)) {
+              productUpdate[col] = false;
+            }
+          } else if (dirtyFlagCol[scope]) {
+            productUpdate[dirtyFlagCol[scope]] = false;
+          }
+
+          if (Object.keys(productUpdate).length > 0) {
+            await supabase.from('products').update(productUpdate).eq('id', pim.id);
+          }
+
+          // Update products.woocommerce_product_id for creates
+          if (r.action === 'created') {
+            const wooIdMatch = r.message.match(/WC #(\d+)/);
+            if (wooIdMatch) {
+              const wooId = parseInt(wooIdMatch[1]);
+              await supabase.from('products').update({
+                woocommerce_product_id: wooId,
+              }).eq('id', pim.id);
+            }
+          }
+        } catch (syncStatusErr) {
+          console.warn(`Non-critical: failed to update sync status for ${pim.sku}:`, syncStatusErr);
+        }
+      }
+      console.log(`✓ Updated sync status for ${successfulProducts.length} products (scope: ${scope})`);
     }
 
     // Log to changelog
