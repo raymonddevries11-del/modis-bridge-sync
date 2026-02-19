@@ -16,15 +16,13 @@ import {
 } from "@/components/ui/tooltip";
 import {
   RefreshCw, Loader2, ExternalLink, Search, Image as ImageIcon, Send, CheckCircle2, XCircle, ArrowRight, Clock,
-  ArrowUp, ArrowDown, ArrowUpDown,
+  ArrowUp, ArrowDown, ArrowUpDown, Filter,
 } from "lucide-react";
 import { toast } from "sonner";
 
 interface WooProductTableProps {
   tenantId: string;
 }
-
-type SyncFilter = "all" | "synced" | "unsynced" | "recently_pushed";
 
 interface FieldChange {
   field: string;
@@ -47,7 +45,6 @@ const ChangeBadges = ({ pushData }: { pushData: any }) => {
 
   const action = pushData.action;
   const fields: FieldChange[] = pushData.fields || [];
-  const pushedAt = pushData.pushed_at;
 
   const actionBadge = () => {
     switch (action) {
@@ -108,7 +105,6 @@ const ChangeBadges = ({ pushData }: { pushData: any }) => {
 
 export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
   const [search, setSearch] = useState("");
-  const [syncFilter, setSyncFilter] = useState<SyncFilter>("all");
   const [sortBy, setSortBy] = useState<string>("last_fetched_at");
   const [sortAsc, setSortAsc] = useState(false);
   const [fetching, setFetching] = useState(false);
@@ -117,24 +113,53 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
 
-  // Reset page when filters change
+  // Column filters
+  const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterStock, setFilterStock] = useState<string>("all");
+  const [filterPim, setFilterPim] = useState<string>("all");
+  const [filterPush, setFilterPush] = useState<string>("all");
+  const [filterChanges, setFilterChanges] = useState<string>("all");
+
   const resetPage = () => setPage(0);
 
-  // Get total count
+  const applyFilters = (query: any) => {
+    if (search) {
+      query = query.or(`sku.ilike.%${search}%,name.ilike.%${search}%`);
+    }
+    if (filterStatus !== "all") {
+      query = query.eq("status", filterStatus);
+    }
+    if (filterStock === "instock") {
+      query = query.eq("stock_status", "instock");
+    } else if (filterStock === "outofstock") {
+      query = query.eq("stock_status", "outofstock");
+    } else if (filterStock === "has_stock") {
+      query = query.gt("stock_quantity", 0);
+    } else if (filterStock === "no_stock") {
+      query = query.or("stock_quantity.is.null,stock_quantity.eq.0");
+    }
+    if (filterPim === "synced") {
+      query = query.not("product_id", "is", null);
+    } else if (filterPim === "unsynced") {
+      query = query.is("product_id", null);
+    }
+    if (filterPush === "pushed") {
+      query = query.not("last_pushed_at", "is", null);
+    } else if (filterPush === "not_pushed") {
+      query = query.is("last_pushed_at", null);
+    }
+    return query;
+  };
+
   const { data: totalCount } = useQuery({
-    queryKey: ["woo-products-count", tenantId, search, syncFilter],
+    queryKey: ["woo-products-count", tenantId, search, filterStatus, filterStock, filterPim, filterPush, filterChanges],
     queryFn: async () => {
       let query = supabase
         .from("woo_products")
         .select("id", { count: "exact", head: true })
         .eq("tenant_id", tenantId);
 
-      if (search) {
-        query = query.or(`sku.ilike.%${search}%,name.ilike.%${search}%`);
-      }
-      if (syncFilter === "synced") query = query.not("product_id", "is", null);
-      else if (syncFilter === "unsynced") query = query.is("product_id", null);
-      else if (syncFilter === "recently_pushed") query = query.not("last_pushed_at", "is", null);
+      query = applyFilters(query);
 
       const { count, error } = await query;
       if (error) throw error;
@@ -144,7 +169,7 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
   });
 
   const { data: wooProducts, isLoading, refetch } = useQuery({
-    queryKey: ["woo-products", tenantId, search, syncFilter, sortBy, sortAsc, page],
+    queryKey: ["woo-products", tenantId, search, filterStatus, filterStock, filterPim, filterPush, filterChanges, sortBy, sortAsc, page],
     queryFn: async () => {
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
@@ -156,18 +181,22 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
         .order(sortBy, { ascending: sortAsc, nullsFirst: false })
         .range(from, to);
 
-      if (search) {
-        query = query.or(`sku.ilike.%${search}%,name.ilike.%${search}%`);
-      }
-      if (syncFilter === "synced") query = query.not("product_id", "is", null);
-      else if (syncFilter === "unsynced") query = query.is("product_id", null);
-      else if (syncFilter === "recently_pushed") query = query.not("last_pushed_at", "is", null);
+      query = applyFilters(query);
 
       const { data, error } = await query;
       if (error) throw error;
       return data;
     },
     enabled: !!tenantId,
+  });
+
+  // Client-side filter for changes (since it's JSONB)
+  const filteredProducts = wooProducts?.filter((wp: any) => {
+    if (filterChanges === "all") return true;
+    const pushData = wp.last_push_changes as any;
+    if (filterChanges === "has_changes") return pushData?.action === "updated" || pushData?.action === "created";
+    if (filterChanges === "no_changes") return !pushData || pushData?.action === "checked";
+    return true;
   });
 
   const handleFetchAll = async () => {
@@ -209,7 +238,6 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
     setPushingAll(true);
     try {
       const productIds = linked.map((wp: any) => wp.product_id);
-      // Push in batches of 10
       const batchSize = 10;
       let totalCreated = 0, totalUpdated = 0, totalSkipped = 0, totalErrors = 0;
 
@@ -255,7 +283,7 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
       setSortAsc(!sortAsc);
     } else {
       setSortBy(col);
-      setSortAsc(col === "name" || col === "sku"); // text cols default asc
+      setSortAsc(col === "name" || col === "sku");
     }
     resetPage();
   };
@@ -263,6 +291,18 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
   const SortIcon = ({ col }: { col: string }) => {
     if (sortBy !== col) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />;
     return sortAsc ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />;
+  };
+
+  const activeFilterCount = [filterStatus, filterStock, filterPim, filterPush, filterChanges].filter(f => f !== "all").length;
+
+  const clearAllFilters = () => {
+    setFilterStatus("all");
+    setFilterStock("all");
+    setFilterPim("all");
+    setFilterPush("all");
+    setFilterChanges("all");
+    setSearch("");
+    resetPage();
   };
 
   return (
@@ -273,15 +313,6 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Zoek op SKU of naam..." value={search} onChange={(e) => { setSearch(e.target.value); resetPage(); }} className="pl-9" />
         </div>
-        <Select value={syncFilter} onValueChange={(v) => { setSyncFilter(v as SyncFilter); resetPage(); }}>
-          <SelectTrigger className="w-[180px]"><SelectValue placeholder="Filter" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Alle producten</SelectItem>
-            <SelectItem value="synced">Gekoppeld aan PIM</SelectItem>
-            <SelectItem value="unsynced">Niet gekoppeld</SelectItem>
-            <SelectItem value="recently_pushed">Recent gepusht</SelectItem>
-          </SelectContent>
-        </Select>
         <Button variant="outline" size="sm" disabled={fetching} onClick={handleFetchAll}>
           {fetching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
           {fetching ? "Ophalen..." : "Ophalen uit WC"}
@@ -292,6 +323,75 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
             {pushingAll ? "Pushen..." : `Push ${linkedCount} gekoppelde`}
           </Button>
         )}
+        {activeFilterCount > 0 && (
+          <Button variant="ghost" size="sm" onClick={clearAllFilters} className="text-muted-foreground">
+            <XCircle className="mr-1.5 h-3.5 w-3.5" />
+            {activeFilterCount} filter{activeFilterCount > 1 ? "s" : ""} wissen
+          </Button>
+        )}
+      </div>
+
+      {/* Column Filters */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Filter className="h-4 w-4 text-muted-foreground" />
+        <Select value={filterStatus} onValueChange={(v) => { setFilterStatus(v); resetPage(); }}>
+          <SelectTrigger className="h-8 w-[130px] text-xs">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alle statussen</SelectItem>
+            <SelectItem value="publish">Publish</SelectItem>
+            <SelectItem value="draft">Draft</SelectItem>
+            <SelectItem value="private">Private</SelectItem>
+            <SelectItem value="pending">Pending</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={filterStock} onValueChange={(v) => { setFilterStock(v); resetPage(); }}>
+          <SelectTrigger className="h-8 w-[140px] text-xs">
+            <SelectValue placeholder="Voorraad" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alle voorraad</SelectItem>
+            <SelectItem value="instock">Op voorraad</SelectItem>
+            <SelectItem value="outofstock">Uitverkocht</SelectItem>
+            <SelectItem value="has_stock">Voorraad &gt; 0</SelectItem>
+            <SelectItem value="no_stock">Voorraad = 0</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={filterPim} onValueChange={(v) => { setFilterPim(v); resetPage(); }}>
+          <SelectTrigger className="h-8 w-[140px] text-xs">
+            <SelectValue placeholder="PIM koppeling" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alle koppelingen</SelectItem>
+            <SelectItem value="synced">Gekoppeld</SelectItem>
+            <SelectItem value="unsynced">Niet gekoppeld</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={filterPush} onValueChange={(v) => { setFilterPush(v); resetPage(); }}>
+          <SelectTrigger className="h-8 w-[140px] text-xs">
+            <SelectValue placeholder="Laatste push" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alle pushes</SelectItem>
+            <SelectItem value="pushed">Gepusht</SelectItem>
+            <SelectItem value="not_pushed">Nooit gepusht</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={filterChanges} onValueChange={(v) => { setFilterChanges(v); resetPage(); }}>
+          <SelectTrigger className="h-8 w-[150px] text-xs">
+            <SelectValue placeholder="Wijzigingen" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alle wijzigingen</SelectItem>
+            <SelectItem value="has_changes">Met wijzigingen</SelectItem>
+            <SelectItem value="no_changes">Geen wijzigingen</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Table */}
@@ -299,15 +399,19 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
-      ) : !wooProducts || wooProducts.length === 0 ? (
+      ) : !filteredProducts || filteredProducts.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <p>Geen WooCommerce producten gevonden.</p>
-          <p className="text-sm mt-1">Klik op "Ophalen uit WC" om te starten.</p>
+          {activeFilterCount > 0 ? (
+            <Button variant="link" size="sm" onClick={clearAllFilters} className="mt-1">Filters wissen</Button>
+          ) : (
+            <p className="text-sm mt-1">Klik op "Ophalen uit WC" om te starten.</p>
+          )}
         </div>
       ) : (
         <>
           <p className="text-sm text-muted-foreground">
-            {totalCount != null ? `${totalCount} producten totaal` : `${wooProducts.length} producten`}
+            {totalCount != null ? `${totalCount} producten totaal` : `${filteredProducts.length} producten`}
             {totalCount != null && totalCount > PAGE_SIZE && ` — pagina ${page + 1} van ${Math.ceil(totalCount / PAGE_SIZE)}`}
           </p>
           <div className="border rounded-lg">
@@ -339,7 +443,7 @@ export const WooProductTable = ({ tenantId }: WooProductTableProps) => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {wooProducts.map((wp: any) => {
+                {filteredProducts.map((wp: any) => {
                   const firstImage = Array.isArray(wp.images) && wp.images.length > 0 ? wp.images[0] : null;
                   const pushData = wp.last_push_changes as any;
                   const hasRecentPush = pushData?.action === "updated" || pushData?.action === "created";
