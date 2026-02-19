@@ -1037,6 +1037,12 @@ Deno.serve(async (req) => {
               console.log(`[${pim.sku}] Removed 'Sale' tag (is_promotion=false)`);
             }
           }
+
+          // --- Brand taxonomy for Perfect WooCommerce Brands plugin ---
+          if (brand) {
+            desiredData.brands = [{ name: brand }];
+            console.log(`[${pim.sku}] Set brand taxonomy: "${brand}"`);
+          }
         }
 
         // --- Pre-flight attribute consistency check: every attr MUST have a name ---
