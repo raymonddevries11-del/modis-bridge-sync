@@ -581,6 +581,67 @@ serve(async (req) => {
       }
     }
 
+    // ── Step 3b: Semantic attribute validation (article only) ─────
+    // Check that key business attributes (Type schoen, Kleur) are present
+    // in the attribuut-nm-* / attribuut-waarde-* pairs
+    if (schema.fileType === "article" && itemCount > 0) {
+      const REQUIRED_ATTRIBUTES = ["Type", "Kleur"];
+      let missingTypeCount = 0;
+      let missingKleurCount = 0;
+      const missingTypeSamples: string[] = [];
+      const missingKleurSamples: string[] = [];
+
+      for (const idx of sampleIndices) {
+        const itemXml = items[idx];
+        const sku = extractChildValue(itemXml, "artikelnummer") || `item-${idx}`;
+
+        // Extract all attribuut-nm-* values for this item
+        const foundAttrNames: string[] = [];
+        for (let i = 1; i <= 20; i++) {
+          const attrName = extractChildValue(itemXml, `attribuut-nm-${i}`);
+          if (attrName && attrName.trim()) {
+            foundAttrNames.push(attrName.trim());
+          }
+        }
+
+        // Check for "Type" (case-insensitive, also matches "Type schoen", "Type koffer", etc.)
+        const hasType = foundAttrNames.some(n => n.toLowerCase().startsWith("type"));
+        if (!hasType) {
+          missingTypeCount++;
+          if (missingTypeSamples.length < 5) missingTypeSamples.push(sku);
+        }
+
+        // Check for "Kleur" attribute (distinct from the <kleur> element — this is the webshop attribute)
+        const hasKleur = foundAttrNames.some(n => n.toLowerCase() === "kleur");
+        if (!hasKleur) {
+          missingKleurCount++;
+          if (missingKleurSamples.length < 5) missingKleurSamples.push(sku);
+        }
+      }
+
+      if (missingTypeCount > 0) {
+        allWarnings.push({
+          level: "warning",
+          field: "attribuut:Type",
+          message: `${missingTypeCount}/${sampleIndices.length} artikelen missen attribuut 'Type' (schoen/koffer/etc.) — eerste: ${missingTypeSamples.join(", ")}`,
+          xsdRule: "business-rule:required-attribute",
+        });
+      }
+
+      if (missingKleurCount > 0) {
+        allWarnings.push({
+          level: "warning",
+          field: "attribuut:Kleur",
+          message: `${missingKleurCount}/${sampleIndices.length} artikelen missen attribuut 'Kleur' — eerste: ${missingKleurSamples.join(", ")}`,
+          xsdRule: "business-rule:required-attribute",
+        });
+      }
+
+      // Track in field presence stats
+      fieldPresence["_semantic:Type"] = sampleIndices.length - missingTypeCount;
+      fieldPresence["_semantic:Kleur"] = sampleIndices.length - missingKleurCount;
+    }
+
     // Duplicate warnings
     if (duplicateSkuMaatPairs.length > 0) {
       allWarnings.push({
@@ -608,8 +669,13 @@ serve(async (req) => {
       validation_mode: strict ? "strict" : "permissive",
       field_coverage: Object.fromEntries(
         Object.entries(fieldPresence)
-          .filter(([k]) => !k.startsWith("_extra:"))
+          .filter(([k]) => !k.startsWith("_extra:") && !k.startsWith("_semantic:"))
           .map(([k, v]) => [k, `${v}/${sampleIndices.length}`])
+      ),
+      semantic_attribute_coverage: Object.fromEntries(
+        Object.entries(fieldPresence)
+          .filter(([k]) => k.startsWith("_semantic:"))
+          .map(([k, v]) => [k.replace("_semantic:", ""), `${v}/${sampleIndices.length}`])
       ),
       extra_fields: Object.entries(fieldPresence)
         .filter(([k]) => k.startsWith("_extra:"))
