@@ -1006,7 +1006,8 @@ Deno.serve(async (req) => {
         const pimColor = pim.color as any;
         const colorWebshop = pimColor?.webshop;
         if (!skipAttrTaxonomy && colorWebshop) {
-          const colorAttr = globalAttrMap.get('color-webshop') || globalAttrMap.get('kleur-webshop') || pimToWooMap.get('color-webshop');
+          const colorAttr = pimToWooMap.get('color-webshop') || globalAttrMap.get('kleur') || globalAttrMap.get('color-webshop') || globalAttrMap.get('kleur-webshop');
+          if (!colorAttr) console.warn(`  ⚠ Color-webshop "${colorWebshop}" — no WC global attribute found for Kleur`);
           if (colorAttr && colorAttr.id > 0 && !usedAttrIds.has(colorAttr.id)) {
             const colorTermDetails = await ensureAttributeTerms(config.woocommerce_url, wooAuth, colorAttr.id, colorAttr.name, [colorWebshop], rateLimiter, cachedTermsByAttrId.get(colorAttr.id) || null, supabase, tenantId, true) as TermResult;
             const termId = colorTermDetails.termMap.get(colorWebshop.toLowerCase()) || null;
