@@ -26,9 +26,48 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+    // ── XSD Validation Gate ───────────────────────────────────────
+    console.log(`Running XSD validation for ${fileName}...`);
+    const { data: valResult, error: valError } = await supabase.functions.invoke('validate-inbound-xml', {
+      body: { fileName, xmlContent, tenantId, strict: true },
+    });
+
+    if (valError) {
+      console.error('XSD validation call failed:', valError);
+      // Non-blocking: log but continue processing
+    } else if (valResult && !valResult.valid) {
+      const errorCount = valResult.stats?.xsd_errors ?? valResult.errors?.length ?? 0;
+      console.error(`XSD validation FAILED: ${errorCount} errors found`);
+
+      await supabase.from('changelog').insert({
+        tenant_id: tenantId,
+        event_type: 'XML_VALIDATION_REJECTED',
+        description: `Voorraadbestand '${fileName}' afgewezen door XSD validatie: ${errorCount} fouten gevonden.`,
+        metadata: {
+          fileName,
+          fileType: valResult.fileType,
+          errorCount,
+          firstErrors: (valResult.errors || []).slice(0, 5),
+        },
+      });
+
+      return new Response(
+        JSON.stringify({
+          error: 'XML validation failed',
+          valid: false,
+          errorCount,
+          errors: (valResult.errors || []).slice(0, 20),
+          message: `Bestand '${fileName}' voldoet niet aan het XSD schema. ${errorCount} fouten gevonden.`,
+        }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    } else {
+      console.log(`XSD validation PASSED for ${fileName} (${valResult?.itemCount} items, ${valResult?.stats?.xsd_warnings ?? 0} warnings)`);
+    }
+
     // Parse XML
     const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(xmlContent, 'text/html'); // Use text/html for more lenient parsing
+    const xmlDoc = parser.parseFromString(xmlContent, 'text/html');
 
     if (!xmlDoc) {
       throw new Error('Failed to parse XML');
