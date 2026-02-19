@@ -5,6 +5,37 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Batch sizes per scope
+const SCOPE_BATCH_SIZES: Record<string, number> = {
+  PRICE_STOCK: 50,
+  CONTENT: 25,
+  TAXONOMY: 25,
+  MEDIA: 10,
+  VARIATIONS: 10,
+};
+
+const DEFAULT_BATCH_SIZE = 50;
+
+/** Check if a tenant is rate-limited (cooldown active or no tokens) */
+async function isTenantThrottled(supabase: any, tenantId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('rate_limit_state')
+    .select('tokens, cooldown_until')
+    .eq('tenant_id', tenantId)
+    .maybeSingle();
+
+  if (!data) return false; // no rate limit record = not throttled
+
+  const now = new Date();
+  if (data.cooldown_until && new Date(data.cooldown_until) > now) {
+    return true;
+  }
+  if (data.tokens <= 0) {
+    return true;
+  }
+  return false;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -16,7 +47,7 @@ Deno.serve(async (req) => {
   );
 
   try {
-    // Load batch config (default: 50 products per job, 60s window, 200 max products per drain)
+    // Load batch config
     const { data: batchConfig } = await supabase
       .from('config')
       .select('value')
@@ -24,18 +55,17 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     const config = (batchConfig?.value as Record<string, number>) || {};
-    const BATCH_SIZE = config.batch_size || 50;
     const WINDOW_SECONDS = config.window_seconds || 60;
     const MAX_PRODUCTS_PER_DRAIN = config.max_products_per_drain || 200;
+    const MAX_QUEUE_SIZE = config.max_queue_size || 10;
 
-    // Check current queue depth — skip if already saturated
+    // Check current queue depth
     const { count: currentQueueSize } = await supabase
       .from('jobs')
       .select('id', { count: 'exact', head: true })
       .eq('type', 'SYNC_TO_WOO')
       .in('state', ['ready', 'processing']);
 
-    const MAX_QUEUE_SIZE = config.max_queue_size || 10;
     if ((currentQueueSize || 0) >= MAX_QUEUE_SIZE) {
       console.log(`Queue already has ${currentQueueSize} active jobs (max ${MAX_QUEUE_SIZE}) — skipping drain`);
       return new Response(JSON.stringify({ drained: 0, jobs: 0, skipped: true, reason: 'queue_full', currentQueueSize }), {
@@ -48,12 +78,14 @@ Deno.serve(async (req) => {
     // Only drain items older than the batch window (debounce)
     const cutoff = new Date(Date.now() - WINDOW_SECONDS * 1000).toISOString();
 
-    // Fetch pending syncs, capped to max_products_per_drain
+    // Fetch pending syncs ordered by priority DESC (highest first), then oldest first
     const { data: pending, error: fetchErr } = await supabase
       .from('pending_product_syncs')
-      .select('product_id, tenant_id, reason')
-      .lte('created_at', cutoff)
-      .order('created_at', { ascending: true })
+      .select('id, product_id, tenant_id, sync_scope, priority')
+      .eq('status', 'PENDING')
+      .lte('last_seen_at', cutoff)
+      .order('priority', { ascending: false })
+      .order('last_seen_at', { ascending: true })
       .limit(MAX_PRODUCTS_PER_DRAIN);
 
     if (fetchErr) throw fetchErr;
@@ -64,7 +96,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    console.log(`Draining ${pending.length} pending syncs (window=${WINDOW_SECONDS}s, batch=${BATCH_SIZE}, slots=${slotsAvailable})`);
+    console.log(`Draining ${pending.length} pending syncs (window=${WINDOW_SECONDS}s, slots=${slotsAvailable})`);
 
     // Build set of product IDs already in queued jobs to avoid duplicates
     const alreadyQueued = new Set<string>();
@@ -83,17 +115,48 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Group by tenant, filtering out already-queued products
-    const byTenant = new Map<string, Set<string>>();
+    // Check throttled tenants
+    const tenantIds = [...new Set(pending.map(p => p.tenant_id))];
+    const throttledTenants = new Set<string>();
+    for (const tid of tenantIds) {
+      if (await isTenantThrottled(supabase, tid)) {
+        throttledTenants.add(tid);
+      }
+    }
+
+    if (throttledTenants.size > 0) {
+      console.log(`Rate-limited tenants: ${throttledTenants.size} — deferring their items`);
+    }
+
+    // Group by (tenant_id, sync_scope), filtering out already-queued and throttled
+    const groupKey = (tenantId: string, scope: string) => `${tenantId}::${scope}`;
+    const groups = new Map<string, { tenantId: string; scope: string; productIds: string[]; priority: number }>();
     let skippedCount = 0;
+    const pendingIdsToDelete: string[] = [];
+
     for (const row of pending) {
       if (alreadyQueued.has(row.product_id)) {
         skippedCount++;
+        pendingIdsToDelete.push(row.id);
         continue;
       }
-      const tid = row.tenant_id;
-      if (!byTenant.has(tid)) byTenant.set(tid, new Set());
-      byTenant.get(tid)!.add(row.product_id);
+      if (throttledTenants.has(row.tenant_id)) {
+        continue; // leave in queue for next drain
+      }
+
+      const key = groupKey(row.tenant_id, row.sync_scope || 'PRICE_STOCK');
+      if (!groups.has(key)) {
+        groups.set(key, {
+          tenantId: row.tenant_id,
+          scope: row.sync_scope || 'PRICE_STOCK',
+          productIds: [],
+          priority: row.priority || 50,
+        });
+      }
+      const group = groups.get(key)!;
+      group.productIds.push(row.product_id);
+      group.priority = Math.max(group.priority, row.priority || 50);
+      pendingIdsToDelete.push(row.id);
     }
 
     if (skippedCount > 0) {
@@ -102,29 +165,31 @@ Deno.serve(async (req) => {
 
     let jobsCreated = 0;
 
-    for (const [tenantId, productIds] of byTenant) {
-      const ids = Array.from(productIds);
+    for (const [, group] of groups) {
+      const batchSize = SCOPE_BATCH_SIZES[group.scope] || DEFAULT_BATCH_SIZE;
+      const ids = group.productIds;
 
-      // Split into batches, but respect remaining queue slots
-      for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      for (let i = 0; i < ids.length; i += batchSize) {
         if (jobsCreated >= slotsAvailable) {
           console.log(`Reached queue slot limit (${slotsAvailable}), deferring remaining products`);
           break;
         }
 
-        const batch = ids.slice(i, i + BATCH_SIZE);
+        const batch = ids.slice(i, i + batchSize);
         const { error: jobErr } = await supabase
           .from('jobs')
           .insert({
             type: 'SYNC_TO_WOO',
             state: 'ready',
-            payload: { productIds: batch },
-            tenant_id: tenantId,
+            payload: { productIds: batch, syncScope: group.scope },
+            tenant_id: group.tenantId,
+            scope: group.scope,
+            priority: group.priority,
           });
 
         if (jobErr) {
           if (jobErr.code === '23505') {
-            console.log(`Skipped duplicate job for batch of ${batch.length}`);
+            console.log(`Skipped duplicate job for ${group.scope} batch of ${batch.length}`);
           } else {
             console.error('Error creating job:', jobErr);
           }
@@ -134,16 +199,13 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Delete drained rows
-    const productIdsToDelete = pending.map(p => p.product_id);
-    // Delete in chunks of 200 to avoid query size limits
-    for (let i = 0; i < productIdsToDelete.length; i += 200) {
-      const chunk = productIdsToDelete.slice(i, i + 200);
+    // Delete drained rows (by ID for precision)
+    for (let i = 0; i < pendingIdsToDelete.length; i += 200) {
+      const chunk = pendingIdsToDelete.slice(i, i + 200);
       await supabase
         .from('pending_product_syncs')
         .delete()
-        .in('product_id', chunk)
-        .lte('created_at', cutoff);
+        .in('id', chunk);
     }
 
     console.log(`Drained ${pending.length} pending → ${jobsCreated} jobs`);
@@ -151,9 +213,9 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({
       drained: pending.length,
       skipped: skippedCount,
+      throttled: throttledTenants.size,
       jobs: jobsCreated,
-      tenants: byTenant.size,
-      batchSize: BATCH_SIZE,
+      groups: groups.size,
       windowSeconds: WINDOW_SECONDS,
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

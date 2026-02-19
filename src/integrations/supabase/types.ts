@@ -426,8 +426,13 @@ export type Database = {
           created_at: string
           error: string | null
           id: string
+          locked_at: string | null
+          locked_by: string | null
+          next_run_at: string
           payload: Json
           payload_hash: string | null
+          priority: number
+          scope: string | null
           state: Database["public"]["Enums"]["job_state"]
           tenant_id: string | null
           type: string
@@ -438,8 +443,13 @@ export type Database = {
           created_at?: string
           error?: string | null
           id?: string
+          locked_at?: string | null
+          locked_by?: string | null
+          next_run_at?: string
           payload: Json
           payload_hash?: string | null
+          priority?: number
+          scope?: string | null
           state?: Database["public"]["Enums"]["job_state"]
           tenant_id?: string | null
           type: string
@@ -450,8 +460,13 @@ export type Database = {
           created_at?: string
           error?: string | null
           id?: string
+          locked_at?: string | null
+          locked_by?: string | null
+          next_run_at?: string
           payload?: Json
           payload_hash?: string | null
+          priority?: number
+          scope?: string | null
           state?: Database["public"]["Enums"]["job_state"]
           tenant_id?: string | null
           type?: string
@@ -570,21 +585,51 @@ export type Database = {
       }
       pending_product_syncs: {
         Row: {
+          attempts: number
           created_at: string
+          id: string
+          last_seen_at: string
+          locked_at: string | null
+          locked_by: string | null
+          next_retry_at: string | null
+          payload_hint: Json | null
+          priority: number
           product_id: string
-          reason: string
+          reason: string | null
+          status: string
+          sync_scope: string
           tenant_id: string
         }
         Insert: {
+          attempts?: number
           created_at?: string
+          id?: string
+          last_seen_at?: string
+          locked_at?: string | null
+          locked_by?: string | null
+          next_retry_at?: string | null
+          payload_hint?: Json | null
+          priority?: number
           product_id: string
-          reason: string
+          reason?: string | null
+          status?: string
+          sync_scope?: string
           tenant_id: string
         }
         Update: {
+          attempts?: number
           created_at?: string
+          id?: string
+          last_seen_at?: string
+          locked_at?: string | null
+          locked_by?: string | null
+          next_retry_at?: string | null
+          payload_hint?: Json | null
+          priority?: number
           product_id?: string
-          reason?: string
+          reason?: string | null
+          status?: string
+          sync_scope?: string
           tenant_id?: string
         }
         Relationships: []
@@ -705,21 +750,45 @@ export type Database = {
       product_sync_status: {
         Row: {
           created_at: string
+          last_error: string | null
+          last_error_at: string | null
           last_synced_at: string | null
+          last_synced_at_content: string | null
+          last_synced_at_media: string | null
+          last_synced_at_price_stock: string | null
+          last_synced_at_taxonomy: string | null
+          last_synced_at_variations: string | null
           product_id: string
           sync_count: number
+          tenant_id: string | null
         }
         Insert: {
           created_at?: string
+          last_error?: string | null
+          last_error_at?: string | null
           last_synced_at?: string | null
+          last_synced_at_content?: string | null
+          last_synced_at_media?: string | null
+          last_synced_at_price_stock?: string | null
+          last_synced_at_taxonomy?: string | null
+          last_synced_at_variations?: string | null
           product_id: string
           sync_count?: number
+          tenant_id?: string | null
         }
         Update: {
           created_at?: string
+          last_error?: string | null
+          last_error_at?: string | null
           last_synced_at?: string | null
+          last_synced_at_content?: string | null
+          last_synced_at_media?: string | null
+          last_synced_at_price_stock?: string | null
+          last_synced_at_taxonomy?: string | null
+          last_synced_at_variations?: string | null
           product_id?: string
           sync_count?: number
+          tenant_id?: string | null
         }
         Relationships: [
           {
@@ -740,6 +809,11 @@ export type Database = {
           color: Json | null
           cost_price: number | null
           created_at: string
+          dirty_content: boolean
+          dirty_media: boolean
+          dirty_price_stock: boolean
+          dirty_taxonomy: boolean
+          dirty_variations: boolean
           discount_percentage: number | null
           field_sources: Json
           id: string
@@ -760,10 +834,19 @@ export type Database = {
           tenant_id: string | null
           title: string
           updated_at: string
+          updated_at_content: string | null
+          updated_at_media: string | null
+          updated_at_price_stock: string | null
+          updated_at_taxonomy: string | null
+          updated_at_variations: string | null
           url_key: string | null
           webshop_date: string | null
           webshop_text: string | null
           webshop_text_en: string | null
+          woo_main_image_url: string | null
+          woo_permalink: string | null
+          woo_slug: string | null
+          woocommerce_product_id: number | null
         }
         Insert: {
           article_group?: Json | null
@@ -773,6 +856,11 @@ export type Database = {
           color?: Json | null
           cost_price?: number | null
           created_at?: string
+          dirty_content?: boolean
+          dirty_media?: boolean
+          dirty_price_stock?: boolean
+          dirty_taxonomy?: boolean
+          dirty_variations?: boolean
           discount_percentage?: number | null
           field_sources?: Json
           id?: string
@@ -793,10 +881,19 @@ export type Database = {
           tenant_id?: string | null
           title: string
           updated_at?: string
+          updated_at_content?: string | null
+          updated_at_media?: string | null
+          updated_at_price_stock?: string | null
+          updated_at_taxonomy?: string | null
+          updated_at_variations?: string | null
           url_key?: string | null
           webshop_date?: string | null
           webshop_text?: string | null
           webshop_text_en?: string | null
+          woo_main_image_url?: string | null
+          woo_permalink?: string | null
+          woo_slug?: string | null
+          woocommerce_product_id?: number | null
         }
         Update: {
           article_group?: Json | null
@@ -806,6 +903,11 @@ export type Database = {
           color?: Json | null
           cost_price?: number | null
           created_at?: string
+          dirty_content?: boolean
+          dirty_media?: boolean
+          dirty_price_stock?: boolean
+          dirty_taxonomy?: boolean
+          dirty_variations?: boolean
           discount_percentage?: number | null
           field_sources?: Json
           id?: string
@@ -826,10 +928,19 @@ export type Database = {
           tenant_id?: string | null
           title?: string
           updated_at?: string
+          updated_at_content?: string | null
+          updated_at_media?: string | null
+          updated_at_price_stock?: string | null
+          updated_at_taxonomy?: string | null
+          updated_at_variations?: string | null
           url_key?: string | null
           webshop_date?: string | null
           webshop_text?: string | null
           webshop_text_en?: string | null
+          woo_main_image_url?: string | null
+          woo_permalink?: string | null
+          woo_slug?: string | null
+          woocommerce_product_id?: number | null
         }
         Relationships: [
           {
@@ -850,6 +961,47 @@ export type Database = {
             foreignKeyName: "products_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rate_limit_state: {
+        Row: {
+          capacity: number
+          cooldown_until: string | null
+          last_refill_at: string
+          penalty_factor: number
+          refill_per_minute: number
+          tenant_id: string
+          tokens: number
+          updated_at: string
+        }
+        Insert: {
+          capacity?: number
+          cooldown_until?: string | null
+          last_refill_at?: string
+          penalty_factor?: number
+          refill_per_minute?: number
+          tenant_id: string
+          tokens?: number
+          updated_at?: string
+        }
+        Update: {
+          capacity?: number
+          cooldown_until?: string | null
+          last_refill_at?: string
+          penalty_factor?: number
+          refill_per_minute?: number
+          tenant_id?: string
+          tokens?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rate_limit_state_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
             referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
@@ -925,6 +1077,48 @@ export type Database = {
           created_at?: string
           id?: string
           name?: string
+        }
+        Relationships: []
+      }
+      sync_log: {
+        Row: {
+          created_at: string
+          duration_ms: number | null
+          id: string
+          job_id: string | null
+          product_id: string | null
+          request_body: Json | null
+          request_hash: string | null
+          response_body: string | null
+          response_status: number | null
+          scope: string | null
+          tenant_id: string
+        }
+        Insert: {
+          created_at?: string
+          duration_ms?: number | null
+          id?: string
+          job_id?: string | null
+          product_id?: string | null
+          request_body?: Json | null
+          request_hash?: string | null
+          response_body?: string | null
+          response_status?: number | null
+          scope?: string | null
+          tenant_id: string
+        }
+        Update: {
+          created_at?: string
+          duration_ms?: number | null
+          id?: string
+          job_id?: string | null
+          product_id?: string | null
+          request_body?: Json | null
+          request_hash?: string | null
+          response_body?: string | null
+          response_status?: number | null
+          scope?: string | null
+          tenant_id?: string
         }
         Relationships: []
       }
