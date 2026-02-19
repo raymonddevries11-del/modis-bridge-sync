@@ -35,7 +35,7 @@ const ChannelWooCommerce = () => {
     queryFn: async () => {
       const [productsRes, syncedRes, pendingRes, activeJobsRes, recentJobsRes] = await Promise.all([
         supabase.from("products").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
-        supabase.from("product_sync_status").select("product_id", { count: "exact", head: true }),
+        supabase.from("product_sync_status").select("product_id", { count: "exact", head: true }).eq("tenant_id", tenantId),
         supabase.from("pending_product_syncs").select("product_id", { count: "exact", head: true }).eq("tenant_id", tenantId),
         supabase.from("jobs").select("id", { count: "exact", head: true }).eq("type", "SYNC_TO_WOO").in("state", ["ready", "processing"]),
         supabase.from("jobs").select("id, state, created_at, updated_at, payload").eq("type", "SYNC_TO_WOO").order("created_at", { ascending: false }).limit(5),
