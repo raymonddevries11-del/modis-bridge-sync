@@ -195,6 +195,8 @@ const Validation = () => {
     const noAttributes: string[] = [];
     const noCategories: string[] = [];
     const missingEan: string[] = [];
+    const missingType: string[] = [];
+    const missingKleur: string[] = [];
     let totalVariants = 0;
     let variantsMissingEan = 0;
 
@@ -217,6 +219,14 @@ const Validation = () => {
       const attrs = p.attributes as Record<string, any> | null;
       const attrCount = attrs ? Object.keys(attrs).length : 0;
       if (attrCount < 3) noAttributes.push(p.id);
+
+      // Check for Type attribute (e.g. "Type schoen", "Type koffer")
+      const hasType = attrs ? Object.keys(attrs).some(k => k.toLowerCase().startsWith("type")) : false;
+      if (!hasType) missingType.push(p.id);
+
+      // Check for Kleur attribute
+      const hasKleur = attrs ? Object.keys(attrs).some(k => k.toLowerCase() === "kleur") : false;
+      if (!hasKleur) missingKleur.push(p.id);
 
       const cats = Array.isArray(p.categories) ? p.categories : [];
       if (cats.length === 0) noCategories.push(p.id);
@@ -314,6 +324,26 @@ const Validation = () => {
         count: noAttributes.length,
         total,
         productIds: noAttributes,
+      },
+      {
+        id: "missing-type",
+        label: "Geen Type attribuut",
+        description: "Attribuut 'Type' (schoen/koffer/etc.) ontbreekt — nodig voor categorisatie.",
+        icon: Tag,
+        severity: "warning",
+        count: missingType.length,
+        total,
+        productIds: missingType,
+      },
+      {
+        id: "missing-kleur",
+        label: "Geen Kleur attribuut",
+        description: "Attribuut 'Kleur' ontbreekt — verplicht voor Google Shopping.",
+        icon: Tag,
+        severity: "warning",
+        count: missingKleur.length,
+        total,
+        productIds: missingKleur,
       },
       {
         id: "no-categories",
