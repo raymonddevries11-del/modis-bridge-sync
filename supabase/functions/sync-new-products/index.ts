@@ -5,79 +5,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-/** Fetch SKUs from local woo_products cache */
-async function getLocalWooSkus(supabase: any): Promise<Set<string>> {
-  const { data, error } = await supabase
-    .from('woo_products')
-    .select('sku');
-
-  if (error) throw error;
-  return new Set((data || []).map((p: any) => p.sku).filter(Boolean));
-}
-
-/** Fallback: fetch SKUs from WooCommerce API with pagination and backoff */
-async function getApiWooSkus(config: any): Promise<Set<string>> {
-  const skus = new Set<string>();
-  let page = 1;
-  let consecutiveErrors = 0;
-  const MAX_PAGES = 50;
-  const BASE_DELAY = 800;
-
-  while (page <= MAX_PAGES) {
-    const url = new URL(`${config.woocommerce_url}/wp-json/wc/v3/products`);
-    url.searchParams.append('per_page', '100');
-    url.searchParams.append('page', page.toString());
-    url.searchParams.append('status', 'any');
-    url.searchParams.append('consumer_key', config.woocommerce_consumer_key);
-    url.searchParams.append('consumer_secret', config.woocommerce_consumer_secret);
-
-    try {
-      const response = await fetch(url.toString(), {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; PIM-Sync/1.0)',
-          'Accept': 'application/json',
-        },
-      });
-
-      if (response.status === 429 || response.status === 503) {
-        consecutiveErrors++;
-        const delay = BASE_DELAY * Math.pow(2, Math.min(consecutiveErrors, 5));
-        console.warn(`API rate limited (${response.status}), backing off ${delay}ms`);
-        await new Promise(r => setTimeout(r, delay));
-        continue; // retry same page
-      }
-
-      if (!response.ok) {
-        console.error(`WooCommerce API error page ${page}: ${response.status}`);
-        break;
-      }
-
-      consecutiveErrors = 0;
-      const products = await response.json();
-      for (const p of products) {
-        if (p.sku) skus.add(p.sku);
-      }
-
-      if (products.length < 100) break;
-      page++;
-
-      // polite delay between pages
-      await new Promise(r => setTimeout(r, BASE_DELAY));
-    } catch (e) {
-      consecutiveErrors++;
-      if (consecutiveErrors >= 3) {
-        console.error('Too many consecutive API errors, aborting fallback');
-        break;
-      }
-      const delay = BASE_DELAY * Math.pow(2, consecutiveErrors);
-      console.warn(`API fetch error, retrying in ${delay}ms:`, e);
-      await new Promise(r => setTimeout(r, delay));
-    }
-  }
-
-  return skus;
-}
-
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -90,61 +17,28 @@ Deno.serve(async (req) => {
 
     console.log('Starting sync-new-products...');
 
-    // Get all product SKUs from database
-    const { data: dbProducts, error: dbError } = await supabase
+    // Query products that don't have a WooCommerce ID yet (primary method)
+    const { data: newProducts, error: dbError } = await supabase
       .from('products')
-      .select('id, sku, title, tenant_id');
+      .select('id, sku, title, tenant_id')
+      .is('woocommerce_product_id', null)
+      .not('sku', 'is', null)
+      .not('title', 'is', null);
 
     if (dbError) throw dbError;
 
-    if (!dbProducts || dbProducts.length === 0) {
+    if (!newProducts || newProducts.length === 0) {
       return new Response(
-        JSON.stringify({ success: true, message: 'No products in database' }),
+        JSON.stringify({ success: true, message: 'No new products to create', new_products_found: 0 }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    console.log(`Found ${dbProducts.length} products in database`);
-
-    // Step 1: Try local cache
-    let wooSkus: Set<string>;
-    let source = 'local_cache';
-
-    try {
-      wooSkus = await getLocalWooSkus(supabase);
-      console.log(`Local cache: ${wooSkus.size} SKUs`);
-
-      // If cache is suspiciously empty, fall back to API
-      if (wooSkus.size === 0) {
-        console.warn('Local cache empty, falling back to WooCommerce API');
-        throw new Error('empty_cache');
-      }
-    } catch (cacheError) {
-      // Step 2: Fallback to API with pagination + backoff
-      console.log('Falling back to WooCommerce API...');
-      source = 'api_fallback';
-
-      const { data: tenantConfig } = await supabase
-        .from('tenant_config')
-        .select('*')
-        .limit(1)
-        .single();
-
-      if (!tenantConfig) throw new Error('No tenant config found');
-
-      wooSkus = await getApiWooSkus(tenantConfig);
-      console.log(`API fallback: ${wooSkus.size} SKUs`);
-    }
-
-    // Find products that don't exist in WooCommerce
-    const potentiallyMissing = dbProducts.filter(p => p.sku && p.title && !wooSkus.has(p.sku));
+    console.log(`Found ${newProducts.length} products without woocommerce_product_id`);
 
     // Check which products already have pending jobs to avoid duplicates
-    let missingProducts = potentiallyMissing;
-    if (potentiallyMissing.length > 0) {
-      const potentialIds = potentiallyMissing.map(p => p.id);
-      
-      // Fetch existing ready/processing jobs for these product IDs
+    let missingProducts = newProducts;
+    if (newProducts.length > 0) {
       const { data: existingJobs } = await supabase
         .from('jobs')
         .select('payload')
@@ -161,28 +55,26 @@ Deno.serve(async (req) => {
         }
       }
 
-      missingProducts = potentiallyMissing.filter(p => !alreadyQueued.has(p.id));
-      if (missingProducts.length < potentiallyMissing.length) {
-        console.log(`Filtered out ${potentiallyMissing.length - missingProducts.length} products already queued`);
+      missingProducts = newProducts.filter(p => !alreadyQueued.has(p.id));
+      if (missingProducts.length < newProducts.length) {
+        console.log(`Filtered out ${newProducts.length - missingProducts.length} products already queued`);
       }
     }
 
-    console.log(`Found ${missingProducts.length} new products to create (source: ${source})`);
+    console.log(`${missingProducts.length} new products to create`);
 
     if (missingProducts.length === 0) {
       return new Response(
         JSON.stringify({
           success: true,
-          message: 'All products already exist in WooCommerce',
-          source,
-          database_products: dbProducts.length,
-          woocommerce_products: wooSkus.size,
+          message: 'All new products already queued',
+          new_products_found: 0,
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Create jobs for new products (in batches of 3 to avoid 504 timeouts)
+    // Create jobs in batches of 3 (creation is heavier than update)
     const BATCH_SIZE = 3;
     let jobsCreated = 0;
 
@@ -192,10 +84,12 @@ Deno.serve(async (req) => {
       const tenantId = batch[0].tenant_id;
 
       await supabase.from('jobs').insert({
-        type: 'CREATE_NEW_PRODUCTS',
+        type: 'SYNC_TO_WOO',
         state: 'ready',
-        payload: { productIds },
+        payload: { productIds, syncScope: 'FULL', isNewProduct: true },
         tenant_id: tenantId,
+        scope: 'FULL',
+        priority: 30, // lower than realtime price/stock
       });
 
       jobsCreated++;
@@ -206,10 +100,9 @@ Deno.serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
-        source,
         new_products_found: missingProducts.length,
         jobs_created: jobsCreated,
-        missing_skus: missingProducts.map(p => p.sku),
+        missing_skus: missingProducts.slice(0, 50).map(p => p.sku),
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
