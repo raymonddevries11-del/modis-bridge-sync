@@ -15,14 +15,24 @@ Deno.serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Parse request body for optional tenant filter
+    // Manual repair-only mode — NOT scheduled via cron.
+    // Call this manually to force a full reconciliation for a tenant.
     let targetTenantId: string | null = null;
+    let dryRun = false;
     try {
       const body = await req.json();
       targetTenantId = body?.tenantId || null;
+      dryRun = body?.dryRun === true;
     } catch { /* no body */ }
 
-    console.log('Starting repair sync (dirty flags mode)...');
+    if (!targetTenantId) {
+      return new Response(
+        JSON.stringify({ error: 'tenantId is required. This is a manual repair tool, not a scheduled job.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
+    }
+
+    console.log(`Starting manual repair sync for tenant ${targetTenantId} (dryRun: ${dryRun})...`);
 
     // Get active tenants
     let tenantsQuery = supabase.from('tenants').select('id, name').eq('active', true);
