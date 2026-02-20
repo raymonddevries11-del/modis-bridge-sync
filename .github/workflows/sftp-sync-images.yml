@@ -126,7 +126,7 @@ jobs:
                 }
                 const files = await listResponse.json();
                 if (!files || files.length === 0) break;
-                files.forEach(f => { if (f.name) existingImages.add(f.name); });
+                files.forEach(f => { if (f.name) existingImages.add(f.name.toLowerCase()); });
                 if (files.length < limit) break;
                 offset += limit;
               }
@@ -182,7 +182,7 @@ jobs:
               console.log(`Found ${imageFiles.length} image files on SFTP`);
 
               // Filter out already existing
-              const missingImages = imageFiles.filter(name => !existingImages.has(name));
+              const missingImages = imageFiles.filter(name => !existingImages.has(name.toLowerCase()));
               console.log(`Missing in Storage: ${missingImages.length}`);
               console.log(`Already in Storage: ${imageFiles.length - missingImages.length}`);
 
@@ -216,8 +216,11 @@ jobs:
                     return;
                   }
 
+                  // Normalize filename to lowercase so storage matches DB references
+                  const storageName = imageName.toLowerCase();
+
                   const uploadResponse = await fetch(
-                    `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${encodeURIComponent(imageName)}`,
+                    `${process.env.SUPABASE_URL}/storage/v1/object/product-images/${encodeURIComponent(storageName)}`,
                     {
                       method: 'POST',
                       headers: {
