@@ -1220,8 +1220,73 @@ Deno.serve(async (req) => {
               break;
             }
           } else if (!createResult.response.ok || !createResult.json) {
-            // Check for image upload error — retry without images
             const errCode = createResult.json?.code;
+
+            // --- SKU already exists: look up existing product and switch to update path ---
+            if (errCode === 'woocommerce_rest_product_not_created' && createResult.json?.message?.includes('zoektabel')) {
+              console.warn(`[${pim.sku}] SKU already exists in WooCommerce — looking up existing product to update`);
+              const lookupUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?sku=${encodeURIComponent(pim.sku)}&${wooAuth}`;
+              const lookupResult = await fetchWithRetry(lookupUrl, { method: 'GET' }, rateLimiter);
+              if (!lookupResult.blocked && lookupResult.json && Array.isArray(lookupResult.json) && lookupResult.json.length > 0) {
+                const existingWoo = lookupResult.json[0];
+                console.log(`[${pim.sku}] Found existing WC product #${existingWoo.id} — updating instead of creating`);
+
+                // Backfill woocommerce_product_id in PIM
+                await supabase.from('products').update({ woocommerce_product_id: existingWoo.id }).eq('id', pim.id);
+
+                // Cache upsert
+                await supabase.from('woo_products').upsert({
+                  tenant_id: tenantId, woo_id: existingWoo.id, product_id: pim.id,
+                  sku: pim.sku, name: pim.title, slug: existingWoo.slug || '',
+                  status: existingWoo.status || 'publish', type: existingWoo.type || 'variable',
+                  last_pushed_at: new Date().toISOString(),
+                }, { onConflict: 'tenant_id,woo_id' });
+
+                // Merge attributes with existing
+                if (desiredData.attributes && existingWoo.attributes) {
+                  const { attrs: mergedAttrs } = mergeAttributes(desiredData.attributes, existingWoo.attributes);
+                  desiredData.attributes = mergedAttrs;
+                }
+                delete desiredData.type;
+                delete desiredData.status;
+
+                // PUT update
+                const updateUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/${existingWoo.id}?${wooAuth}`;
+                const updateResult = await fetchWithRetry(updateUrl, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(desiredData),
+                }, rateLimiter);
+
+                if (updateResult.response.ok && updateResult.json) {
+                  await recordSuccess(supabase);
+                  console.log(`[${pim.sku}] Successfully updated existing WC product #${existingWoo.id} (reattempt after SKU conflict)`);
+
+                  // Sync variations if variable
+                  if (isVariable && pim.variants && pim.variants.length > 0) {
+                    const varResult = await createOrUpdateVariations(
+                      config.woocommerce_url, wooAuth, existingWoo.id, pim, rateLimiter, supabase, tenantId, maatAttrId, cachedTermsByAttrId
+                    );
+                    variationAudits.push(varResult.audit);
+                  }
+
+                  await supabase.from('changelog').insert({
+                    tenant_id: tenantId, event_type: 'WOO_SKU_CONFLICT_RESOLVED',
+                    description: `SKU-conflict opgelost voor ${pim.sku}: bestaand product #${existingWoo.id} geüpdatet`,
+                    metadata: { sku: pim.sku, woo_id: existingWoo.id },
+                  });
+
+                  results.push({ sku: pim.sku, action: 'updated', changes: [{ field: 'sku_conflict', old_value: 'create_failed', new_value: `updated #${existingWoo.id}` }], message: `SKU conflict resolved — updated WC #${existingWoo.id}` });
+                  continue;
+                } else {
+                  console.error(`[${pim.sku}] Update after SKU conflict also failed: ${(updateResult.text || '').substring(0, 200)}`);
+                }
+              } else {
+                console.error(`[${pim.sku}] SKU exists in WooCommerce but lookup returned no results`);
+              }
+            }
+
+            // Check for image upload error — retry without images
             if (errCode === 'woocommerce_product_image_upload_error') {
               console.warn(`Product ${pim.sku}: image upload failed, retrying create WITHOUT images`);
               const noImgData = { ...desiredData, images: [] };
