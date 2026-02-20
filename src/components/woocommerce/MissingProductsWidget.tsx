@@ -94,7 +94,7 @@ export const MissingProductsWidget = ({ tenantId }: MissingProductsWidgetProps) 
             <Package className="h-4 w-4" />
             Ontbrekende Producten in WooCommerce
           </CardTitle>
-          <Button variant="ghost" size="sm" onClick={() => refetch()} disabled={isLoading}>
+          <Button variant="ghost" size="sm" onClick={() => { refetch(); toast.info("Data wordt ververst..."); }} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
           </Button>
         </div>
