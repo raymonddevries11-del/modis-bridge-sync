@@ -526,6 +526,95 @@ async function processBatch(
   return { processed: processedCount, errors: errorCount, remaining: remaining ?? 0 };
 }
 
+// ── Auto image retry ───────────────────────────────────────────
+const IMAGE_RETRY_MAX = 5;
+const IMAGE_RETRY_BASE_MS = 60_000; // 1 min base
+
+async function autoRetryFailedImageSyncs(supabase: any) {
+  try {
+    // Find all tenants that have eligible failed image syncs
+    const now = new Date().toISOString();
+    const { data: failedItems, error } = await supabase
+      .from('image_sync_status')
+      .select('id, product_id, tenant_id, retry_count, error_message')
+      .eq('status', 'failed')
+      .lt('retry_count', IMAGE_RETRY_MAX)
+      .or(`next_retry_at.is.null,next_retry_at.lte.${now}`)
+      .order('updated_at', { ascending: true })
+      .limit(20);
+
+    if (error || !failedItems || failedItems.length === 0) return;
+
+    console.log(`🖼️ Auto-retrying ${failedItems.length} failed image syncs`);
+
+    let requeued = 0;
+    let exhausted = 0;
+    const tenantIds = new Set<string>();
+
+    for (const item of failedItems) {
+      const newRetryCount = item.retry_count + 1;
+      tenantIds.add(item.tenant_id);
+
+      if (newRetryCount >= IMAGE_RETRY_MAX) {
+        await supabase
+          .from('image_sync_status')
+          .update({
+            retry_count: newRetryCount,
+            error_message: `Permanent failure after ${IMAGE_RETRY_MAX} retries. Last: ${item.error_message || 'unknown'}`,
+            updated_at: now,
+          })
+          .eq('id', item.id);
+        exhausted++;
+        continue;
+      }
+
+      // Reset to pending so push pipeline picks it up
+      const delayMs = IMAGE_RETRY_BASE_MS * Math.pow(2, newRetryCount);
+      const nextRetry = new Date(Date.now() + delayMs).toISOString();
+
+      await supabase
+        .from('image_sync_status')
+        .update({
+          status: 'pending',
+          retry_count: newRetryCount,
+          next_retry_at: nextRetry,
+          error_message: null,
+          updated_at: now,
+        })
+        .eq('id', item.id);
+
+      // Re-queue in pending_product_syncs with MEDIA scope
+      await supabase
+        .from('pending_product_syncs')
+        .upsert({
+          product_id: item.product_id,
+          tenant_id: item.tenant_id,
+          sync_scope: 'MEDIA',
+          priority: 30,
+          status: 'PENDING',
+          last_seen_at: now,
+          reason: 'auto_retry_image',
+        }, { onConflict: 'tenant_id,product_id,sync_scope' });
+
+      requeued++;
+    }
+
+    if (requeued > 0 || exhausted > 0) {
+      for (const tenantId of tenantIds) {
+        await supabase.from('changelog').insert({
+          tenant_id: tenantId,
+          event_type: 'IMAGE_AUTO_RETRY',
+          description: `Auto image retry: ${requeued} opnieuw ingepland, ${exhausted} definitief mislukt`,
+          metadata: { requeued, exhausted, total: failedItems.length },
+        });
+      }
+      console.log(`🖼️ Image auto-retry: ${requeued} requeued, ${exhausted} exhausted`);
+    }
+  } catch (e) {
+    console.error('Auto image retry error (non-fatal):', e);
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -568,6 +657,12 @@ serve(async (req) => {
     const result = await processBatch(supabase, policy, batchSize, concurrency, scaling.interJobDelayMs, scaling.maxJobsPerTenant);
 
     console.log(`Done: ${result.processed} ok, ${result.errors} err, ${result.remaining} remaining`);
+
+    // ── Auto-retry failed image syncs ──────────────────────────────
+    // Only run on first chain invocation to avoid repeated retries
+    if (chainDepth === 0) {
+      await autoRetryFailedImageSyncs(supabase);
+    }
 
     // Chain re-invocation if there are more jobs
     if (result.remaining > 0 && chainDepth < scaling.maxChainedInvocations) {
