@@ -145,6 +145,11 @@ jobs:
               });
               console.log('✓ Connected to SFTP');
 
+              // Prevent MaxListenersExceededWarning when doing concurrent sftp.get() calls
+              if (sftp.client && sftp.client.setMaxListeners) {
+                sftp.client.setMaxListeners(25);
+              }
+
               const basePath = '/home/customer/www/modisbridge.nl/public_html/kosterschoenmode';
               const possiblePaths = [
                 `${basePath}/webfoto`,
