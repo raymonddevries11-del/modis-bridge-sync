@@ -230,19 +230,70 @@ Deno.serve(async (req) => {
         }
       }
 
-      // ── 5b. Fix mismatched woocommerce_product_id in products table ──
+      // ── 5b. Fix mismatched woocommerce_product_id via WooCommerce API SKU lookup ──
       if (mismatchFixes.length > 0) {
+        // Fetch WooCommerce credentials for API lookups
+        const { data: tenantConfig } = await supabase
+          .from('tenant_config')
+          .select('woocommerce_url, woocommerce_consumer_key, woocommerce_consumer_secret')
+          .eq('tenant_id', tenantId)
+          .single();
+
         for (const fix of mismatchFixes) {
+          const pim = pimById.get(fix.product_id);
+          const sku = pim?.sku;
+          let resolvedWooId = fix.correct_woo_id; // fallback to cache-based fix
+
+          // Try WooCommerce API lookup by SKU for authoritative answer
+          if (tenantConfig && sku) {
+            try {
+              const auth = btoa(`${tenantConfig.woocommerce_consumer_key}:${tenantConfig.woocommerce_consumer_secret}`);
+              const resp = await fetch(
+                `${tenantConfig.woocommerce_url}/wp-json/wc/v3/products?sku=${encodeURIComponent(sku)}&per_page=1`,
+                {
+                  headers: {
+                    'Authorization': `Basic ${auth}`,
+                    'User-Agent': 'PIM-Reconciler/1.0',
+                    'Accept': 'application/json',
+                  },
+                },
+              );
+              if (resp.ok) {
+                const products = await resp.json();
+                if (products.length > 0) {
+                  resolvedWooId = products[0].id;
+                  console.log(`API lookup for SKU ${sku}: woo_id=${resolvedWooId}`);
+                }
+              } else {
+                console.warn(`API lookup failed for SKU ${sku}: ${resp.status}`);
+              }
+            } catch (e) {
+              console.warn(`API lookup error for SKU ${sku}: ${e}`);
+            }
+          }
+
+          // Update products.woocommerce_product_id
           const { error: fixErr } = await supabase
             .from('products')
-            .update({ woocommerce_product_id: fix.correct_woo_id })
+            .update({ woocommerce_product_id: resolvedWooId })
             .eq('id', fix.product_id);
 
-          if (fixErr) {
-            console.error(`Failed to fix mismatch for ${fix.product_id}: ${fixErr.message}`);
-          } else {
+          // Also update woo_products cache entry to match
+          if (!fixErr) {
             mismatchesFixed++;
-            console.log(`Fixed woocommerce_product_id for product ${fix.product_id}: → ${fix.correct_woo_id}`);
+            console.log(`Fixed woocommerce_product_id for product ${fix.product_id} (SKU ${sku}): → ${resolvedWooId}`);
+
+            // Update the cache entry's woo_id if it differs
+            const cacheEntry = wooByProductId.get(fix.product_id)?.[0];
+            if (cacheEntry && cacheEntry.woo_id !== resolvedWooId) {
+              await supabase
+                .from('woo_products')
+                .update({ woo_id: resolvedWooId })
+                .eq('id', cacheEntry.id);
+              console.log(`Updated woo_products cache woo_id for ${cacheEntry.id}: → ${resolvedWooId}`);
+            }
+          } else {
+            console.error(`Failed to fix mismatch for ${fix.product_id}: ${fixErr.message}`);
           }
         }
       }
