@@ -237,8 +237,9 @@ jobs:
                     return;
                   }
 
-                  if (uploadResponse.status === 409) {
-                    skipped++; // already exists — not an error
+                  if (uploadResponse.status === 409 || uploadResponse.status === 400) {
+                    // 409 = exact duplicate, 400 = may be case-variant already present
+                    skipped++;
                     return;
                   }
 
