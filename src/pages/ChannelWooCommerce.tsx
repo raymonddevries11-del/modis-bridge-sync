@@ -27,6 +27,7 @@ const ChannelWooCommerce = () => {
   const [fullSyncing, setFullSyncing] = useState(false);
   const [syncingMissing, setSyncingMissing] = useState(false);
   const [purgingDuplicates, setPurgingDuplicates] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const navigate = useNavigate();
 
   // Fetch sync stats
@@ -142,6 +143,22 @@ const ChannelWooCommerce = () => {
       refetchStats();
     } catch (e: any) { toast.error(`Fout: ${e.message}`); }
     finally { setPurgingDuplicates(false); }
+  };
+
+  const handleReconcile = async () => {
+    if (!tenantId) { toast.error("Selecteer eerst een tenant"); return; }
+    setReconciling(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("reconcile-product-cache", { body: { tenantId } });
+      if (error) throw error;
+      const orphaned = data?.orphaned_cleaned ?? 0;
+      const uncached = data?.uncached_queued ?? 0;
+      const dupes = data?.duplicates_removed ?? 0;
+      const mismatches = data?.mismatches_fixed ?? 0;
+      toast.success(`Reconcile klaar: ${orphaned} orphans opgeschoond, ${uncached} uncached gequeued, ${dupes} dupes verwijderd, ${mismatches} mismatches gefixt`);
+      refetchStats();
+    } catch (e: any) { toast.error(`Fout: ${e.message}`); }
+    finally { setReconciling(false); }
   };
 
   const syncPercentage = stats ? Math.round((stats.syncedProducts / Math.max(stats.totalProducts, 1)) * 100) : 0;
@@ -360,6 +377,10 @@ const ChannelWooCommerce = () => {
                   <Button variant="outline" size="sm" disabled={!tenantId || purgingDuplicates} onClick={handlePurgeDuplicates} className="border-destructive/30 text-destructive hover:bg-destructive/10">
                     {purgingDuplicates ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
                     {purgingDuplicates ? "Purging..." : "Purge Dubbele Attributen"}
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={!tenantId || reconciling} onClick={handleReconcile}>
+                    {reconciling ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Link2 className="mr-2 h-4 w-4" />}
+                    {reconciling ? "Reconciling..." : "Reconcile Woo Links"}
                   </Button>
                 </div>
               </CardContent>
