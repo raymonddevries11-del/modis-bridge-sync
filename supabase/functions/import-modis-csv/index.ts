@@ -96,8 +96,41 @@ function normalizeImagePath(raw: string): string | null {
   return path;
 }
 
+function normalizeHeader(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // Remove accents
+    .replace(/[-_\s]+/g, " ")        // Normalize separators to single space
+    .trim();
+}
+
+function findColumnIndex(headers: string[], possibleNames: string[]): number {
+  const normalizedHeaders = headers.map(h => h ? normalizeHeader(String(h)) : "");
+  const normalizedNames = possibleNames.map(normalizeHeader);
+
+  // Priority 1: Exact match
+  for (const name of normalizedNames) {
+    const idx = normalizedHeaders.indexOf(name);
+    if (idx !== -1) return idx;
+  }
+  // Priority 2: Starts with
+  for (const name of normalizedNames) {
+    const idx = normalizedHeaders.findIndex(h => h.startsWith(name));
+    if (idx !== -1) return idx;
+  }
+  // Priority 3: Contains
+  for (const name of normalizedNames) {
+    const idx = normalizedHeaders.findIndex(h => h.includes(name));
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
 function parseAllRows(rows: string[][], headers: string[]) {
-  const col = (name: string) => headers.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
+  const col = (name: string) => headers.findIndex(h => normalizeHeader(h) === normalizeHeader(name));
+  const flexCol = (possibleNames: string[]) => findColumnIndex(headers, possibleNames);
+
   const typeIdx = col('Type');
   const skuIdx = col('SKU');
   const nameIdx = col('name');
@@ -112,14 +145,16 @@ function parseAllRows(rows: string[][], headers: string[]) {
   const eanIdx = headers.findIndex(h => h.includes('_ywbc_barcode'));
   const colorArticleIdx = col('Color-article');
   // Attribute 21 has header "Attribute 21 Color-webshop" (single column, not name/value pair)
-  const attr21Idx = headers.findIndex(h => h.trim().toLowerCase().includes('attribute 21'));
+  const attr21Idx = headers.findIndex(h => normalizeHeader(h).includes('attribute 21'));
   // Legacy dedicated Color-webshop column
   const colorWebshopIdx = col('Color-webshop');
   // Attribute 22 = shoe type, Attribute 23 = (extra), Attribute 24 = sale flag
   const attr22Idx = headers.findIndex(h => h.trim() === 'Attribute 22');
   const attr23Idx = headers.findIndex(h => h.trim() === 'Attribute 23');
   const attr24Idx = headers.findIndex(h => h.trim() === 'Attribute 24');
-  const maatAlfaIdx = col('Maat-alfa');
+  const maatAlfaIdx = flexCol(['Maat-alfa', 'Maat alfa', 'maat', 'size']);
+
+  console.log(`[parseAllRows] Column detection: maatAlfaIdx=${maatAlfaIdx} (header: "${maatAlfaIdx >= 0 ? headers[maatAlfaIdx] : 'NOT FOUND'}")`);
 
   const parentMap = new Map<string, ParentProduct>();
   const variations: VariationRow[] = [];
