@@ -4,9 +4,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
-  Image, CheckCircle2, XCircle, Clock, Loader2, ImageOff, TrendingUp, Webhook, ShieldCheck, RotateCcw, AlertTriangle, Play, Square, Trash2,
+  Image, CheckCircle2, XCircle, Clock, Loader2, ImageOff, TrendingUp, Webhook, ShieldCheck, RotateCcw, AlertTriangle, Play, Square, Trash2, Search, Send,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -17,6 +18,8 @@ interface ImageSyncDashboardProps {
 export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
   const [retrying, setRetrying] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [manualSku, setManualSku] = useState("");
+  const [manualSyncing, setManualSyncing] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: stats, refetch } = useQuery({
@@ -211,6 +214,78 @@ export const ImageSyncDashboard = ({ tenantId }: ImageSyncDashboardProps) => {
 
   return (
     <div className="space-y-4">
+      {/* Manual media sync by SKU */}
+      <Card className="card-elevated">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Send className="h-4 w-4 text-primary" />
+            Handmatige Media Sync per SKU
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form
+            className="flex gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const sku = manualSku.trim();
+              if (!sku) return;
+              setManualSyncing(true);
+              try {
+                // Look up product by SKU
+                const { data: product, error: lookupErr } = await supabase
+                  .from("products")
+                  .select("id, sku, title, images")
+                  .eq("tenant_id", tenantId)
+                  .eq("sku", sku)
+                  .maybeSingle();
+                if (lookupErr) throw lookupErr;
+                if (!product) {
+                  toast.error(`Product met SKU "${sku}" niet gevonden`);
+                  return;
+                }
+                const imgCount = Array.isArray(product.images) ? product.images.length : 0;
+                if (imgCount === 0) {
+                  toast.error(`Product ${sku} (${product.title}) heeft geen afbeeldingen in het PIM`);
+                  return;
+                }
+                // Trigger media push
+                const { data, error } = await supabase.functions.invoke("push-to-woocommerce", {
+                  body: { tenantId, productId: product.id, scope: "MEDIA" },
+                });
+                if (error) throw error;
+                toast.success(`Media sync gestart voor ${sku} (${product.title}) — ${imgCount} afbeeldingen`, {
+                  description: data?.message || "Push naar WooCommerce gestart",
+                });
+                setManualSku("");
+                refetch();
+              } catch (err: any) {
+                toast.error(`Media sync mislukt: ${err.message}`);
+              } finally {
+                setManualSyncing(false);
+              }
+            }}
+          >
+            <div className="relative flex-1 max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Voer SKU in (bijv. 233768605000)…"
+                value={manualSku}
+                onChange={(e) => setManualSku(e.target.value)}
+                className="pl-9"
+                disabled={manualSyncing}
+              />
+            </div>
+            <Button type="submit" size="sm" disabled={manualSyncing || !manualSku.trim()}>
+              {manualSyncing ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Image className="h-4 w-4 mr-1.5" />}
+              Sync Media
+            </Button>
+          </form>
+          <p className="text-xs text-muted-foreground mt-2">
+            Pusht alle afbeeldingen van het opgegeven product direct naar WooCommerce.
+          </p>
+        </CardContent>
+      </Card>
+
       {/* Checkpoint resume card */}
       {stats.checkpoint && (
         <Card className="card-elevated border-primary/30">
