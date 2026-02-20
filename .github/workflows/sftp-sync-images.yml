@@ -316,10 +316,34 @@ jobs:
                 );
                 if (fixResponse2.ok) {
                   const result = await fixResponse2.json();
-                  console.log(`✓ Updated ${result.fixedProducts || 0} product image paths`);
+                  console.log(`✓ Fixed ${result.fixedProducts || 0} external image paths`);
                 }
               } catch (e) {
-                console.warn('⚠ Post-fix failed:', e.message);
+                console.warn('⚠ Fix external URLs failed:', e.message);
+              }
+
+              // Step 6: Align storage URLs (case-insensitive matching for .JPG vs .jpg)
+              console.log('\nStep 6: Aligning storage image URLs (case fix)...');
+              try {
+                const alignResponse = await fetch(
+                  `${process.env.SUPABASE_URL}/functions/v1/align-image-urls`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+                    },
+                    body: JSON.stringify({ dryRun: false }),
+                  }
+                );
+                if (alignResponse.ok) {
+                  const alignResult = await alignResponse.json();
+                  console.log(`✓ Aligned ${alignResult.productsFixed || 0} products (${alignResult.urlsFixed || 0} URLs fixed, ${alignResult.urlsStillMissing || 0} still missing)`);
+                } else {
+                  console.warn('⚠ Align returned:', alignResponse.status);
+                }
+              } catch (e) {
+                console.warn('⚠ Align failed:', e.message);
               }
 
               console.log('\n✓ Image sync complete');
