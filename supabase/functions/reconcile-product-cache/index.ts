@@ -93,6 +93,8 @@ Deno.serve(async (req) => {
     const uncached: string[] = [];       // PIM products not in woo_products
     const orphaned: string[] = [];       // woo_products entries with no PIM product
     const stale: string[] = [];          // woo_products not pushed in >7 days despite PIM update
+    const mismatched: Array<{ sku: string; product_id: string; cache_woo_id: number; product_woo_id: number }> = [];
+    const duplicateLinks: Array<{ product_id: string; woo_ids: number[]; kept_woo_id: number }> = [];
 
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -100,6 +102,85 @@ Deno.serve(async (req) => {
     for (const [sku] of pimBySku) {
       if (!wooBySku.has(sku)) {
         uncached.push(sku);
+      }
+    }
+
+    // ── 4a. Detect duplicate woo_products linking to the same product_id ──
+    const wooByProductId = new Map<string, typeof wooCache>();
+    for (const woo of (wooCache || [])) {
+      if (!woo.product_id) continue;
+      const existing = wooByProductId.get(woo.product_id);
+      if (existing) {
+        existing.push(woo);
+      } else {
+        wooByProductId.set(woo.product_id, [woo]);
+      }
+    }
+
+    const duplicateProductIds: string[] = [];
+    for (const [productId, entries] of wooByProductId) {
+      if (entries.length <= 1) continue;
+      // Multiple cache entries for the same PIM product — keep the one matching woocommerce_product_id
+      const pim = pimById.get(productId);
+      // Sort: prefer entry matching products.woocommerce_product_id, then most recently pushed
+      entries.sort((a, b) => {
+        const aMatch = pim && (pim as any).woocommerce_product_id === a.woo_id ? 1 : 0;
+        const bMatch = pim && (pim as any).woocommerce_product_id === b.woo_id ? 1 : 0;
+        if (aMatch !== bMatch) return bMatch - aMatch;
+        return (b.last_pushed_at || '').localeCompare(a.last_pushed_at || '');
+      });
+      const kept = entries[0];
+      const dupeIds = entries.slice(1).map(e => e.id);
+      duplicateLinks.push({
+        product_id: productId,
+        woo_ids: entries.map(e => e.woo_id),
+        kept_woo_id: kept.woo_id,
+      });
+      duplicateProductIds.push(...dupeIds);
+      console.warn(`Duplicate cache entries for product ${productId}: woo_ids=[${entries.map(e => e.woo_id).join(',')}] — keeping ${kept.woo_id}`);
+    }
+
+    // ── 4b. Detect mismatched woocommerce_product_id ──
+    // Fetch woocommerce_product_id for all PIM products (paginated)
+    const pimWooIds: Array<{ id: string; sku: string; woocommerce_product_id: number | null }> = [];
+    offset = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, sku, woocommerce_product_id')
+        .eq('tenant_id', tenantId)
+        .not('woocommerce_product_id', 'is', null)
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (error) throw new Error(`Failed to fetch PIM woo IDs: ${error.message}`);
+      if (!data || data.length === 0) break;
+      pimWooIds.push(...data);
+      if (data.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+
+    // Build map: product_id → expected woo_id from products table
+    const expectedWooIdMap = new Map(pimWooIds.map(p => [p.id, p.woocommerce_product_id!]));
+    const mismatchFixes: Array<{ product_id: string; correct_woo_id: number }> = [];
+
+    for (const [productId, entries] of wooByProductId) {
+      if (entries.length === 0) continue;
+      const expectedWooId = expectedWooIdMap.get(productId);
+      if (!expectedWooId) continue;
+      
+      // Check if any cache entry matches the expected woo_id
+      const matching = entries.find(e => e.woo_id === expectedWooId);
+      if (!matching) {
+        // products.woocommerce_product_id doesn't match ANY cache entry
+        const pim = pimBySku.get(entries[0].sku || '');
+        mismatched.push({
+          sku: entries[0].sku || 'unknown',
+          product_id: productId,
+          cache_woo_id: entries[0].woo_id,
+          product_woo_id: expectedWooId,
+        });
+        // Fix: update products.woocommerce_product_id to match the most recently pushed cache entry
+        const bestCache = entries.sort((a, b) => (b.last_pushed_at || '').localeCompare(a.last_pushed_at || ''))[0];
+        mismatchFixes.push({ product_id: productId, correct_woo_id: bestCache.woo_id });
       }
     }
 
@@ -120,10 +201,12 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log(`Reconciliation findings: ${uncached.length} uncached, ${orphaned.length} orphaned, ${stale.length} stale`);
+    console.log(`Reconciliation findings: ${uncached.length} uncached, ${orphaned.length} orphaned, ${stale.length} stale, ${mismatched.length} mismatched, ${duplicateLinks.length} duplicate links`);
 
     let orphansRemoved = 0;
     let syncsQueued = 0;
+    let duplicatesRemoved = 0;
+    let mismatchesFixed = 0;
 
     if (!dryRun) {
       // ── 5. Remove orphaned woo_products entries ──
@@ -147,8 +230,39 @@ Deno.serve(async (req) => {
         }
       }
 
+      // ── 5a. Remove duplicate woo_products entries (keep best match) ──
+      if (duplicateProductIds.length > 0) {
+        const { error: dupDelErr } = await supabase
+          .from('woo_products')
+          .delete()
+          .in('id', duplicateProductIds);
+
+        if (dupDelErr) {
+          console.error(`Failed to remove duplicate cache entries: ${dupDelErr.message}`);
+        } else {
+          duplicatesRemoved = duplicateProductIds.length;
+          console.log(`Removed ${duplicatesRemoved} duplicate woo_products entries`);
+        }
+      }
+
+      // ── 5b. Fix mismatched woocommerce_product_id in products table ──
+      if (mismatchFixes.length > 0) {
+        for (const fix of mismatchFixes) {
+          const { error: fixErr } = await supabase
+            .from('products')
+            .update({ woocommerce_product_id: fix.correct_woo_id })
+            .eq('id', fix.product_id);
+
+          if (fixErr) {
+            console.error(`Failed to fix mismatch for ${fix.product_id}: ${fixErr.message}`);
+          } else {
+            mismatchesFixed++;
+            console.log(`Fixed woocommerce_product_id for product ${fix.product_id}: → ${fix.correct_woo_id}`);
+          }
+        }
+      }
+
       // ── 6. Queue uncached products for sync (max 50 to avoid queue flooding) ──
-      // Check existing queue depth first
       const { count: queueDepth } = await supabase
         .from('jobs')
         .select('id', { count: 'exact', head: true })
@@ -159,14 +273,12 @@ Deno.serve(async (req) => {
       const availableSlots = Math.max(0, MAX_QUEUE_ADDITIONS - (queueDepth || 0));
 
       if (uncached.length > 0 && availableSlots > 0) {
-        // Get product IDs for uncached SKUs
         const uncachedProducts = uncached
           .slice(0, availableSlots)
           .map(sku => pimBySku.get(sku)!)
           .filter(Boolean);
 
         if (uncachedProducts.length > 0) {
-          // Check which ones are already queued
           const { data: existingJobs } = await supabase
             .from('jobs')
             .select('payload')
@@ -182,7 +294,6 @@ Deno.serve(async (req) => {
           const toQueue = uncachedProducts.filter(p => !alreadyQueued.has(p.id));
 
           if (toQueue.length > 0) {
-            // Batch into groups of 5
             for (let i = 0; i < toQueue.length; i += 5) {
               const batch = toQueue.slice(i, i + 5);
               const { error: jobErr } = await supabase.from('jobs').insert({
@@ -198,10 +309,10 @@ Deno.serve(async (req) => {
         }
       }
 
-      // ── 7. Queue stale products for re-sync (via pending_product_syncs for controlled draining) ──
+      // ── 7. Queue stale products for re-sync ──
       if (stale.length > 0) {
         const staleProducts = stale
-          .slice(0, 100) // Cap at 100
+          .slice(0, 100)
           .map(sku => pimBySku.get(sku)!)
           .filter(Boolean);
 
@@ -224,20 +335,26 @@ Deno.serve(async (req) => {
       uncached: uncached.length,
       orphaned: orphaned.length,
       stale: stale.length,
+      mismatched: mismatched.length,
+      duplicate_links: duplicateLinks.length,
       orphans_removed: orphansRemoved,
+      duplicates_removed: duplicatesRemoved,
+      mismatches_fixed: mismatchesFixed,
       syncs_queued: syncsQueued,
       stale_queued: Math.min(stale.length, 100),
       dry_run: dryRun,
       sample_uncached: uncached.slice(0, 10),
       sample_orphaned: orphaned.slice(0, 10),
       sample_stale: stale.slice(0, 10),
+      sample_mismatched: mismatched.slice(0, 10),
+      sample_duplicate_links: duplicateLinks.slice(0, 10),
     };
 
     if (!dryRun) {
       await supabase.from('changelog').insert({
         tenant_id: tenantId,
         event_type: 'PRODUCT_CACHE_RECONCILIATION',
-        description: `Dagelijkse reconciliatie: ${uncached.length} niet gecacht, ${orphaned.length} verweesd, ${stale.length} verouderd. ${orphansRemoved} verwijderd, ${syncsQueued} ingepland.`,
+        description: `Dagelijkse reconciliatie: ${uncached.length} niet gecacht, ${orphaned.length} verweesd, ${stale.length} verouderd, ${mismatched.length} mismatched, ${duplicateLinks.length} duplicaten. Opgeschoond: ${orphansRemoved} orphans, ${duplicatesRemoved} duplicaten, ${mismatchesFixed} mismatches.`,
         metadata: report,
       });
     }
