@@ -236,9 +236,15 @@ function parseAllRows(rows: string[][], headers: string[]) {
       const maat = maatAlfaIdx >= 0 ? (row[maatAlfaIdx]?.trim() || '') : '';
       // Extract short maat_id from full variation SKU (e.g. "109609003000-011390" -> "011390")
       const shortMaatId = sku.includes('-') ? sku.split('-').pop()! : sku;
+      const rawParent = row[parentIdx]?.trim() || '';
+      // WooCommerce CSV exports may prefix parent with "id:" — strip it
+      const parentSku = rawParent.replace(/^id:/i, '').trim();
+      if (variations.length < 3) {
+        console.log(`[parseAllRows] Sample variation: sku=${sku}, parentSku="${parentSku}" (raw="${rawParent}"), maat="${maat}", shortMaatId=${shortMaatId}`);
+      }
       variations.push({
         sku,
-        parentSku: row[parentIdx]?.trim() || '',
+        parentSku,
         shortMaatId,
         sizeLabel: maat || shortMaatId,
         stock: parseInt(row[stockIdx] || '0') || 0,
@@ -494,12 +500,23 @@ Deno.serve(async (req) => {
     }
 
     // PHASE 3: Upsert variants
+    // Deduplicate by composite key (product_id:maat_id) to prevent
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time" errors
     const varInsert: any[] = [];
     const varUpdate: { id: string; data: any }[] = [];
+    const seenInsertKeys = new Set<string>();
 
+    let varSkipped = 0;
+    let varDeduplicated = 0;
     for (const v of chunkVariations) {
       const productId = skuToProductId.get(v.parentSku);
-      if (!productId) continue;
+      if (!productId) {
+        varSkipped++;
+        if (varSkipped <= 5) {
+          console.warn(`[import-modis-csv] Variation ${v.sku} parentSku="${v.parentSku}" not found in skuToProductId map (${skuToProductId.size} entries)`);
+        }
+        continue;
+      }
 
       const compositeKey = `${productId}:${v.shortMaatId}`;
       const existing = existingVariants.get(compositeKey);
@@ -516,9 +533,24 @@ Deno.serve(async (req) => {
           varUpdate.push({ id: existing.id, data: { size_label: v.sizeLabel, ean: v.ean || null } });
         }
       } else {
+        // Deduplicate: skip if we already have this key in the insert batch
+        if (seenInsertKeys.has(compositeKey)) {
+          varDeduplicated++;
+          continue;
+        }
+        seenInsertKeys.add(compositeKey);
         varInsert.push(record);
       }
     }
+
+    if (varSkipped > 0) {
+      console.warn(`[import-modis-csv] ${varSkipped} variations skipped (parentSku not found). Available parent SKUs: ${[...skuToProductId.keys()].slice(0, 10).join(', ')}`);
+    }
+    if (varDeduplicated > 0) {
+      console.log(`[import-modis-csv] Deduplicated ${varDeduplicated} duplicate variation rows`);
+    }
+    console.log(`[import-modis-csv] Variants: ${varInsert.length} to insert, ${varUpdate.length} to update, ${varSkipped} skipped, ${varDeduplicated} deduped`);
+
 
     const skuToVariantId = new Map<string, string>();
     existingVariants.forEach((v, compositeKey) => skuToVariantId.set(compositeKey, v.id));
@@ -539,16 +571,17 @@ Deno.serve(async (req) => {
       if (!error) stats.variantsUpdated++;
     }
 
-    // PHASE 4: Upsert stock
-    const stockRecords: any[] = [];
+    // PHASE 4: Upsert stock (deduplicate by variant_id, keep last)
+    const stockMap = new Map<string, { variant_id: string; qty: number }>();
     for (const v of chunkVariations) {
       const productId = skuToProductId.get(v.parentSku);
       if (!productId) continue;
       const compositeKey = `${productId}:${v.shortMaatId}`;
       const variantId = skuToVariantId.get(compositeKey);
       if (!variantId) continue;
-      stockRecords.push({ variant_id: variantId, qty: v.stock });
+      stockMap.set(variantId, { variant_id: variantId, qty: v.stock });
     }
+    const stockRecords = Array.from(stockMap.values());
 
     for (let i = 0; i < stockRecords.length; i += BATCH) {
       const batch = stockRecords.slice(i, i + BATCH);
