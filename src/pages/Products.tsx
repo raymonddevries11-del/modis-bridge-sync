@@ -46,6 +46,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BulkActionToolbar } from "@/components/products/BulkActionToolbar";
+import { VariantAuditWidget } from "@/components/products/VariantAuditWidget";
 import { ProductCardInlineEditor } from "@/components/products/ProductCardInlineEditor";
 
 const VALIDATION_FILTERS: Record<string, { label: string; fn: (p: any) => boolean }> = {
@@ -1239,6 +1240,11 @@ const Products = () => {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Variant Audit Widget */}
+        {selectedTenant && (
+          <VariantAuditWidget tenantId={selectedTenant} />
+        )}
 
         {isLoading ? (
           <div className="text-center py-12">
