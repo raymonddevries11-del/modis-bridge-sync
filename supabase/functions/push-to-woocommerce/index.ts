@@ -1225,10 +1225,47 @@ Deno.serve(async (req) => {
             // --- SKU already exists: look up existing product and switch to update path ---
             if (errCode === 'woocommerce_rest_product_not_created' && createResult.json?.message?.includes('zoektabel')) {
               console.warn(`[${pim.sku}] SKU already exists in WooCommerce — looking up existing product to update`);
+
+              // Multi-strategy SKU lookup: try ?sku=, then ?search=, then local cache
+              let existingWoo: any = null;
+
+              // Strategy 1: exact SKU filter
               const lookupUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?sku=${encodeURIComponent(pim.sku)}&${wooAuth}`;
               const lookupResult = await fetchWithRetry(lookupUrl, { method: 'GET' }, rateLimiter);
               if (!lookupResult.blocked && lookupResult.json && Array.isArray(lookupResult.json) && lookupResult.json.length > 0) {
-                const existingWoo = lookupResult.json[0];
+                existingWoo = lookupResult.json[0];
+                console.log(`[${pim.sku}] Found via ?sku= filter: WC #${existingWoo.id}`);
+              }
+
+              // Strategy 2: search parameter (catches variations and partial matches)
+              if (!existingWoo) {
+                console.log(`[${pim.sku}] ?sku= returned empty, trying ?search=`);
+                const searchUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?search=${encodeURIComponent(pim.sku)}&per_page=5&${wooAuth}`;
+                const searchResult = await fetchWithRetry(searchUrl, { method: 'GET' }, rateLimiter);
+                if (!searchResult.blocked && searchResult.json && Array.isArray(searchResult.json)) {
+                  existingWoo = searchResult.json.find((p: any) => p.sku === pim.sku) || null;
+                  if (existingWoo) {
+                    console.log(`[${pim.sku}] Found via ?search=: WC #${existingWoo.id}`);
+                  }
+                }
+              }
+
+              // Strategy 3: local woo_products cache (may have been cached by cache-woo-products)
+              if (!existingWoo) {
+                console.log(`[${pim.sku}] API lookups empty, checking local cache`);
+                const { data: cachedEntry } = await supabase
+                  .from('woo_products')
+                  .select('woo_id, name, slug, status, type')
+                  .eq('tenant_id', tenantId)
+                  .eq('sku', pim.sku)
+                  .maybeSingle();
+                if (cachedEntry) {
+                  existingWoo = { id: cachedEntry.woo_id, slug: cachedEntry.slug, status: cachedEntry.status, type: cachedEntry.type, attributes: [] };
+                  console.log(`[${pim.sku}] Found in local cache: WC #${existingWoo.id}`);
+                }
+              }
+
+              if (existingWoo) {
                 console.log(`[${pim.sku}] Found existing WC product #${existingWoo.id} — updating instead of creating`);
 
                 // Backfill woocommerce_product_id in PIM
@@ -1282,7 +1319,7 @@ Deno.serve(async (req) => {
                   console.error(`[${pim.sku}] Update after SKU conflict also failed: ${(updateResult.text || '').substring(0, 200)}`);
                 }
               } else {
-                console.error(`[${pim.sku}] SKU exists in WooCommerce but lookup returned no results`);
+                console.error(`[${pim.sku}] SKU exists in WooCommerce but all lookup strategies failed (API ?sku=, ?search=, local cache)`);
               }
             }
 
