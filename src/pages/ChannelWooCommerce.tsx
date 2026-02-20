@@ -15,6 +15,7 @@ import { VariationAuditAlert } from "@/components/woocommerce/VariationAuditAler
 import { ImageSyncDashboard } from "@/components/woocommerce/ImageSyncDashboard";
 import { SyncQueueViewer } from "@/components/woocommerce/SyncQueueViewer";
 import { ReconcilePanel } from "@/components/woocommerce/ReconcilePanel";
+import { MissingProductsWidget } from "@/components/woocommerce/MissingProductsWidget";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -240,6 +241,10 @@ const ChannelWooCommerce = () => {
               <Image className="h-3.5 w-3.5" />
               Image Sync
             </TabsTrigger>
+            <TabsTrigger value="missing" className="flex items-center gap-1.5">
+              <Package className="h-3.5 w-3.5" />
+              Ontbrekend
+            </TabsTrigger>
             <TabsTrigger value="actions">Acties & Tools</TabsTrigger>
           </TabsList>
 
@@ -332,6 +337,16 @@ const ChannelWooCommerce = () => {
                   </p>
                 </CardContent>
               </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="missing">
+            {tenantId ? (
+              <MissingProductsWidget tenantId={tenantId} />
+            ) : (
+              <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">
+                Selecteer een tenant om ontbrekende producten te bekijken.
+              </CardContent></Card>
             )}
           </TabsContent>
 
