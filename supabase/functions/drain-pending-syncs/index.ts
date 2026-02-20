@@ -14,7 +14,17 @@ const SCOPE_BATCH_SIZES: Record<string, number> = {
   VARIATIONS: 10,
 };
 
+// Shorter window for price/stock = near real-time
+const SCOPE_WINDOWS: Record<string, number> = {
+  PRICE_STOCK: 15,    // 15 seconds — near real-time
+  CONTENT: 60,
+  TAXONOMY: 60,
+  MEDIA: 120,
+  VARIATIONS: 60,
+};
+
 const DEFAULT_BATCH_SIZE = 50;
+const DEFAULT_WINDOW = 60;
 
 /** Check if a tenant is rate-limited (cooldown active or no tokens) */
 async function isTenantThrottled(supabase: any, tenantId: string): Promise<boolean> {
@@ -24,7 +34,7 @@ async function isTenantThrottled(supabase: any, tenantId: string): Promise<boole
     .eq('tenant_id', tenantId)
     .maybeSingle();
 
-  if (!data) return false; // no rate limit record = not throttled
+  if (!data) return false;
 
   const now = new Date();
   if (data.cooldown_until && new Date(data.cooldown_until) > now) {
@@ -47,6 +57,10 @@ Deno.serve(async (req) => {
   );
 
   try {
+    // Optional scope filter from body (for targeted drain from pg_net trigger)
+    const body = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
+    const scopeFilter: string | undefined = body.scope;
+
     // Load batch config
     const { data: batchConfig } = await supabase
       .from('config')
@@ -55,7 +69,6 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     const config = (batchConfig?.value as Record<string, number>) || {};
-    const WINDOW_SECONDS = config.window_seconds || 60;
     const MAX_PRODUCTS_PER_DRAIN = config.max_products_per_drain || 200;
     const MAX_QUEUE_SIZE = config.max_queue_size || 10;
 
@@ -75,28 +88,49 @@ Deno.serve(async (req) => {
 
     const slotsAvailable = MAX_QUEUE_SIZE - (currentQueueSize || 0);
 
-    // Only drain items older than the batch window (debounce)
-    const cutoff = new Date(Date.now() - WINDOW_SECONDS * 1000).toISOString();
+    // Fetch pending syncs per scope with scope-specific windows
+    // If scopeFilter is provided, only drain that scope (for fast pg_net-triggered drains)
+    const scopesToDrain = scopeFilter ? [scopeFilter] : Object.keys(SCOPE_WINDOWS).concat(['OTHER']);
 
-    // Fetch pending syncs ordered by priority DESC (highest first), then oldest first
-    const { data: pending, error: fetchErr } = await supabase
-      .from('pending_product_syncs')
-      .select('id, product_id, tenant_id, sync_scope, priority')
-      .eq('status', 'PENDING')
-      .lte('last_seen_at', cutoff)
-      .order('priority', { ascending: false })
-      .order('last_seen_at', { ascending: true })
-      .limit(MAX_PRODUCTS_PER_DRAIN);
+    const allPending: Array<{ id: string; product_id: string; tenant_id: string; sync_scope: string; priority: number }> = [];
 
-    if (fetchErr) throw fetchErr;
+    for (const scope of scopesToDrain) {
+      const windowSeconds = SCOPE_WINDOWS[scope] || DEFAULT_WINDOW;
+      const cutoff = new Date(Date.now() - windowSeconds * 1000).toISOString();
 
-    if (!pending || pending.length === 0) {
+      let query = supabase
+        .from('pending_product_syncs')
+        .select('id, product_id, tenant_id, sync_scope, priority')
+        .eq('status', 'PENDING')
+        .lte('last_seen_at', cutoff)
+        .order('priority', { ascending: false })
+        .order('last_seen_at', { ascending: true })
+        .limit(MAX_PRODUCTS_PER_DRAIN);
+
+      if (scope !== 'OTHER') {
+        query = query.eq('sync_scope', scope);
+      } else {
+        // OTHER = anything not in SCOPE_WINDOWS keys
+        query = query.not('sync_scope', 'in', `(${Object.keys(SCOPE_WINDOWS).join(',')})`);
+      }
+
+      const { data: scopePending, error: fetchErr } = await query;
+      if (fetchErr) {
+        console.error(`Error fetching ${scope} pending:`, fetchErr);
+        continue;
+      }
+      if (scopePending && scopePending.length > 0) {
+        allPending.push(...scopePending);
+      }
+    }
+
+    if (allPending.length === 0) {
       return new Response(JSON.stringify({ drained: 0, jobs: 0 }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    console.log(`Draining ${pending.length} pending syncs (window=${WINDOW_SECONDS}s, slots=${slotsAvailable})`);
+    console.log(`Draining ${allPending.length} pending syncs (scope=${scopeFilter || 'ALL'}, slots=${slotsAvailable})`);
 
     // Build set of product IDs already in queued jobs to avoid duplicates
     const alreadyQueued = new Set<string>();
@@ -116,7 +150,7 @@ Deno.serve(async (req) => {
     }
 
     // Check throttled tenants
-    const tenantIds = [...new Set(pending.map(p => p.tenant_id))];
+    const tenantIds = [...new Set(allPending.map(p => p.tenant_id))];
     const throttledTenants = new Set<string>();
     for (const tid of tenantIds) {
       if (await isTenantThrottled(supabase, tid)) {
@@ -134,7 +168,7 @@ Deno.serve(async (req) => {
     let skippedCount = 0;
     const pendingIdsToDelete: string[] = [];
 
-    for (const row of pending) {
+    for (const row of allPending) {
       if (alreadyQueued.has(row.product_id)) {
         skippedCount++;
         pendingIdsToDelete.push(row.id);
@@ -208,15 +242,15 @@ Deno.serve(async (req) => {
         .in('id', chunk);
     }
 
-    console.log(`Drained ${pending.length} pending → ${jobsCreated} jobs`);
+    console.log(`Drained ${allPending.length} pending → ${jobsCreated} jobs (scope=${scopeFilter || 'ALL'})`);
 
     return new Response(JSON.stringify({
-      drained: pending.length,
+      drained: allPending.length,
       skipped: skippedCount,
       throttled: throttledTenants.size,
       jobs: jobsCreated,
       groups: groups.size,
-      windowSeconds: WINDOW_SECONDS,
+      scopeFilter: scopeFilter || 'ALL',
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
