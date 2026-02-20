@@ -46,13 +46,13 @@ Deno.serve(async (req) => {
     const tenantId = tenant.id;
 
     // ── 2. Fetch all PIM product SKUs (paginated) ──
-    const pimProducts: Array<{ id: string; sku: string; updated_at: string }> = [];
+    const pimProducts: Array<{ id: string; sku: string; updated_at: string; woocommerce_product_id: number | null }> = [];
     const PAGE_SIZE = 1000;
     let offset = 0;
     while (true) {
       const { data, error } = await supabase
         .from('products')
-        .select('id, sku, updated_at')
+        .select('id, sku, updated_at, woocommerce_product_id')
         .eq('tenant_id', tenantId)
         .range(offset, offset + PAGE_SIZE - 1);
       if (error) throw new Error(`Failed to fetch PIM products: ${error.message}`);
@@ -124,8 +124,8 @@ Deno.serve(async (req) => {
       const pim = pimById.get(productId);
       // Sort: prefer entry matching products.woocommerce_product_id, then most recently pushed
       entries.sort((a, b) => {
-        const aMatch = pim && (pim as any).woocommerce_product_id === a.woo_id ? 1 : 0;
-        const bMatch = pim && (pim as any).woocommerce_product_id === b.woo_id ? 1 : 0;
+        const aMatch = pim && pim.woocommerce_product_id === a.woo_id ? 1 : 0;
+        const bMatch = pim && pim.woocommerce_product_id === b.woo_id ? 1 : 0;
         if (aMatch !== bMatch) return bMatch - aMatch;
         return (b.last_pushed_at || '').localeCompare(a.last_pushed_at || '');
       });
@@ -141,25 +141,10 @@ Deno.serve(async (req) => {
     }
 
     // ── 4b. Detect mismatched woocommerce_product_id ──
-    // Fetch woocommerce_product_id for all PIM products (paginated)
-    const pimWooIds: Array<{ id: string; sku: string; woocommerce_product_id: number | null }> = [];
-    offset = 0;
-    while (true) {
-      const { data, error } = await supabase
-        .from('products')
-        .select('id, sku, woocommerce_product_id')
-        .eq('tenant_id', tenantId)
-        .not('woocommerce_product_id', 'is', null)
-        .range(offset, offset + PAGE_SIZE - 1);
-      if (error) throw new Error(`Failed to fetch PIM woo IDs: ${error.message}`);
-      if (!data || data.length === 0) break;
-      pimWooIds.push(...data);
-      if (data.length < PAGE_SIZE) break;
-      offset += PAGE_SIZE;
-    }
-
-    // Build map: product_id → expected woo_id from products table
-    const expectedWooIdMap = new Map(pimWooIds.map(p => [p.id, p.woocommerce_product_id!]));
+    // Use the woocommerce_product_id already fetched in step 2
+    const expectedWooIdMap = new Map(
+      pimProducts.filter(p => p.woocommerce_product_id != null).map(p => [p.id, p.woocommerce_product_id!])
+    );
     const mismatchFixes: Array<{ product_id: string; correct_woo_id: number }> = [];
 
     for (const [productId, entries] of wooByProductId) {
@@ -320,9 +305,12 @@ Deno.serve(async (req) => {
           await supabase.from('pending_product_syncs').upsert({
             product_id: p.id,
             tenant_id: tenantId,
+            sync_scope: 'CONTENT',
+            priority: 30,
+            status: 'PENDING',
             reason: 'reconciliation_stale',
-            created_at: new Date().toISOString(),
-          }, { onConflict: 'product_id,reason' });
+            last_seen_at: new Date().toISOString(),
+          }, { onConflict: 'tenant_id,product_id,sync_scope' });
         }
         console.log(`Queued ${staleProducts.length} stale products via pending_product_syncs`);
       }
