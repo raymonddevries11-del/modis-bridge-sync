@@ -21,9 +21,12 @@ Deno.serve(async (req) => {
 
   try {
     // Resolve tenant
-    const { data: tenantRow } = await supabase
+    const { data: tenantRow, error: tenantErr } = await supabase
       .from("tenants").select("id").eq("slug", tenant).single();
-    if (!tenantRow) throw new Error("Tenant not found");
+    if (tenantErr || !tenantRow) {
+      console.error("Tenant lookup failed:", { tenant, error: tenantErr?.message });
+      throw new Error(`Tenant not found: ${tenant} (${tenantErr?.message || "no data"})`);
+    }
 
     // ── Step 1: Build complete storage file index ──
     console.log("Step 1: Indexing storage bucket...");
