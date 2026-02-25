@@ -11,7 +11,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Tag, Layers, X, Plus, Minus, Pencil, AlertTriangle, Sparkles, Check } from "lucide-react";
+import { Tag, Layers, X, Plus, Minus, Pencil, AlertTriangle, Sparkles, Check, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
@@ -21,7 +21,7 @@ interface Props {
   onClearSelection: () => void;
 }
 
-type ActionType = "add_category" | "remove_category" | "set_attribute" | "add_tag" | "remove_tag" | "approve_ai";
+type ActionType = "add_category" | "remove_category" | "set_attribute" | "add_tag" | "remove_tag" | "approve_ai" | "delete";
 
 export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
   const queryClient = useQueryClient();
@@ -85,7 +85,7 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
     setDialogAction(action);
   };
 
-  const CONFIRM_THRESHOLD = 500;
+  const CONFIRM_THRESHOLD = dialogAction === "delete" ? 1 : 500;
 
   const handleExecuteClick = () => {
     if (selectedIds.length > CONFIRM_THRESHOLD) {
@@ -118,6 +118,46 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
         toast.success(`${totalApproved} AI-content items goedgekeurd`);
         queryClient.invalidateQueries({ queryKey: ["products"] });
         queryClient.invalidateQueries({ queryKey: ["ai-content"] });
+        setDialogAction(null);
+        onClearSelection();
+        return;
+      }
+
+      // Special handling for delete — direct DB delete
+      if (dialogAction === "delete") {
+        const BATCH = 200;
+        let totalDeleted = 0;
+        for (let i = 0; i < selectedIds.length; i += BATCH) {
+          const batch = selectedIds.slice(i, i + BATCH);
+          // Delete related data first
+          await supabase.from("product_ai_content").delete().in("product_id", batch);
+          await supabase.from("product_prices").delete().in("product_id", batch);
+          await supabase.from("product_sync_status").delete().in("product_id", batch);
+          await supabase.from("image_sync_status").delete().in("product_id", batch);
+          // Delete variants (and their stock)
+          const { data: variantIds } = await supabase
+            .from("variants")
+            .select("id")
+            .in("product_id", batch);
+          if (variantIds && variantIds.length > 0) {
+            const vIds = variantIds.map(v => v.id);
+            await supabase.from("stock_totals").delete().in("variant_id", vIds);
+            await supabase.from("stock_by_store").delete().in("variant_id", vIds);
+            await supabase.from("variants").delete().in("product_id", batch);
+          }
+          // Delete woo_products linked to these products
+          await supabase.from("woo_products").delete().in("product_id", batch);
+          // Delete the products themselves
+          const { error, count } = await supabase
+            .from("products")
+            .delete({ count: "exact" })
+            .in("id", batch);
+          if (error) throw error;
+          totalDeleted += count || 0;
+        }
+        toast.success(`${totalDeleted} producten verwijderd`);
+        queryClient.invalidateQueries({ queryKey: ["products"] });
+        queryClient.invalidateQueries({ queryKey: ["validation-ids"] });
         setDialogAction(null);
         onClearSelection();
         return;
@@ -196,6 +236,9 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
         <Button size="sm" variant="outline" onClick={() => openDialog("approve_ai")} className="border-emerald-300 text-emerald-600 hover:bg-emerald-50">
           <Check className="h-3.5 w-3.5 mr-1" /> AI Goedkeuren
         </Button>
+        <Button size="sm" variant="destructive" onClick={() => openDialog("delete")}>
+          <Trash2 className="h-3.5 w-3.5 mr-1" /> Verwijderen
+        </Button>
 
         <Button size="sm" variant="ghost" onClick={onClearSelection} className="ml-2">
           <X className="h-4 w-4" />
@@ -213,6 +256,7 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
               {dialogAction === "add_tag" && "Tag toevoegen"}
               {dialogAction === "remove_tag" && "Tag verwijderen"}
               {dialogAction === "approve_ai" && "AI Content goedkeuren"}
+              {dialogAction === "delete" && "Producten verwijderen"}
             </DialogTitle>
             <DialogDescription>
               Pas toe op {selectedIds.length} geselecteerde producten.
@@ -303,6 +347,17 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
                 Alle AI-content met status <strong>"generated"</strong> voor de {selectedIds.length} geselecteerde producten wordt goedgekeurd. Alleen gegenereerde content wordt aangepast — producten zonder AI-content worden overgeslagen.
               </p>
             )}
+
+            {dialogAction === "delete" && (
+              <div className="space-y-2">
+                <p className="text-sm text-destructive font-medium">
+                  ⚠️ Let op: dit verwijdert {selectedIds.length} producten permanent, inclusief varianten, voorraad, prijzen, sync-status en AI-content.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Deze actie kan niet ongedaan worden gemaakt.
+                </p>
+              </div>
+            )}
           </div>
 
           <DialogFooter>
@@ -310,7 +365,7 @@ export const BulkActionToolbar = ({ selectedIds, onClearSelection }: Props) => {
             <Button
               onClick={handleExecuteClick}
               disabled={loading}
-              variant={dialogAction === "remove_category" || dialogAction === "remove_tag" ? "destructive" : "default"}
+              variant={dialogAction === "remove_category" || dialogAction === "remove_tag" || dialogAction === "delete" ? "destructive" : "default"}
             >
               {loading ? "Bezig..." : "Toepassen"}
             </Button>
