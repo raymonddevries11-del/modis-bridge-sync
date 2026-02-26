@@ -773,7 +773,8 @@ async function createProductInWooCommerce(
     console.log(`Using approved AI content for new product ${sku}: title="${title}"`);
   }
 
-  // Prepare product images - convert relative storage paths to absolute URLs, then base64
+  // Prepare product images - convert relative storage paths to absolute public URLs
+  // WooCommerce downloads images from URLs directly; data: URLs are NOT supported
   const storageBaseUrl = `${Deno.env.get('SUPABASE_URL')}/storage/v1/object/public/product-images/`;
   const originalImageCount = (images || []).filter((img: string) => img && img.trim().length > 0).length;
   let imageUrls = (images || [])
@@ -783,11 +784,35 @@ async function createProductInWooCommerce(
       return `${storageBaseUrl}${img}`;
     });
 
-  // Convert Supabase storage URLs to base64 data URLs to bypass SiteGround firewall
+  // Verify images exist in storage before sending to WooCommerce
   if (imageUrls.length > 0 && supabase) {
-    imageUrls = await convertImagesToDataUrls(imageUrls, supabase);
+    const verified: string[] = [];
+    const missing: string[] = [];
+    for (const url of imageUrls) {
+      if (isSupabaseStorageUrl(url)) {
+        const storagePath = extractStoragePath(url);
+        if (storagePath) {
+          // Check if file exists by trying to download first byte
+          const { data, error } = await supabase.storage
+            .from('product-images')
+            .download(storagePath, { transform: { width: 1, height: 1 } });
+          if (error || !data) {
+            missing.push(storagePath);
+          } else {
+            verified.push(url);
+          }
+        } else {
+          verified.push(url);
+        }
+      } else {
+        verified.push(url);
+      }
+    }
+    if (missing.length > 0) {
+      console.warn(`⚠ ${missing.length} images not found in storage, skipped: ${missing.join(', ')}`);
+    }
+    imageUrls = verified;
   }
-  // Filter out any empty/falsy URLs that might have slipped through conversion
   imageUrls = imageUrls.filter((url: string) => url && url.trim().length > 0);
   const productImages = imageUrls.map((src: string) => ({ src }));
 
@@ -1459,8 +1484,6 @@ async function updateProductInWooCommerce(
       return img;
     })
     .filter((img: string) => {
-      // Check if base filename already exists in WooCommerce
-      if (img.startsWith('data:')) return true;
       try {
         const url = new URL(img);
         const pathname = url.pathname;
@@ -1478,12 +1501,8 @@ async function updateProductInWooCommerce(
       }
     });
 
-  // Convert Supabase storage URLs to base64 data URLs to bypass SiteGround firewall
-  let convertedNewImages = filteredNewImages;
-  if (filteredNewImages.length > 0 && supabase) {
-    convertedNewImages = await convertImagesToDataUrls(filteredNewImages, supabase);
-  }
-  convertedNewImages = convertedNewImages.filter((img: string) => img && img.trim().length > 0);
+  // Use public storage URLs directly (WooCommerce downloads them; data: URLs are NOT supported)
+  let convertedNewImages = filteredNewImages.filter((img: string) => img && img.trim().length > 0);
   const newImagesToAdd = convertedNewImages.map((img: string) => ({ src: img }));
 
   // Only update if there are actually new images to add
