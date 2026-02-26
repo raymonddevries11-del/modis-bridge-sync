@@ -584,12 +584,14 @@ async function processJob(
 
           // Queue retryable failures for automatic retry
           if (errType !== 'validation') {
-            await supabase.from('pending_product_syncs').upsert({
-              product_id: product.id,
-              tenant_id: job.tenant_id,
-              reason: `auto_retry:${errType}`,
-              created_at: new Date().toISOString(),
-            }, { onConflict: 'product_id,reason' }).catch(() => {});
+            try {
+              await supabase.from('pending_product_syncs').upsert({
+                product_id: product.id,
+                tenant_id: job.tenant_id,
+                reason: `auto_retry:${errType}`,
+                created_at: new Date().toISOString(),
+              }, { onConflict: 'product_id,reason' });
+            } catch (_e) { /* ignore upsert failures */ }
           }
         }
         
@@ -785,6 +787,8 @@ async function createProductInWooCommerce(
   if (imageUrls.length > 0 && supabase) {
     imageUrls = await convertImagesToDataUrls(imageUrls, supabase);
   }
+  // Filter out any empty/falsy URLs that might have slipped through conversion
+  imageUrls = imageUrls.filter((url: string) => url && url.trim().length > 0);
   const productImages = imageUrls.map((src: string) => ({ src }));
 
   // Track missing images in image_sync_status for later retry
@@ -1479,6 +1483,7 @@ async function updateProductInWooCommerce(
   if (filteredNewImages.length > 0 && supabase) {
     convertedNewImages = await convertImagesToDataUrls(filteredNewImages, supabase);
   }
+  convertedNewImages = convertedNewImages.filter((img: string) => img && img.trim().length > 0);
   const newImagesToAdd = convertedNewImages.map((img: string) => ({ src: img }));
 
   // Only update if there are actually new images to add
