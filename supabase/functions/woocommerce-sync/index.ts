@@ -132,6 +132,106 @@ interface SyncJob {
   };
 }
 
+const SKU_LOOKUP_STATUSES = ['publish', 'draft', 'pending', 'private', 'trash'];
+
+function normalizeSkuValue(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+async function queryWooProductsByParams(
+  wooConfig: WooCommerceConfig,
+  params: Record<string, string>
+): Promise<any[]> {
+  const url = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.append(key, value);
+  }
+  url.searchParams.append('consumer_key', wooConfig.consumerKey);
+  url.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+  const response = await fetchWithRetry(url.toString(), {
+    headers: { 'Content-Type': 'application/json' },
+  }, 3);
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    console.warn(
+      `Woo SKU lookup failed (${params.status || 'default'}): ${response.status} - ${responseText.substring(0, 180)}`
+    );
+    return [];
+  }
+
+  try {
+    const data = JSON.parse(responseText);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    console.warn(`Woo SKU lookup returned invalid JSON: ${responseText.substring(0, 180)}`);
+    return [];
+  }
+}
+
+async function findWooProductBySkuRobust(
+  sku: string,
+  wooConfig: WooCommerceConfig
+): Promise<any | null> {
+  const normalizedSku = normalizeSkuValue(sku);
+  if (!normalizedSku) return null;
+
+  // First: exact SKU lookups per status
+  for (const status of SKU_LOOKUP_STATUSES) {
+    const products = await queryWooProductsByParams(wooConfig, {
+      sku,
+      status,
+      per_page: '20',
+    });
+    const match = products.find((p: any) => normalizeSkuValue(p?.sku) === normalizedSku);
+    if (match) return match;
+  }
+
+  // Fallback: broader search, then exact SKU match in returned payload
+  for (const status of SKU_LOOKUP_STATUSES) {
+    const products = await queryWooProductsByParams(wooConfig, {
+      search: sku,
+      status,
+      per_page: '100',
+    });
+    const match = products.find((p: any) => normalizeSkuValue(p?.sku) === normalizedSku);
+    if (match) return match;
+  }
+
+  return null;
+}
+
+async function restoreWooProductFromTrash(
+  wooProductId: number,
+  wooConfig: WooCommerceConfig
+): Promise<number | null> {
+  const restoreUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products/${wooProductId}`);
+  restoreUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+  restoreUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+
+  const restoreResponse = await fetchWithRetry(restoreUrl.toString(), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'draft' }),
+  }, 3);
+
+  const responseText = await restoreResponse.text();
+  if (!restoreResponse.ok) {
+    console.warn(`Failed to restore trashed product ${wooProductId}: ${restoreResponse.status} - ${responseText.substring(0, 200)}`);
+    return null;
+  }
+
+  try {
+    const restored = JSON.parse(responseText);
+    console.log(`Restored trashed Woo product ${wooProductId} to status ${restored?.status || 'draft'}`);
+    return restored?.id || wooProductId;
+  } catch {
+    console.warn(`Restored product ${wooProductId}, but response JSON parse failed`);
+    return wooProductId;
+  }
+}
+
 // Helper function to map attribute codes to values
 async function mapAttributeCodes(
   attributes: Record<string, any>,
@@ -1158,30 +1258,26 @@ async function createProductInWooCommerce(
     // If product already exists (SKU duplicate), find and update it
     if ((errorData.code === 'woocommerce_rest_product_not_created' && errorData.message?.includes('SKU')) ||
         errorData.code === 'woocommerce_product_image_upload_error') {
-      
       const reason = errorData.code === 'woocommerce_product_image_upload_error' ? 'has image errors' : 'already exists';
       console.log(`Product ${sku} ${reason}, searching for it to update`);
-      
-      // Search again but this time search in all products (not just published)
-      const searchAllUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
-      searchAllUrl.searchParams.append('sku', sku);
-      searchAllUrl.searchParams.append('status', 'any');
-      searchAllUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
-      searchAllUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-      
-      const searchAllResponse = await fetchWithRetry(searchAllUrl.toString(), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-      
-      if (searchAllResponse.ok) {
-        const foundProducts = await searchAllResponse.json();
-        if (foundProducts && foundProducts.length > 0) {
-          const existingProduct = foundProducts[0];
-          console.log(`Found existing product ${sku} with ID ${existingProduct.id}, updating instead`);
-          await updateProductInWooCommerce(existingProduct.id, product, wooConfig, variantIdsFilter, supabase, tenantId);
-          return;
+
+      const existingProduct = await findWooProductBySkuRobust(sku, wooConfig);
+      if (existingProduct?.id) {
+        let existingProductId = existingProduct.id;
+
+        if (existingProduct.status === 'trash') {
+          const restoredId = await restoreWooProductFromTrash(existingProduct.id, wooConfig);
+          if (restoredId) {
+            existingProductId = restoredId;
+          }
         }
+
+        console.log(`Found existing product ${sku} with ID ${existingProductId}, updating instead`);
+        await updateProductInWooCommerce(existingProductId, product, wooConfig, variantIdsFilter, supabase, tenantId);
+        return;
       }
+
+      console.warn(`SKU conflict for ${sku}, but no existing product could be resolved via Woo lookup`);
     }
     
     const errorMessage = JSON.stringify(errorData);
