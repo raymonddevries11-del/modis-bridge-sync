@@ -150,7 +150,11 @@ async function queryWooProductsByParams(
   url.searchParams.append('consumer_secret', wooConfig.consumerSecret);
 
   const response = await fetchWithRetry(url.toString(), {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (compatible; PIM-Sync/1.0)',
+    },
   }, 3);
 
   const responseText = await response.text();
@@ -177,7 +181,15 @@ async function findWooProductBySkuRobust(
   const normalizedSku = normalizeSkuValue(sku);
   if (!normalizedSku) return null;
 
-  // First: exact SKU lookups per status
+  // Strategy 1: SKU lookup without status filter (most reliable)
+  const defaultProducts = await queryWooProductsByParams(wooConfig, {
+    sku,
+    per_page: '20',
+  });
+  const defaultMatch = defaultProducts.find((p: any) => normalizeSkuValue(p?.sku) === normalizedSku);
+  if (defaultMatch) return defaultMatch;
+
+  // Strategy 2: exact SKU lookups per status
   for (const status of SKU_LOOKUP_STATUSES) {
     const products = await queryWooProductsByParams(wooConfig, {
       sku,
@@ -188,16 +200,13 @@ async function findWooProductBySkuRobust(
     if (match) return match;
   }
 
-  // Fallback: broader search, then exact SKU match in returned payload
-  for (const status of SKU_LOOKUP_STATUSES) {
-    const products = await queryWooProductsByParams(wooConfig, {
-      search: sku,
-      status,
-      per_page: '100',
-    });
-    const match = products.find((p: any) => normalizeSkuValue(p?.sku) === normalizedSku);
-    if (match) return match;
-  }
+  // Strategy 3: broader search, then exact SKU match in returned payload
+  const searchProducts = await queryWooProductsByParams(wooConfig, {
+    search: sku,
+    per_page: '100',
+  });
+  const searchMatch = searchProducts.find((p: any) => normalizeSkuValue(p?.sku) === normalizedSku);
+  if (searchMatch) return searchMatch;
 
   return null;
 }
@@ -1277,7 +1286,33 @@ async function createProductInWooCommerce(
         return;
       }
 
-      console.warn(`SKU conflict for ${sku}, but no existing product could be resolved via Woo lookup`);
+      // Fallback 1: check local woo_products cache
+      if (supabase && tenantId) {
+        const { data: cachedWoo } = await supabase
+          .from('woo_products')
+          .select('woo_id, status')
+          .eq('tenant_id', tenantId)
+          .eq('sku', sku)
+          .maybeSingle();
+
+        if (cachedWoo?.woo_id) {
+          console.log(`Found SKU ${sku} in local cache (woo_id: ${cachedWoo.woo_id}), updating via cache fallback`);
+          if (cachedWoo.status === 'trash') {
+            await restoreWooProductFromTrash(cachedWoo.woo_id, wooConfig);
+          }
+          await updateProductInWooCommerce(cachedWoo.woo_id, product, wooConfig, variantIdsFilter, supabase, tenantId);
+          return;
+        }
+
+        // Fallback 2: check products.woocommerce_product_id
+        if (product.woocommerce_product_id) {
+          console.log(`Found SKU ${sku} via products.woocommerce_product_id (${product.woocommerce_product_id}), updating`);
+          await updateProductInWooCommerce(product.woocommerce_product_id, product, wooConfig, variantIdsFilter, supabase, tenantId);
+          return;
+        }
+      }
+
+      console.warn(`SKU conflict for ${sku}, but no existing product could be resolved via any lookup method`);
     }
     
     const errorMessage = JSON.stringify(errorData);
