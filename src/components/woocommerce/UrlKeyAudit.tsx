@@ -73,6 +73,10 @@ export function UrlKeyAudit({ tenantId }: UrlKeyAuditProps) {
         payload: { tenantId, dryRun: true },
         tenant_id: tenantId,
       });
+      if (error && (error.code === "23505" || error.message?.includes("idx_jobs_dedupe"))) {
+        toast.info("Er staat al een Dry Run job klaar");
+        return;
+      }
       if (error) throw error;
       toast.success("Dry Run job ingepland", {
         action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") },
@@ -93,6 +97,10 @@ export function UrlKeyAudit({ tenantId }: UrlKeyAuditProps) {
         payload: { tenantId },
         tenant_id: tenantId,
       });
+      if (error && (error.code === "23505" || error.message?.includes("idx_jobs_dedupe"))) {
+        toast.info("Er staat al een FIX_URL_KEYS job klaar");
+        return;
+      }
       if (error) throw error;
       toast.success("Fix URL Keys job aangemaakt", {
         action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") },
