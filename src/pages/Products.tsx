@@ -61,6 +61,8 @@ const VALIDATION_FILTERS: Record<string, { label: string; fn: (p: any) => boolea
   "no-attributes": { label: "Weinig attributen", fn: (p) => { const a = p.attributes as Record<string, any> | null; return !a || Object.keys(a).length < 3; } },
   "no-categories": { label: "Geen categorieën", fn: (p) => !Array.isArray(p.categories) || p.categories.length === 0 },
   "missing-ean": { label: "Ontbrekende EAN", fn: (p) => p.variants?.length > 0 && !p.variants.every((v: any) => v.ean && v.ean !== "0" && v.ean !== "") },
+  "not-in-woo": { label: "Niet in WooCommerce", fn: (p) => !p.woocommerce_product_id },
+  "dirty-woo": { label: "Wacht op WooCommerce sync", fn: (p) => p.dirty_content || p.dirty_media || p.dirty_price_stock || p.dirty_taxonomy || p.dirty_variations },
 };
 
 const Products = () => {
