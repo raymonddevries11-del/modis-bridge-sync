@@ -41,7 +41,7 @@ const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; ten
       const { error: stockError } = await supabase.from("stock_totals").upsert({ variant_id: variant.id, qty: newQty, updated_at: new Date().toISOString() }, { onConflict: "variant_id" });
       if (stockError) throw stockError;
       const { error: jobError } = await supabase.from("jobs").insert({ type: "SYNC_TO_WOO", state: "ready", tenant_id: tenantId, payload: { variantIds: [variant.id] } });
-      if (jobError) throw jobError;
+      if (jobError && jobError.code !== "23505") throw jobError;
     },
     onSuccess: () => { toast.success(`Voorraad bijgewerkt naar ${stockValue}`); queryClient.invalidateQueries({ queryKey: ["product-detail"] }); setIsEditing(false); },
     onError: (error: any) => toast.error(`Update mislukt: ${error.message}`),

@@ -27,6 +27,10 @@ const Jobs = () => {
         payload: { tenantId },
         tenant_id: tenantId,
       });
+      if (error && (error.code === "23505" || error.message?.includes("idx_jobs_dedupe"))) {
+        toast.info("Er staat al een FIX_URL_KEYS job klaar");
+        return;
+      }
       if (error) throw error;
     },
     onSuccess: () => {

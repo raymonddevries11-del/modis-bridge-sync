@@ -61,6 +61,11 @@ const ChannelWooCommerce = () => {
       const { error } = await supabase.from("jobs").insert({
         type, state: "ready" as const, payload: { tenantId }, tenant_id: tenantId,
       });
+      if (error && (error.code === "23505" || error.message?.includes("idx_jobs_dedupe"))) {
+        toast.info("Er staat al een job klaar voor deze actie");
+        refetchStats();
+        return;
+      }
       if (error) throw error;
       toast.success(`${label} job aangemaakt`, { action: { label: "Bekijk Jobs", onClick: () => navigate("/jobs") } });
       refetchStats();
@@ -106,6 +111,17 @@ const ChannelWooCommerce = () => {
         jobs.push({ type: "SYNC_TO_WOO", state: "ready" as const, payload: { productIds: productIds.slice(i, i + BATCH_SIZE) }, tenant_id: tenantId });
       }
       const { error } = await supabase.from("jobs").insert(jobs);
+      if (error && (error.code === "23505" || error.message?.includes("idx_jobs_dedupe"))) {
+        // Batch insert failed due to duplicate — insert one by one, skip dupes
+        let created = 0;
+        for (const job of jobs) {
+          const { error: singleErr } = await supabase.from("jobs").insert(job);
+          if (!singleErr) created++;
+        }
+        toast.success(`${created} van ${jobs.length} sync jobs aangemaakt (rest stond al in wachtrij)`);
+        refetchStats();
+        return;
+      }
       if (error) throw error;
       const msg = skipped > 0
         ? `${jobs.length} sync jobs aangemaakt voor ${productIds.length} producten (${skipped} al in wachtrij)`
