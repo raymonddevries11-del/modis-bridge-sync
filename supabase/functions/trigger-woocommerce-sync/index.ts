@@ -88,30 +88,34 @@ Deno.serve(async (req) => {
       payload: { productIds: batch },
     }));
 
-    const { error: jobError } = await supabase
-      .from('jobs')
-      .insert(jobRows);
-
-    if (jobError) {
-      console.error('Error creating jobs:', jobError);
-      throw jobError;
+    let actualJobsCreated = 0;
+    for (const row of jobRows) {
+      const { error: jobError } = await supabase.from('jobs').insert(row);
+      if (jobError && jobError.code === '23505') {
+        console.log(`Skipping duplicate sync job (already queued)`);
+      } else if (jobError) {
+        console.error('Error creating job:', jobError);
+        throw jobError;
+      } else {
+        actualJobsCreated++;
+      }
     }
 
-    console.log(`Created sync job for ${products.length} products`);
+    console.log(`Created ${actualJobsCreated}/${batches.length} sync jobs for ${products.length} products`);
 
     // Trigger the job scheduler to process immediately
     const { error: schedulerError } = await supabase.functions.invoke('job-scheduler');
     
     if (schedulerError) {
       console.warn('Failed to trigger job scheduler:', schedulerError);
-      // Don't throw - job will still be processed eventually
     }
 
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Created ${batches.length} sync jobs for ${products.length} products`,
-        jobsCreated: batches.length,
+        message: `Created ${actualJobsCreated} sync jobs for ${products.length} products`,
+        jobsCreated: actualJobsCreated,
+        skippedDuplicates: batches.length - actualJobsCreated,
         productsQueued: products.length,
         batchSize: BATCH_SIZE,
       }),

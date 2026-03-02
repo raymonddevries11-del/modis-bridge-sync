@@ -118,13 +118,17 @@ Deno.serve(async (req) => {
           const BATCH = bucket.type === 'CREATE_NEW_PRODUCTS' ? 3 : 25;
           for (let i = 0; i < validProductIds.length; i += BATCH) {
             const batch = validProductIds.slice(i, i + BATCH);
-            await supabase.from('jobs').insert({
+            const { error: jobErr } = await supabase.from('jobs').insert({
               type: bucket.type,
               state: 'ready',
               payload: { productIds: batch },
               tenant_id: bucket.tenantId,
             });
-            stats.requeued_job_count++;
+            if (jobErr && jobErr.code === '23505') {
+              console.log(`Skipping duplicate requeue job (already queued)`);
+            } else {
+              stats.requeued_job_count++;
+            }
           }
           stats.requeued_products += validProductIds.length;
         }

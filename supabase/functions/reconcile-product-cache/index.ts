@@ -338,7 +338,11 @@ Deno.serve(async (req) => {
                 tenant_id: tenantId,
                 payload: { productIds: batch.map(p => p.id), source: 'reconciliation' },
               });
-              if (!jobErr) syncsQueued += batch.length;
+              if (jobErr && jobErr.code === '23505') {
+                console.log(`Skipping duplicate reconciliation job (already queued)`);
+              } else if (!jobErr) {
+                syncsQueued += batch.length;
+              }
             }
             console.log(`Queued ${syncsQueued} uncached products for sync`);
           }

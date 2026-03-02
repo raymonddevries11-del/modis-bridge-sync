@@ -53,14 +53,17 @@ Deno.serve(async (req) => {
       for (let i = 0; i < productIds.length; i += BATCH_SIZE) {
         const batch = productIds.slice(i, i + BATCH_SIZE);
 
-        await supabase.from('jobs').insert({
+        const { error: jobErr } = await supabase.from('jobs').insert({
           type: 'UPDATE_PRODUCTS',
           state: 'ready',
           payload: { productIds: batch },
           tenant_id: tenantId
         });
-
-        jobsCreated++;
+        if (jobErr && jobErr.code === '23505') {
+          console.log(`Skipping duplicate update job (already queued)`);
+        } else {
+          jobsCreated++;
+        }
         console.log(`Created update job for ${batch.length} products (tenant: ${tenantId})`);
       }
     }
