@@ -241,7 +241,7 @@ Deno.serve(async (req) => {
       const batch = missingProducts.slice(i, i + BATCH_SIZE);
       const productIds = batch.map(p => p.id);
 
-      await supabase.from('jobs').insert({
+      const { error: jobErr } = await supabase.from('jobs').insert({
         type: 'SYNC_TO_WOO',
         state: 'ready',
         payload: { productIds, syncScope: 'FULL', isNewProduct: true },
@@ -249,6 +249,10 @@ Deno.serve(async (req) => {
         scope: 'FULL',
         priority: 30,
       });
+      if (jobErr && jobErr.code === '23505') {
+        console.log(`Skipping duplicate job for batch ${i} (already queued)`);
+        continue;
+      }
 
       jobsCreated++;
     }

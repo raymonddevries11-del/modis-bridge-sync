@@ -155,6 +155,14 @@ Deno.serve(async (req) => {
       .select('id')
       .single();
 
+    if (jobError && jobError.code === '23505') {
+      console.log('Retry job already queued (duplicate), skipping');
+      return new Response(JSON.stringify({
+        success: true,
+        message: 'Retry job already queued',
+        skippedDuplicate: true,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
     if (jobError) throw jobError;
 
     // Remove processed pending retries
