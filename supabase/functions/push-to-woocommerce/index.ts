@@ -794,7 +794,8 @@ Deno.serve(async (req) => {
 
     for (const pim of pimProducts) {
       try {
-        // Search WooCommerce for this SKU
+        // Search WooCommerce for this SKU — try default status first, then all statuses
+        let wooProducts: any[] = [];
         const searchUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?sku=${encodeURIComponent(pim.sku)}&${wooAuth}`;
         const searchResult = await fetchWithRetry(searchUrl, { method: 'GET' }, rateLimiter);
 
@@ -804,7 +805,6 @@ Deno.serve(async (req) => {
           results.push({ sku: pim.sku, action: 'error', changes: [], message: 'Blocked by hosting bot protection (all retries exhausted)' });
 
           if (updatedCb.paused) {
-            // Circuit breaker tripped — abort remaining
             results.push(...pimProducts.slice(pimProducts.indexOf(pim) + 1).map((p: any) => ({
               sku: p.sku, action: 'error' as const, changes: [],
               message: 'Skipped — circuit breaker tripped, sync paused',
@@ -814,7 +814,6 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Successful request — reset persistent counter
         await recordSuccess(supabase);
 
         if (!searchResult.response.ok) {
@@ -826,7 +825,38 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const wooProducts = searchResult.json;
+        wooProducts = searchResult.json;
+
+        // If default search returned nothing, search across all statuses (draft, pending, private, trash)
+        if (wooProducts.length === 0) {
+          const allStatuses = ['draft', 'pending', 'private', 'trash'];
+          for (const status of allStatuses) {
+            const statusUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?sku=${encodeURIComponent(pim.sku)}&status=${status}&${wooAuth}`;
+            const statusResult = await fetchWithRetry(statusUrl, { method: 'GET' }, rateLimiter);
+            if (!statusResult.blocked && statusResult.json && Array.isArray(statusResult.json) && statusResult.json.length > 0) {
+              const match = statusResult.json.find((p: any) => p.sku === pim.sku);
+              if (match) {
+                console.log(`[${pim.sku}] Found existing product in status "${status}": WC #${match.id}`);
+                // Restore from trash if needed
+                if (status === 'trash') {
+                  console.log(`[${pim.sku}] Restoring from trash to draft...`);
+                  const restoreUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/${match.id}?${wooAuth}`;
+                  const restoreResult = await fetchWithRetry(restoreUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'draft' }),
+                  }, rateLimiter);
+                  if (restoreResult.response.ok) {
+                    match.status = 'draft';
+                    console.log(`[${pim.sku}] Restored from trash successfully`);
+                  }
+                }
+                wooProducts = [match];
+                break;
+              }
+            }
+          }
+        }
         const prices = pim.product_prices as any;
         const brand = (pim.brands as any)?.name || null;
         const regularPrice = prices?.regular?.toString() || '';
@@ -1229,30 +1259,57 @@ Deno.serve(async (req) => {
               // Multi-strategy SKU lookup: try ?sku=, then ?search=, then local cache
               let existingWoo: any = null;
 
-              // Strategy 1: exact SKU filter
+              // Strategy 1: exact SKU filter (default status)
               const lookupUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?sku=${encodeURIComponent(pim.sku)}&${wooAuth}`;
               const lookupResult = await fetchWithRetry(lookupUrl, { method: 'GET' }, rateLimiter);
               if (!lookupResult.blocked && lookupResult.json && Array.isArray(lookupResult.json) && lookupResult.json.length > 0) {
-                existingWoo = lookupResult.json[0];
+                existingWoo = lookupResult.json.find((p: any) => p.sku === pim.sku) || lookupResult.json[0];
                 console.log(`[${pim.sku}] Found via ?sku= filter: WC #${existingWoo.id}`);
               }
 
-              // Strategy 2: search parameter (catches variations and partial matches)
+              // Strategy 2: SKU filter per non-default status (draft, pending, private, trash)
               if (!existingWoo) {
-                console.log(`[${pim.sku}] ?sku= returned empty, trying ?search=`);
-                const searchUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?search=${encodeURIComponent(pim.sku)}&per_page=5&${wooAuth}`;
-                const searchResult = await fetchWithRetry(searchUrl, { method: 'GET' }, rateLimiter);
-                if (!searchResult.blocked && searchResult.json && Array.isArray(searchResult.json)) {
-                  existingWoo = searchResult.json.find((p: any) => p.sku === pim.sku) || null;
+                const fallbackStatuses = ['draft', 'pending', 'private', 'trash'];
+                for (const status of fallbackStatuses) {
+                  const statusUrl = `${config.woocommerce_url}/wp-json/wc/v3/products?sku=${encodeURIComponent(pim.sku)}&status=${status}&${wooAuth}`;
+                  const statusResult = await fetchWithRetry(statusUrl, { method: 'GET' }, rateLimiter);
+                  if (!statusResult.blocked && statusResult.json && Array.isArray(statusResult.json)) {
+                    const match = statusResult.json.find((p: any) => p.sku === pim.sku);
+                    if (match) {
+                      existingWoo = match;
+                      console.log(`[${pim.sku}] Found via ?sku=&status=${status}: WC #${existingWoo.id}`);
+                      // Restore from trash
+                      if (status === 'trash') {
+                        console.log(`[${pim.sku}] Restoring from trash to draft...`);
+                        const restoreUrl = `${config.woocommerce_url}/wp-json/wc/v3/products/${existingWoo.id}?${wooAuth}`;
+                        await fetchWithRetry(restoreUrl, {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ status: 'draft' }),
+                        }, rateLimiter);
+                      }
+                      break;
+                    }
+                  }
+                }
+              }
+
+              // Strategy 3: search parameter (catches partial matches)
+              if (!existingWoo) {
+                console.log(`[${pim.sku}] ?sku= across all statuses empty, trying ?search=`);
+                const searchUrl2 = `${config.woocommerce_url}/wp-json/wc/v3/products?search=${encodeURIComponent(pim.sku)}&per_page=5&${wooAuth}`;
+                const searchResult2 = await fetchWithRetry(searchUrl2, { method: 'GET' }, rateLimiter);
+                if (!searchResult2.blocked && searchResult2.json && Array.isArray(searchResult2.json)) {
+                  existingWoo = searchResult2.json.find((p: any) => p.sku === pim.sku) || null;
                   if (existingWoo) {
                     console.log(`[${pim.sku}] Found via ?search=: WC #${existingWoo.id}`);
                   }
                 }
               }
 
-              // Strategy 3: local woo_products cache (may have been cached by cache-woo-products)
+              // Strategy 4: local woo_products cache
               if (!existingWoo) {
-                console.log(`[${pim.sku}] API lookups empty, checking local cache`);
+                console.log(`[${pim.sku}] All API lookups empty, checking local cache`);
                 const { data: cachedEntry } = await supabase
                   .from('woo_products')
                   .select('woo_id, name, slug, status, type')
