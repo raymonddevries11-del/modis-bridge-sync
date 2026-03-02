@@ -8,10 +8,11 @@ const corsHeaders = {
 // Batch sizes per scope
 const SCOPE_BATCH_SIZES: Record<string, number> = {
   PRICE_STOCK: 50,
-  CONTENT: 25,
-  TAXONOMY: 25,
-  MEDIA: 10,
-  VARIATIONS: 10,
+  CONTENT: 20,
+  TAXONOMY: 20,
+  MEDIA: 3,
+  VARIATIONS: 5,
+  FULL: 3,
 };
 
 // Shorter window for price/stock = near real-time
