@@ -1385,28 +1385,71 @@ async function createProductInWooCommerce(
         console.warn(`wc-analytics fallback failed for ${sku}:`, err);
       }
 
-      // Fallback 4: Purge stale SKU from WC lookup table by deleting+recreating
+      // Fallback 4: Purge stale SKU from WC lookup table
       // WooCommerce has a known issue where deleted products leave orphaned entries in wp_wc_product_meta_lookup
-      // Try to clear the stale entry by calling the system status tools API
-      console.warn(`SKU conflict for ${sku}: product exists in WC lookup table but cannot be found via any API. Attempting stale entry cleanup...`);
+      // clear_transients doesn't fix this — we need regenerate_product_lookup_tables
+      console.warn(`SKU conflict for ${sku}: product exists in WC lookup table but cannot be found via any API. Attempting lookup table regeneration...`);
+      
+      let lookupRegenerated = false;
       try {
-        // Use the WC system status tools to regenerate the lookup table for this SKU
+        // Step 1: Regenerate product lookup tables (fixes orphaned wp_wc_product_meta_lookup entries)
+        const regenUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/system_status/tools/regenerate_product_lookup_tables`);
+        regenUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+        regenUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+        
+        const regenResp = await fetchWithRetry(regenUrl.toString(), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; PIM-Sync/1.0)' },
+          body: JSON.stringify({ confirm: true }),
+        }, 1);
+        lookupRegenerated = regenResp.ok;
+        console.log(`Regenerate product lookup tables for ${sku}: ${regenResp.ok ? 'success' : regenResp.status}`);
+      } catch (regenErr) {
+        console.warn(`Could not regenerate product lookup tables:`, regenErr);
+      }
+
+      // Step 2: Also clear transients as belt-and-suspenders
+      try {
         const toolUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/system_status/tools/clear_transients`);
         toolUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
         toolUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
-        
         await fetchWithRetry(toolUrl.toString(), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ confirm: true }),
         }, 1);
-        console.log(`Cleared WC transients cache for SKU ${sku}`);
-      } catch (cleanupErr) {
-        console.warn(`Could not clear WC transients:`, cleanupErr);
+      } catch { /* best effort */ }
+
+      // Step 3: If lookup table was regenerated, wait a moment and retry the create immediately
+      if (lookupRegenerated) {
+        console.log(`Lookup table regenerated, retrying create for ${sku} in 3s...`);
+        await new Promise(r => setTimeout(r, 3000));
+        
+        const retryCreateResp = await fetchWithRetry(createUrl.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; PIM-Sync/1.0)' },
+          body: JSON.stringify(productData),
+        }, 1);
+        
+        if (retryCreateResp.ok) {
+          const retryCreated = await retryCreateResp.json();
+          console.log(`✓ Retry after lookup regen succeeded! Created ${sku} with ID ${retryCreated.id}`);
+          
+          // Update PIM + cache
+          if (supabase && tenantId) {
+            await supabase.from('products').update({ woocommerce_product_id: retryCreated.id }).eq('id', product.id);
+            await upsertWooProductCache(supabase, tenantId, retryCreated.id, product.id, sku, product.title, retryCreated.slug, retryCreated.status, retryCreated.type);
+          }
+          await updateProductInWooCommerce(retryCreated.id, product, wooConfig, variantIdsFilter, supabase, tenantId);
+          return;
+        }
+        
+        const retryText = await retryCreateResp.text();
+        console.warn(`Retry create after lookup regen still failed for ${sku}: ${retryCreateResp.status} - ${retryText.substring(0, 200)}`);
       }
 
-      // Reclassify as a retryable "stale_sku" error instead of permanent "validation"
-      throw new Error(`Stale SKU conflict for ${sku}: product exists in WC lookup table but API search returns nothing. Transient cache cleared — retry should succeed. Original: ${JSON.stringify(errorData).substring(0, 200)}`);
+      // Reclassify as a retryable "stale_sku" error
+      throw new Error(`Stale SKU conflict for ${sku}: product exists in WC lookup table but API search returns nothing. Lookup table regenerated (${lookupRegenerated}). Original: ${JSON.stringify(errorData).substring(0, 200)}`);
     }
     
     const errorMessage = JSON.stringify(errorData);
