@@ -104,6 +104,58 @@ async function uploadToWordPressMedia(
 }
 
 /**
+ * Ensure a brand exists in WooCommerce via the Perfect WooCommerce Brands plugin (pwb-brand taxonomy).
+ * Returns the brand term ID, or null on failure.
+ */
+async function ensurePwbBrandExists(
+  brandName: string,
+  wooBaseUrl: string,
+  rateLimiter: any,
+): Promise<number | null> {
+  const wpUser = Deno.env.get('WP_APP_USERNAME') || '';
+  const wpPass = Deno.env.get('WP_APP_PASSWORD') || '';
+  if (!wpUser || !wpPass) {
+    console.warn('WP_APP_USERNAME/WP_APP_PASSWORD not set — cannot manage pwb-brand taxonomy');
+    return null;
+  }
+  const auth = btoa(`${wpUser}:${wpPass}`);
+  const headers = { 'Content-Type': 'application/json', 'Authorization': `Basic ${auth}` };
+
+  try {
+    // Search for existing brand
+    const searchUrl = `${wooBaseUrl}/wp-json/wp/v2/pwb-brand?search=${encodeURIComponent(brandName)}`;
+    const searchResult = await fetchWithRetry(searchUrl, { headers }, rateLimiter);
+    if (!searchResult.blocked && searchResult.json && Array.isArray(searchResult.json)) {
+      const exact = searchResult.json.find((b: any) => b.name?.toLowerCase() === brandName.toLowerCase());
+      if (exact) {
+        console.log(`PWB brand "${brandName}" found: ID ${exact.id}`);
+        return exact.id;
+      }
+    }
+
+    // Create new brand
+    const createUrl = `${wooBaseUrl}/wp-json/wp/v2/pwb-brand`;
+    const createResult = await fetchWithRetry(createUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        name: brandName,
+        slug: brandName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+      }),
+    }, rateLimiter);
+    if (!createResult.blocked && createResult.json?.id) {
+      console.log(`PWB brand "${brandName}" created: ID ${createResult.json.id}`);
+      return createResult.json.id;
+    }
+    console.warn(`Failed to create PWB brand "${brandName}"`);
+    return null;
+  } catch (err) {
+    console.error(`ensurePwbBrandExists error for "${brandName}":`, err);
+    return null;
+  }
+}
+
+/**
  * Process images: upload Supabase storage images to WP Media Library.
  * Returns array of { id, src, position } objects for WooCommerce product API.
  */
@@ -1070,8 +1122,13 @@ Deno.serve(async (req) => {
 
           // --- Brand taxonomy for Perfect WooCommerce Brands plugin ---
           if (brand) {
-            desiredData.brands = [{ name: brand }];
-            console.log(`[${pim.sku}] Set brand taxonomy: "${brand}"`);
+            const pwbBrandId = await ensurePwbBrandExists(brand, config.woocommerce_url, rateLimiter);
+            if (pwbBrandId) {
+              desiredData.brand_ids = [pwbBrandId];
+              console.log(`[${pim.sku}] Set brand taxonomy: "${brand}" (PWB ID: ${pwbBrandId})`);
+            } else {
+              console.warn(`[${pim.sku}] Could not resolve PWB brand "${brand}" — skipping brand_ids`);
+            }
           }
         }
 
