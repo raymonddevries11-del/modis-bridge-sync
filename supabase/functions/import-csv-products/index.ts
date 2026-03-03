@@ -224,11 +224,12 @@ Deno.serve(async (req) => {
     console.log(`Existing products in DB: ${existingProducts.size}`);
 
     // PHASE 0: Update images for existing products where CSV has more/different images
+    const IMG_BATCH = 50;
     let imagesUpdated = 0;
     const existingParents = parents.filter(p => existingProducts.has(p.sku));
     
-    for (let i = 0; i < existingParents.length; i += BATCH) {
-      const batch = existingParents.slice(i, i + BATCH);
+    for (let i = 0; i < existingParents.length; i += IMG_BATCH) {
+      const batch = existingParents.slice(i, i + IMG_BATCH);
       for (const parent of batch) {
         const existing = existingProducts.get(parent.sku)!;
         const csvImages = parent.images;
