@@ -206,34 +206,86 @@ Deno.serve(async (req) => {
 
     console.log(`Found ${parents.length} parent products, ${variations.length} variations`);
 
-    // Get existing SKUs
-    const existingSkus = new Set<string>();
+    // Get existing SKUs with their IDs and current images
+    const existingProducts = new Map<string, { id: string; images: string[] }>();
     let offset = 0;
     while (true) {
       const { data } = await supabase
         .from('products')
-        .select('sku')
+        .select('id, sku, images')
         .eq('tenant_id', tenantId)
         .range(offset, offset + 999);
       if (!data || data.length === 0) break;
-      data.forEach((p: any) => existingSkus.add(p.sku));
+      data.forEach((p: any) => existingProducts.set(p.sku, { id: p.id, images: p.images || [] }));
       if (data.length < 1000) break;
       offset += 1000;
     }
 
-    console.log(`Existing products in DB: ${existingSkus.size}`);
+    console.log(`Existing products in DB: ${existingProducts.size}`);
+
+    // PHASE 0: Update images for existing products where CSV has more/different images
+    let imagesUpdated = 0;
+    const existingParents = parents.filter(p => existingProducts.has(p.sku));
+    
+    for (let i = 0; i < existingParents.length; i += BATCH) {
+      const batch = existingParents.slice(i, i + BATCH);
+      for (const parent of batch) {
+        const existing = existingProducts.get(parent.sku)!;
+        const csvImages = parent.images;
+        
+        // Normalize existing images for comparison (strip URLs to filenames)
+        const existingFilenames = (existing.images || []).map((img: string) => {
+          if (typeof img !== 'string') return '';
+          const lastSlash = Math.max(img.lastIndexOf('/'), img.lastIndexOf('\\'));
+          return lastSlash >= 0 ? img.substring(lastSlash + 1) : img;
+        }).filter(Boolean);
+        
+        // Only update if CSV has different/more images
+        const csvSet = new Set(csvImages);
+        const existingSet = new Set(existingFilenames);
+        const isDifferent = csvImages.length !== existingFilenames.length || 
+          csvImages.some(img => !existingSet.has(img));
+        
+        if (isDifferent && csvImages.length > 0) {
+          const { error } = await supabase
+            .from('products')
+            .update({ images: csvImages })
+            .eq('id', existing.id);
+          
+          if (error) {
+            console.error(`Failed to update images for ${parent.sku}:`, error.message);
+          } else {
+            imagesUpdated++;
+          }
+        }
+      }
+    }
+    
+    console.log(`Updated images for ${imagesUpdated} existing products`);
 
     // Filter new parents only
-    const newParents = parents.filter(p => !existingSkus.has(p.sku));
+    const newParents = parents.filter(p => !existingProducts.has(p.sku));
     console.log(`New products to import: ${newParents.length}`);
 
+    if (newParents.length === 0 && imagesUpdated === 0) {
+      return new Response(JSON.stringify({
+        success: true,
+        message: 'No new products to import, no images updated',
+        existing: existingProducts.size,
+        csvParents: parents.length,
+        csvVariations: variations.length,
+        imagesUpdated: 0,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+    
     if (newParents.length === 0) {
       return new Response(JSON.stringify({
         success: true,
-        message: 'No new products to import',
-        existing: existingSkus.size,
+        message: `No new products, but updated images for ${imagesUpdated} products`,
+        existing: existingProducts.size,
         csvParents: parents.length,
         csvVariations: variations.length,
+        imagesUpdated,
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
@@ -385,12 +437,13 @@ Deno.serve(async (req) => {
       success: true,
       csvParents: parents.length,
       csvVariations: variations.length,
-      existingProducts: existingSkus.size,
+      existingProducts: existingProducts.size,
       newProductsFound: newParents.length,
       productsInserted,
       pricesInserted,
       variantsInserted,
       stockInserted,
+      imagesUpdated,
       brandsCreated: uniqueBrands.filter(b => !brandMap.has(b)).length,
     };
 
