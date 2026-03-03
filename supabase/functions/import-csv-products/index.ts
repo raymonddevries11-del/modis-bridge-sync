@@ -169,7 +169,21 @@ Deno.serve(async (req) => {
           salePrice: parsePrice(row[salePriceIdx] || ''),
           categories: cats ? cats.split('>').map((c: string) => c.trim()).filter(Boolean) : [],
           brand: row[brandsIdx]?.trim() || '',
-          images: images ? images.split(',').map((i: string) => i.trim()).filter(Boolean) : [],
+          images: images ? images.split(',').map((i: string) => {
+            let cleaned = i.trim();
+            // Strip full server paths, keep only filename
+            // e.g. /home/customer/www/.../webfoto/W-1_105083002.JPG -> W-1_105083002.JPG
+            const lastSlash = cleaned.lastIndexOf('/');
+            if (lastSlash >= 0) {
+              cleaned = cleaned.substring(lastSlash + 1);
+            }
+            // Also strip backslash paths
+            const lastBackslash = cleaned.lastIndexOf('\\');
+            if (lastBackslash >= 0) {
+              cleaned = cleaned.substring(lastBackslash + 1);
+            }
+            return cleaned;
+          }).filter(Boolean) : [],
           attributes,
         });
       } else if (type === 'variation') {
