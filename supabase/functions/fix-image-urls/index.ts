@@ -20,17 +20,16 @@ Deno.serve(async (req) => {
     const offset = body.offset || 0;
     const chunkSize = body.chunkSize || 200;
     const dryRun = body.dryRun || false;
+    const enrichFromStorage = body.enrichFromStorage || false;
 
     // Get tenant
     const { data: tenant } = await supabase
       .from('tenants').select('id').eq('slug', tenantSlug).single();
     if (!tenant) throw new Error('Tenant not found');
 
-    // Pre-fetch list of files in storage bucket (paginated, up to 10000)
-    // Maps lowercase filename -> actual storage path (for case-insensitive matching)
+    // Pre-fetch list of files in storage bucket
     const bucketFileMap = new Map<string, string>();
     
-    // Helper to list all files in a directory
     async function listBucketDir(dir: string) {
       let dirOffset = 0;
       while (true) {
@@ -39,11 +38,9 @@ Deno.serve(async (req) => {
           .list(dir, { limit: 1000, offset: dirOffset });
         if (!files || files.length === 0) break;
         for (const f of files) {
-          if (!f.name || !f.name.includes('.')) continue; // skip subdirs
+          if (!f.name || !f.name.includes('.')) continue;
           const fullPath = dir ? `${dir}/${f.name}` : f.name;
           const justFilename = f.name.toLowerCase();
-          // Store mapping: lowercase filename -> full storage path
-          // Root-level files take priority over subdirectory files
           if (!dir) {
             bucketFileMap.set(justFilename, fullPath);
           } else if (!bucketFileMap.has(justFilename)) {
@@ -55,7 +52,6 @@ Deno.serve(async (req) => {
       }
     }
     
-    // List root AND modis/foto/ subdirectory
     await Promise.all([
       listBucketDir(''),
       listBucketDir('modis/foto'),
@@ -63,7 +59,119 @@ Deno.serve(async (req) => {
 
     console.log(`Loaded ${bucketFileMap.size} unique filenames from storage bucket`);
 
-    // Get products in this chunk
+    const storageBase = `${supabaseUrl}/storage/v1/object/public/product-images/`;
+
+    // ── ENRICH MODE: scan storage for additional w-N images ──
+    if (enrichFromStorage) {
+      // Build reverse index: sku-base (lowercase) -> list of storage paths sorted by w-N number
+      const skuBaseToFiles = new Map<string, string[]>();
+      for (const [lowerName, storagePath] of bucketFileMap) {
+        // Match pattern: w-{N}_{skubase}.{ext}
+        const match = lowerName.match(/^w-(\d+)_(.+)\.\w+$/);
+        if (!match) continue;
+        const num = parseInt(match[1]);
+        const skuBase = match[2];
+        if (!skuBaseToFiles.has(skuBase)) skuBaseToFiles.set(skuBase, []);
+        skuBaseToFiles.get(skuBase)!.push(storagePath);
+      }
+      // Sort each set by w-N number
+      for (const [, files] of skuBaseToFiles) {
+        files.sort((a, b) => {
+          const na = parseInt(a.toLowerCase().match(/w-(\d+)/)?.[1] || '0');
+          const nb = parseInt(b.toLowerCase().match(/w-(\d+)/)?.[1] || '0');
+          return na - nb;
+        });
+      }
+
+      console.log(`Built SKU-base index with ${skuBaseToFiles.size} unique bases`);
+
+      // Get products chunk
+      const { data: batch, error: batchError } = await supabase
+        .from('products')
+        .select('id, sku, images')
+        .eq('tenant_id', tenant.id)
+        .range(offset, offset + chunkSize - 1);
+
+      if (batchError) throw batchError;
+      if (!batch || batch.length === 0) {
+        return new Response(JSON.stringify({
+          success: true, complete: true, enriched: 0,
+          message: 'No more products to process',
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      let enriched = 0;
+      const enrichedSamples: { sku: string; before: number; after: number }[] = [];
+
+      for (const product of batch) {
+        // Extract SKU base: strip trailing zeros (e.g. 244765001000 -> 244765001)
+        const skuBase = product.sku.replace(/0{3}$/, '').toLowerCase();
+        const storageFiles = skuBaseToFiles.get(skuBase);
+        if (!storageFiles || storageFiles.length === 0) continue;
+
+        const currentImages = Array.isArray(product.images) ? product.images as string[] : [];
+        
+        // Normalize current images to lowercase filenames for comparison
+        const currentFilenames = new Set(
+          currentImages.map(img => {
+            if (typeof img !== 'string') return '';
+            const lastSlash = Math.max(img.lastIndexOf('/'), img.lastIndexOf('\\'));
+            return (lastSlash >= 0 ? img.substring(lastSlash + 1) : img).toLowerCase();
+          }).filter(Boolean)
+        );
+
+        // Find storage files not yet in the product's image list
+        const newFiles = storageFiles.filter(f => {
+          const fname = f.split('/').pop()?.toLowerCase() || '';
+          return !currentFilenames.has(fname);
+        });
+
+        if (newFiles.length === 0) continue;
+
+        // Build complete sorted image list from storage (canonical order)
+        const allStorageUrls = storageFiles.map(f => `${storageBase}${f}`);
+
+        if (!dryRun) {
+          const { error: updateError } = await supabase
+            .from('products')
+            .update({ images: allStorageUrls })
+            .eq('id', product.id);
+
+          if (updateError) {
+            console.error(`Error enriching ${product.sku}:`, updateError);
+            continue;
+          }
+        }
+
+        enriched++;
+        if (enrichedSamples.length < 20) {
+          enrichedSamples.push({
+            sku: product.sku,
+            before: currentImages.length,
+            after: allStorageUrls.length,
+          });
+        }
+      }
+
+      const nextOffset = offset + batch.length;
+      const hasMore = batch.length === chunkSize;
+
+      return new Response(JSON.stringify({
+        success: true,
+        dryRun,
+        enrichFromStorage: true,
+        complete: !hasMore,
+        hasMore,
+        nextOffset: hasMore ? nextOffset : null,
+        enriched,
+        enrichedSamples,
+        totalInChunk: batch.length,
+        bucketFileCount: bucketFileMap.size,
+        skuBasesFound: skuBaseToFiles.size,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // ── ORIGINAL MODE: fix external URLs ──
     const { data: batch, error: batchError } = await supabase
       .from('products')
       .select('id, sku, images')
@@ -79,9 +187,6 @@ Deno.serve(async (req) => {
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    const storageBase = `${supabaseUrl}/storage/v1/object/public/product-images/`;
-
-    // Filter products that have external URLs (not pointing to our storage)
     const toFix = batch.filter(p => {
       const imgs = p.images as string[];
       if (!Array.isArray(imgs) || imgs.length === 0) return false;
@@ -107,16 +212,13 @@ Deno.serve(async (req) => {
       for (const img of images) {
         if (typeof img !== 'string' || !img) continue;
 
-        // Already points to our storage — keep as-is
         if (img.includes('supabase.co/storage')) {
           newImages.push(img);
           continue;
         }
 
-        // Extract filename from URL or path
         let filename = '';
         if (img.includes('modis/foto')) {
-          // Old modis path: extract and split on semicolons
           const paths = img.includes(';') ? img.split(';') : [img];
           for (const path of paths) {
             const trimmed = path.trim();
@@ -137,7 +239,6 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // External URL (kosterschoenmode.nl, etc): extract filename
         try {
           const url = new URL(img);
           filename = url.pathname.split('/').pop() || '';
@@ -150,7 +251,6 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Check if file exists in bucket using case-insensitive lookup
         const lookupKey = filename.toLowerCase();
         const storagePath = bucketFileMap.get(lookupKey);
         if (storagePath) {
@@ -158,7 +258,7 @@ Deno.serve(async (req) => {
           convertedUrls++;
           changed = true;
         } else {
-          newImages.push(img); // Keep original
+          newImages.push(img);
           notFoundInBucket++;
           if (notFoundSamples.length < 10) notFoundSamples.push(filename);
         }
