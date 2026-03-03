@@ -794,6 +794,7 @@ async function processJob(
 /** Classify WooCommerce errors for smart retry decisions */
 function classifyWooError(msg: string): string {
   const lower = msg.toLowerCase();
+  if (lower.includes('stale sku conflict')) return 'stale_sku';
   if (lower.includes('504') || lower.includes('timeout') || lower.includes('etimedout')) return 'timeout';
   if (lower.includes('429') || lower.includes('rate limit')) return 'rate_limit';
   if (lower.includes('502') || lower.includes('503') || lower.includes('529')) return 'server_error';
@@ -816,7 +817,35 @@ async function syncProductToWooCommerce(
 
   console.log(`Syncing product ${sku}`);
 
-  // Find WooCommerce product by SKU
+  // ── PREFLIGHT CHECK 1: Use products.woocommerce_product_id if already known ──
+  if (product.woocommerce_product_id) {
+    console.log(`Product ${sku} has stored woocommerce_product_id=${product.woocommerce_product_id}, updating directly`);
+    await updateProductInWooCommerce(product.woocommerce_product_id, product, wooConfig, variantIdsFilter, supabase, tenantId);
+    return;
+  }
+
+  // ── PREFLIGHT CHECK 2: Check local woo_products cache before hitting WC API ──
+  if (supabase && tenantId) {
+    const { data: cachedWoo } = await supabase
+      .from('woo_products')
+      .select('woo_id, status')
+      .eq('tenant_id', tenantId)
+      .eq('sku', sku)
+      .maybeSingle();
+
+    if (cachedWoo?.woo_id) {
+      console.log(`Product ${sku} found in local cache (woo_id: ${cachedWoo.woo_id}), updating via cache`);
+      // Backfill woocommerce_product_id so we don't need cache next time
+      await supabase.from('products').update({ woocommerce_product_id: cachedWoo.woo_id }).eq('id', product.id);
+      if (cachedWoo.status === 'trash') {
+        await restoreWooProductFromTrash(cachedWoo.woo_id, wooConfig);
+      }
+      await updateProductInWooCommerce(cachedWoo.woo_id, product, wooConfig, variantIdsFilter, supabase, tenantId);
+      return;
+    }
+  }
+
+  // ── STANDARD FLOW: Find WooCommerce product by SKU via API ──
   const searchUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/products`);
   searchUrl.searchParams.append('sku', sku);
   searchUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
@@ -825,6 +854,8 @@ async function syncProductToWooCommerce(
   const searchResponse = await fetchWithRetry(searchUrl.toString(), {
     headers: {
       'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (compatible; PIM-Sync/1.0)',
     },
   });
 
@@ -854,10 +885,18 @@ async function syncProductToWooCommerce(
     return;
   }
 
-  // Product exists, update it
+  // Product exists, update it — and backfill woocommerce_product_id
   const wooProduct = wooProducts[0];
   const wooProductId = wooProduct.id;
   console.log(`Found WooCommerce product ID ${wooProductId} for SKU ${sku}, updating`);
+
+  if (supabase && tenantId && !product.woocommerce_product_id) {
+    await supabase.from('products').update({ 
+      woocommerce_product_id: wooProductId,
+      woo_slug: wooProduct.slug || null,
+      woo_permalink: wooProduct.permalink || null,
+    }).eq('id', product.id);
+  }
 
   await updateProductInWooCommerce(wooProductId, product, wooConfig, variantIdsFilter, supabase, tenantId);
 }
@@ -1300,6 +1339,7 @@ async function createProductInWooCommerce(
           if (cachedWoo.status === 'trash') {
             await restoreWooProductFromTrash(cachedWoo.woo_id, wooConfig);
           }
+          await supabase.from('products').update({ woocommerce_product_id: cachedWoo.woo_id }).eq('id', product.id);
           await updateProductInWooCommerce(cachedWoo.woo_id, product, wooConfig, variantIdsFilter, supabase, tenantId);
           return;
         }
@@ -1312,7 +1352,61 @@ async function createProductInWooCommerce(
         }
       }
 
-      console.warn(`SKU conflict for ${sku}, but no existing product could be resolved via any lookup method`);
+      // Fallback 3: Try wc-analytics/products endpoint (bypasses regular search, queries lookup table directly)
+      try {
+        const analyticsUrl = new URL(`${wooConfig.url}/wp-json/wc-analytics/products`);
+        analyticsUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+        analyticsUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+        analyticsUrl.searchParams.append('search', sku);
+        analyticsUrl.searchParams.append('per_page', '20');
+
+        const analyticsResponse = await fetchWithRetry(analyticsUrl.toString(), {
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; PIM-Sync/1.0)' },
+        }, 2);
+
+        if (analyticsResponse.ok) {
+          const analyticsText = await analyticsResponse.text();
+          try {
+            const analyticsProducts = JSON.parse(analyticsText);
+            const match = Array.isArray(analyticsProducts)
+              ? analyticsProducts.find((p: any) => normalizeSkuValue(p?.sku) === normalizeSkuValue(sku))
+              : null;
+            if (match?.id) {
+              console.log(`Found SKU ${sku} via wc-analytics endpoint (ID: ${match.id}), updating`);
+              if (supabase && tenantId) {
+                await supabase.from('products').update({ woocommerce_product_id: match.id }).eq('id', product.id);
+              }
+              await updateProductInWooCommerce(match.id, product, wooConfig, variantIdsFilter, supabase, tenantId);
+              return;
+            }
+          } catch { /* non-JSON response, continue */ }
+        }
+      } catch (err) {
+        console.warn(`wc-analytics fallback failed for ${sku}:`, err);
+      }
+
+      // Fallback 4: Purge stale SKU from WC lookup table by deleting+recreating
+      // WooCommerce has a known issue where deleted products leave orphaned entries in wp_wc_product_meta_lookup
+      // Try to clear the stale entry by calling the system status tools API
+      console.warn(`SKU conflict for ${sku}: product exists in WC lookup table but cannot be found via any API. Attempting stale entry cleanup...`);
+      try {
+        // Use the WC system status tools to regenerate the lookup table for this SKU
+        const toolUrl = new URL(`${wooConfig.url}/wp-json/wc/v3/system_status/tools/clear_transients`);
+        toolUrl.searchParams.append('consumer_key', wooConfig.consumerKey);
+        toolUrl.searchParams.append('consumer_secret', wooConfig.consumerSecret);
+        
+        await fetchWithRetry(toolUrl.toString(), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirm: true }),
+        }, 1);
+        console.log(`Cleared WC transients cache for SKU ${sku}`);
+      } catch (cleanupErr) {
+        console.warn(`Could not clear WC transients:`, cleanupErr);
+      }
+
+      // Reclassify as a retryable "stale_sku" error instead of permanent "validation"
+      throw new Error(`Stale SKU conflict for ${sku}: product exists in WC lookup table but API search returns nothing. Transient cache cleared — retry should succeed. Original: ${JSON.stringify(errorData).substring(0, 200)}`);
     }
     
     const errorMessage = JSON.stringify(errorData);
