@@ -1044,6 +1044,17 @@ Deno.serve(async (req) => {
           }
         }
 
+        // --- Resolve brand taxonomy ID (will be assigned after product create/update) ---
+        let pendingBrandTermId: number | null = null;
+        if (brand && scope !== 'PRICE_STOCK' && scope !== 'MEDIA' && scope !== 'VARIATIONS') {
+          pendingBrandTermId = await ensureWcBrandExists(brand, config.woocommerce_url, config.woocommerce_consumer_key, config.woocommerce_consumer_secret, rateLimiter);
+          if (pendingBrandTermId) {
+            console.log(`[${pim.sku}] Resolved brand "${brand}" → term ID ${pendingBrandTermId}`);
+          } else {
+            console.warn(`[${pim.sku}] Could not resolve brand "${brand}"`);
+          }
+        }
+
         // --- Attributes, taxonomy, tags: skip for PRICE_STOCK and MEDIA scopes ---
         const attrs: any[] = [];
         const skipAttrTaxonomy = (scope === 'PRICE_STOCK' || scope === 'MEDIA');
@@ -1169,18 +1180,8 @@ Deno.serve(async (req) => {
               console.log(`[${pim.sku}] Removed 'Sale' tag (is_promotion=false)`);
             }
           }
-
-          // --- Resolve brand taxonomy ID (will be assigned after product create/update) ---
-          let pendingBrandTermId: number | null = null;
-          if (brand) {
-            pendingBrandTermId = await ensureWcBrandExists(brand, config.woocommerce_url, config.woocommerce_consumer_key, config.woocommerce_consumer_secret, rateLimiter);
-            if (pendingBrandTermId) {
-              console.log(`[${pim.sku}] Resolved brand "${brand}" → term ID ${pendingBrandTermId}`);
-            } else {
-              console.warn(`[${pim.sku}] Could not resolve brand "${brand}"`);
-            }
-          }
         }
+
 
         // --- Pre-flight attribute consistency check: every attr MUST have a name ---
         const invalidAttrs = attrs.filter((a, idx) => !a.name || typeof a.name !== 'string' || a.name.trim() === '');
