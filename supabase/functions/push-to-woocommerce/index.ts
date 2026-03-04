@@ -105,7 +105,7 @@ async function uploadToWordPressMedia(
 
 /**
  * Ensure a brand exists in WooCommerce via the WC REST API /products/brands endpoint.
- * Works with both WooCommerce Brands (official) and Perfect WooCommerce Brands plugin.
+ * The taxonomy is 'product_brand' (used by Perfect WooCommerce Brands / WooCommerce Brands).
  * Returns the brand term ID, or null on failure.
  */
 async function ensureWcBrandExists(
@@ -119,19 +119,22 @@ async function ensureWcBrandExists(
   const authParams = `consumer_key=${ck}&consumer_secret=${cs}`;
 
   try {
-    // Search for existing brand via WC REST API
-    const searchUrl = `${base}/wp-json/wc/v3/products/brands?search=${encodeURIComponent(brandName)}&${authParams}`;
+    // Search for existing brand via WP REST API (taxonomy: product_brand)
+    const searchUrl = `${base}/wp-json/wp/v2/product_brand?search=${encodeURIComponent(brandName)}&per_page=100&${authParams}`;
     const searchResult = await fetchWithRetry(searchUrl, {}, rateLimiter);
     if (!searchResult.blocked && searchResult.json && Array.isArray(searchResult.json)) {
-      const exact = searchResult.json.find((b: any) => b.name?.toLowerCase() === brandName.toLowerCase());
+      const exact = searchResult.json.find((b: any) =>
+        (b.name?.toLowerCase() === brandName.toLowerCase()) ||
+        (b.title?.rendered?.toLowerCase() === brandName.toLowerCase())
+      );
       if (exact) {
         console.log(`WC brand "${brandName}" found: ID ${exact.id}`);
         return exact.id;
       }
     }
 
-    // Create new brand via WC REST API
-    const createUrl = `${base}/wp-json/wc/v3/products/brands?${authParams}`;
+    // Create new brand via WP REST API
+    const createUrl = `${base}/wp-json/wp/v2/product_brand?${authParams}`;
     const createResult = await fetchWithRetry(createUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -144,11 +147,61 @@ async function ensureWcBrandExists(
       console.log(`WC brand "${brandName}" created: ID ${createResult.json.id}`);
       return createResult.json.id;
     }
-    console.warn(`Failed to create WC brand "${brandName}":`, JSON.stringify(createResult.json));
+
+    // Fallback: try WC REST API /products/brands endpoint
+    const wcSearchUrl = `${base}/wp-json/wc/v3/products/brands?search=${encodeURIComponent(brandName)}&${authParams}`;
+    const wcResult = await fetchWithRetry(wcSearchUrl, {}, rateLimiter);
+    if (!wcResult.blocked && wcResult.json && Array.isArray(wcResult.json)) {
+      const exact = wcResult.json.find((b: any) => b.name?.toLowerCase() === brandName.toLowerCase());
+      if (exact) {
+        console.log(`WC brand (fallback) "${brandName}" found: ID ${exact.id}`);
+        return exact.id;
+      }
+    }
+
+    console.warn(`Failed to create/find WC brand "${brandName}"`);
     return null;
   } catch (err) {
     console.error(`ensureWcBrandExists error for "${brandName}":`, err);
     return null;
+  }
+}
+
+/**
+ * Assign a brand (product_brand taxonomy) to a WooCommerce product via the WP REST API.
+ * Uses WP Application Password auth to set taxonomy terms on the product post.
+ */
+async function assignBrandToProduct(
+  wooProductId: number,
+  brandTermId: number,
+  wooBaseUrl: string,
+  rateLimiter: any,
+  sku: string,
+): Promise<void> {
+  const wpUser = Deno.env.get('WP_APP_USERNAME') || '';
+  const wpPass = Deno.env.get('WP_APP_PASSWORD') || '';
+  if (!wpUser || !wpPass) {
+    console.warn(`[${sku}] WP_APP_USERNAME/WP_APP_PASSWORD not set — cannot assign brand taxonomy`);
+    return;
+  }
+  const auth = btoa(`${wpUser}:${wpPass}`);
+  const base = wooBaseUrl.replace(/\/$/, '');
+
+  try {
+    const url = `${base}/wp-json/wp/v2/product/${wooProductId}`;
+    const result = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Basic ${auth}` },
+      body: JSON.stringify({ product_brand: [brandTermId] }),
+    }, rateLimiter);
+
+    if (!result.blocked && result.response?.ok) {
+      console.log(`[${sku}] ✓ Assigned brand term ${brandTermId} to WC #${wooProductId}`);
+    } else {
+      console.warn(`[${sku}] Failed to assign brand to WC #${wooProductId}: ${result.response?.status} ${(result.text || '').substring(0, 200)}`);
+    }
+  } catch (err) {
+    console.error(`[${sku}] assignBrandToProduct error:`, err);
   }
 }
 
@@ -1117,14 +1170,14 @@ Deno.serve(async (req) => {
             }
           }
 
-          // --- Brand taxonomy via WC REST API /products/brands ---
+          // --- Resolve brand taxonomy ID (will be assigned after product create/update) ---
+          let pendingBrandTermId: number | null = null;
           if (brand) {
-            const wcBrandId = await ensureWcBrandExists(brand, config.woocommerce_url, config.woocommerce_consumer_key, config.woocommerce_consumer_secret, rateLimiter);
-            if (wcBrandId) {
-              desiredData.brands = [{ id: wcBrandId }];
-              console.log(`[${pim.sku}] Set brand: "${brand}" (WC Brand ID: ${wcBrandId})`);
+            pendingBrandTermId = await ensureWcBrandExists(brand, config.woocommerce_url, config.woocommerce_consumer_key, config.woocommerce_consumer_secret, rateLimiter);
+            if (pendingBrandTermId) {
+              console.log(`[${pim.sku}] Resolved brand "${brand}" → term ID ${pendingBrandTermId}`);
             } else {
-              console.warn(`[${pim.sku}] Could not resolve WC brand "${brand}" — skipping brands`);
+              console.warn(`[${pim.sku}] Could not resolve brand "${brand}"`);
             }
           }
         }
@@ -1539,6 +1592,12 @@ Deno.serve(async (req) => {
               variationAudits.push(varResult.audit);
             }
 
+            // --- Assign brand taxonomy (product_brand) via WP REST API ---
+            if (pendingBrandTermId) {
+              await assignBrandToProduct(created.id, pendingBrandTermId, config.woocommerce_url, rateLimiter, pim.sku);
+              allChanges.push({ field: 'brand', old_value: null, new_value: brand || '' });
+            }
+
             results.push({ sku: pim.sku, action: 'created', changes: allChanges, message: `Created WC #${created.id}` });
           }
         } else {
@@ -1749,6 +1808,12 @@ Deno.serve(async (req) => {
               if (varResult.synced > 0) {
                 changes.push({ field: 'variations', old_value: null, new_value: `${varResult.synced} variaties gesynchroniseerd (${varResult.audit.attr_fixes} attr fixes)` });
               }
+            }
+
+            // --- Assign brand taxonomy (product_brand) via WP REST API ---
+            if (pendingBrandTermId) {
+              await assignBrandToProduct(woo.id, pendingBrandTermId, config.woocommerce_url, rateLimiter, pim.sku);
+              changes.push({ field: 'brand', old_value: null, new_value: brand || '' });
             }
 
             results.push({ sku: pim.sku, action: 'updated', changes, message: `Updated ${changes.length} fields on WC #${woo.id}` });
