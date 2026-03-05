@@ -591,6 +591,81 @@ Deno.serve(async (req) => {
       else stats.stockUpserted += batch.length;
     }
 
+    // === PHASE 5: Auto-enrich images from storage ===
+    // Scan storage bucket for all w-N_{skubase} pattern files and link them
+    console.log('[import-modis-csv] Phase 5: Auto-enriching images from storage...');
+    const storageBase = `${supabaseUrl}/storage/v1/object/public/product-images/`;
+
+    // Build storage file index (lowercase filename -> actual path)
+    const bucketFileMap = new Map<string, string>();
+    async function listBucketDir(dir: string) {
+      let dirOffset = 0;
+      while (true) {
+        const { data: files } = await supabase.storage
+          .from('product-images')
+          .list(dir, { limit: 1000, offset: dirOffset });
+        if (!files || files.length === 0) break;
+        for (const f of files) {
+          if (!f.name || !f.name.includes('.')) continue;
+          const fullPath = dir ? `${dir}/${f.name}` : f.name;
+          const justFilename = f.name.toLowerCase();
+          if (!dir) {
+            bucketFileMap.set(justFilename, fullPath);
+          } else if (!bucketFileMap.has(justFilename)) {
+            bucketFileMap.set(justFilename, fullPath);
+          }
+        }
+        if (files.length < 1000) break;
+        dirOffset += 1000;
+      }
+    }
+    await Promise.all([listBucketDir(''), listBucketDir('modis/foto')]);
+    console.log(`[import-modis-csv] Storage index: ${bucketFileMap.size} files`);
+
+    // Build reverse index: sku-base (lowercase) -> sorted list of storage paths
+    const skuBaseToFiles = new Map<string, string[]>();
+    for (const [lowerName, storagePath] of bucketFileMap) {
+      const match = lowerName.match(/^w-(\d+)_(.+)\.\w+$/);
+      if (!match) continue;
+      const skuBase = match[2];
+      if (!skuBaseToFiles.has(skuBase)) skuBaseToFiles.set(skuBase, []);
+      skuBaseToFiles.get(skuBase)!.push(storagePath);
+    }
+    for (const [, files] of skuBaseToFiles) {
+      files.sort((a, b) => {
+        const na = parseInt(a.toLowerCase().match(/w-(\d+)/)?.[1] || '0');
+        const nb = parseInt(b.toLowerCase().match(/w-(\d+)/)?.[1] || '0');
+        return na - nb;
+      });
+    }
+
+    let imagesEnriched = 0;
+    // Enrich products in this chunk
+    for (const p of chunkParents) {
+      const productId = skuToProductId.get(p.sku);
+      if (!productId) continue;
+      const skuBase = p.sku.replace(/0{3}$/, '').toLowerCase();
+      const storageFiles = skuBaseToFiles.get(skuBase);
+      if (!storageFiles || storageFiles.length <= 1) continue; // Only enrich if >1 image available
+
+      // Current images from CSV (already stored)
+      const currentCount = p.images.length;
+      if (storageFiles.length <= currentCount) continue; // Already has enough
+
+      const allStorageUrls = storageFiles.map(f => `${storageBase}${f}`);
+      const { error: enrichErr } = await supabase
+        .from('products')
+        .update({ images: allStorageUrls })
+        .eq('id', productId);
+      if (!enrichErr) {
+        imagesEnriched++;
+        if (imagesEnriched <= 5) {
+          console.log(`[import-modis-csv] Enriched ${p.sku}: ${currentCount} → ${allStorageUrls.length} images`);
+        }
+      }
+    }
+    console.log(`[import-modis-csv] Phase 5 complete: ${imagesEnriched} products enriched with additional images`);
+
     // === LOG NEW SKUs TO CHANGELOG ===
     if (newSkus.length > 0) {
       const filename = storagePath.split('/').pop() || storagePath;
@@ -622,6 +697,7 @@ Deno.serve(async (req) => {
       chunkProcessed: chunkParents.length,
       newSkus: newSkus.map(s => s.sku),
       validationWarnings: validation.errors,
+      imagesEnriched,
       ...stats,
     };
 
