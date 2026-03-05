@@ -697,6 +697,7 @@ Deno.serve(async (req) => {
       chunkProcessed: chunkParents.length,
       newSkus: newSkus.map(s => s.sku),
       validationWarnings: validation.errors,
+      imagesEnriched,
       ...stats,
     };
 
