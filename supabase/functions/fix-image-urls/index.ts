@@ -104,10 +104,18 @@ Deno.serve(async (req) => {
       const enrichedSamples: { sku: string; before: number; after: number }[] = [];
 
       for (const product of batch) {
-        // Extract SKU base: strip trailing zeros (e.g. 244765001000 -> 244765001)
-        const skuBase = product.sku.replace(/0{3}$/, '').toLowerCase();
-        const storageFiles = skuBaseToFiles.get(skuBase);
-        if (!storageFiles || storageFiles.length === 0) continue;
+        // Try multiple SKU base variants: full SKU, stripped trailing 000, stripped trailing 0s
+        const skuLower = product.sku.toLowerCase();
+        const candidates = [
+          skuLower,
+          skuLower.replace(/0{3}$/, ''),
+          skuLower.replace(/0+$/, ''),
+        ];
+        let storageFiles: string[] | undefined;
+        for (const candidate of candidates) {
+          storageFiles = skuBaseToFiles.get(candidate);
+          if (storageFiles && storageFiles.length > 0) break;
+        }
 
         const currentImages = Array.isArray(product.images) ? product.images as string[] : [];
         
