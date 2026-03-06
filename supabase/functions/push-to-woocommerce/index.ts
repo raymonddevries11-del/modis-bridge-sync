@@ -1041,6 +1041,8 @@ Deno.serve(async (req) => {
               }
               return { src: img.src, position: img.position };
             });
+            // Store uploaded media IDs for image_sync_status tracking
+            (pim as any)._pushed_images = wpImages;
           }
         }
 
