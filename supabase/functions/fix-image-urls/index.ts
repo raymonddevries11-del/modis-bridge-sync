@@ -116,6 +116,7 @@ Deno.serve(async (req) => {
           storageFiles = skuBaseToFiles.get(candidate);
           if (storageFiles && storageFiles.length > 0) break;
         }
+        if (!storageFiles || storageFiles.length === 0) continue;
 
         const currentImages = Array.isArray(product.images) ? product.images as string[] : [];
         
