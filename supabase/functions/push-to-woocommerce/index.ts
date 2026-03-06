@@ -1932,6 +1932,12 @@ Deno.serve(async (req) => {
               }).eq('id', pim.id);
             }
           }
+
+          // Cleanup duplicate woo_products entries for this SKU
+          const wooIdMatch = r.message.match(/WC #(\d+)/);
+          if (wooIdMatch) {
+            await cleanupDuplicateWooProducts(supabase, tenantId, pim.sku, parseInt(wooIdMatch[1]));
+          }
         } catch (syncStatusErr) {
           console.warn(`Non-critical: failed to update sync status for ${pim.sku}:`, syncStatusErr);
         }
