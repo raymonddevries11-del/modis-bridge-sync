@@ -716,6 +716,29 @@ async function createOrUpdateVariations(
   return { synced, audit };
 }
 
+/**
+ * After upserting a woo_products entry, clean up old duplicate entries for the same SKU.
+ * This prevents stale cache rows from confusing the UI.
+ */
+async function cleanupDuplicateWooProducts(supabase: any, tenantId: string, sku: string, keepWooId: number) {
+  try {
+    const { data: dupes } = await supabase
+      .from('woo_products')
+      .select('id, woo_id')
+      .eq('tenant_id', tenantId)
+      .eq('sku', sku)
+      .neq('woo_id', keepWooId);
+
+    if (dupes && dupes.length > 0) {
+      const ids = dupes.map((d: any) => d.id);
+      await supabase.from('woo_products').delete().in('id', ids);
+      console.log(`🧹 Cleaned up ${dupes.length} duplicate woo_products entries for SKU ${sku} (kept WC #${keepWooId}, removed WC #${dupes.map((d: any) => d.woo_id).join(', ')})`);
+    }
+  } catch (err) {
+    console.warn(`Non-critical: failed to cleanup duplicate woo_products for ${sku}:`, err);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
