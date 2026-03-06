@@ -644,8 +644,18 @@ Deno.serve(async (req) => {
     for (const p of chunkParents) {
       const productId = skuToProductId.get(p.sku);
       if (!productId) continue;
-      const skuBase = p.sku.replace(/0{3}$/, '').toLowerCase();
-      const storageFiles = skuBaseToFiles.get(skuBase);
+      // Try multiple SKU-base variants: full SKU, stripped trailing 000, stripped trailing 0s
+      const skuLower = p.sku.toLowerCase();
+      const candidates = [
+        skuLower,
+        skuLower.replace(/0{3}$/, ''),
+        skuLower.replace(/0+$/, ''),
+      ];
+      let storageFiles: string[] | undefined;
+      for (const candidate of candidates) {
+        storageFiles = skuBaseToFiles.get(candidate);
+        if (storageFiles && storageFiles.length > 0) break;
+      }
       if (!storageFiles || storageFiles.length <= 1) continue; // Only enrich if >1 image available
 
       // Current images from CSV (already stored)
