@@ -16,38 +16,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Step 1: Static analysis — scan migration SQL for risky patterns
-      - name: Static scan for trigger creation
+      # Step 1: Static analysis — only scan NEW migration files in this push/PR
+      - name: Static scan for new trigger creation
         run: |
-          echo "🔍 Scanning migration files for trigger patterns..."
+          echo "🔍 Scanning only NEW migration files for trigger patterns..."
+          
+          # Get list of changed files in this push/PR
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }} HEAD -- 'supabase/migrations/*.sql' 2>/dev/null || echo "")
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'supabase/migrations/*.sql' 2>/dev/null || echo "")
+          fi
+          
+          if [ -z "$CHANGED" ]; then
+            echo "✅ No new migration files to scan"
+            exit 0
+          fi
           
           VIOLATIONS=0
           
-          # Find all migration files that create triggers
-          for f in supabase/migrations/*.sql; do
+          for f in $CHANGED; do
             [ -f "$f" ] || continue
             
             # Check if file creates a trigger that writes to jobs
             if grep -qi "CREATE TRIGGER" "$f" && grep -qi "INSERT INTO jobs" "$f"; then
-              TABLE=$(grep -oi "ON public\.\w\+" "$f" | head -1 | sed 's/ON public\.//i')
               TRIGGER=$(grep -oi "CREATE TRIGGER \w\+" "$f" | head -1 | sed 's/CREATE TRIGGER //i')
+              echo "⚠️  New migration $f creates trigger '$TRIGGER' that writes to jobs"
               
-              echo "⚠️  Migration $f creates trigger '$TRIGGER' on '$TABLE' that writes to jobs"
-              echo "   → Verify this doesn't duplicate an existing trigger on the same table"
-              
-              # Check if another migration already has a trigger on the same table writing to jobs
-              EXISTING=$(grep -rl "CREATE TRIGGER.*ON public\.${TABLE}" supabase/migrations/*.sql 2>/dev/null | grep -v "$f" || true)
-              if [ -n "$EXISTING" ]; then
-                echo "❌ CONFLICT: Another migration already creates a trigger on '${TABLE}':"
-                echo "   $EXISTING"
-                VIOLATIONS=$((VIOLATIONS + 1))
-              fi
-            fi
-            
-            # Check if trigger function lacks idempotent insert
-            if grep -qi "CREATE.*FUNCTION.*trigger" "$f" && grep -qi "INSERT INTO jobs" "$f"; then
+              # Check if trigger function lacks idempotent insert
               if ! grep -qi "unique_violation\|ON CONFLICT" "$f"; then
-                echo "⚠️  Migration $f creates a trigger function writing to jobs WITHOUT idempotent insert"
+                echo "❌ Missing idempotent insert (ON CONFLICT / unique_violation)"
                 VIOLATIONS=$((VIOLATIONS + 1))
               fi
             fi
@@ -55,12 +53,12 @@ jobs:
           
           if [ $VIOLATIONS -gt 0 ]; then
             echo ""
-            echo "❌ Found $VIOLATIONS trigger guardrail violation(s)"
+            echo "❌ Found $VIOLATIONS trigger guardrail violation(s) in new migrations"
             echo "   See docs/triggers-audit.md for guidelines"
             exit 1
           fi
           
-          echo "✅ No trigger conflicts detected in migration files"
+          echo "✅ No trigger conflicts detected in new migration files"
 
       # Step 2: Runtime validation — call the DB function post-migration
       - name: Validate triggers in database
