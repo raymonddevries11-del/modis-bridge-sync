@@ -128,6 +128,7 @@ const Products = () => {
         .order("name");
       return data || [];
     },
+    staleTime: 10 * 60 * 1000,
   });
 
   const { data: suppliers } = useQuery({
@@ -139,6 +140,7 @@ const Products = () => {
         .order("name");
       return data || [];
     },
+    staleTime: 10 * 60 * 1000,
   });
 
   // Fetch unique tags for filter — lightweight: only fetch tags column, paginated
