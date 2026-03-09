@@ -429,6 +429,7 @@ const Products = () => {
       return map;
     },
     enabled: !!selectedTenant,
+    staleTime: 5 * 60 * 1000,
   });
 
 
