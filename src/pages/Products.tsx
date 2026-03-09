@@ -190,9 +190,9 @@ const Products = () => {
         let query = supabase
           .from("products")
           .select(`id, images, webshop_text, meta_title, meta_description, brand_id, attributes, categories, product_type, woocommerce_product_id, dirty_content, dirty_media, dirty_price_stock, dirty_taxonomy, dirty_variations,
-            brands!inner(name),
+            brands(name),
             product_prices(regular),
-            variants!left(id, ean, stock_totals(qty))
+            variants(id, ean, stock_totals(qty))
           `)
           .eq("tenant_id", selectedTenant);
 
