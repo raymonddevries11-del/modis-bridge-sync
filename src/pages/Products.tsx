@@ -128,6 +128,7 @@ const Products = () => {
         .order("name");
       return data || [];
     },
+    staleTime: 10 * 60 * 1000,
   });
 
   const { data: suppliers } = useQuery({
@@ -139,26 +140,34 @@ const Products = () => {
         .order("name");
       return data || [];
     },
+    staleTime: 10 * 60 * 1000,
   });
 
-  // Fetch unique tags for filter
+  // Fetch unique tags for filter — lightweight: only fetch tags column, paginated
   const { data: tags } = useQuery({
     queryKey: ["product-tags", selectedTenant],
     queryFn: async () => {
       if (!selectedTenant) return [];
-      const { data } = await supabase
-        .from("products")
-        .select("tags")
-        .eq("tenant_id", selectedTenant)
-        .not("tags", "is", null);
-      
       const allTags = new Set<string>();
-      data?.forEach((p: any) => {
-        p.tags?.forEach((t: string) => allTags.add(t));
-      });
+      let offset = 0;
+      while (true) {
+        const { data } = await supabase
+          .from("products")
+          .select("tags")
+          .eq("tenant_id", selectedTenant)
+          .not("tags", "is", null)
+          .range(offset, offset + 999);
+        if (!data || data.length === 0) break;
+        data.forEach((p: any) => {
+          p.tags?.forEach((t: string) => allTags.add(t));
+        });
+        if (data.length < 1000) break;
+        offset += 1000;
+      }
       return Array.from(allTags).sort();
     },
     enabled: !!selectedTenant,
+    staleTime: 5 * 60 * 1000, // cache for 5 min
   });
 
   // Reset page when filters change
@@ -180,10 +189,10 @@ const Products = () => {
       while (true) {
         let query = supabase
           .from("products")
-          .select(`id, sku, title, images, webshop_text, meta_title, meta_description, brand_id, attributes, categories, is_promotion, product_type, woocommerce_product_id, dirty_content, dirty_media, dirty_price_stock, dirty_taxonomy, dirty_variations,
-            brands(id, name),
+          .select(`id, images, webshop_text, meta_title, meta_description, brand_id, attributes, categories, product_type, woocommerce_product_id, dirty_content, dirty_media, dirty_price_stock, dirty_taxonomy, dirty_variations,
+            brands(name),
             product_prices(regular),
-            variants(id, size_label, ean, stock_totals(qty))
+            variants(id, ean, stock_totals(qty))
           `)
           .eq("tenant_id", selectedTenant);
 
@@ -422,6 +431,7 @@ const Products = () => {
       return map;
     },
     enabled: !!selectedTenant,
+    staleTime: 5 * 60 * 1000,
   });
 
 
