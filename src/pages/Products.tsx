@@ -141,24 +141,31 @@ const Products = () => {
     },
   });
 
-  // Fetch unique tags for filter
+  // Fetch unique tags for filter — lightweight: only fetch tags column, paginated
   const { data: tags } = useQuery({
     queryKey: ["product-tags", selectedTenant],
     queryFn: async () => {
       if (!selectedTenant) return [];
-      const { data } = await supabase
-        .from("products")
-        .select("tags")
-        .eq("tenant_id", selectedTenant)
-        .not("tags", "is", null);
-      
       const allTags = new Set<string>();
-      data?.forEach((p: any) => {
-        p.tags?.forEach((t: string) => allTags.add(t));
-      });
+      let offset = 0;
+      while (true) {
+        const { data } = await supabase
+          .from("products")
+          .select("tags")
+          .eq("tenant_id", selectedTenant)
+          .not("tags", "is", null)
+          .range(offset, offset + 999);
+        if (!data || data.length === 0) break;
+        data.forEach((p: any) => {
+          p.tags?.forEach((t: string) => allTags.add(t));
+        });
+        if (data.length < 1000) break;
+        offset += 1000;
+      }
       return Array.from(allTags).sort();
     },
     enabled: !!selectedTenant,
+    staleTime: 5 * 60 * 1000, // cache for 5 min
   });
 
   // Reset page when filters change
