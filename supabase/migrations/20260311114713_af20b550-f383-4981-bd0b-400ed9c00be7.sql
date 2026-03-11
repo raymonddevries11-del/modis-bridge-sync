@@ -1,0 +1,1 @@
+UPDATE pending_product_syncs SET last_seen_at = now() - interval '5 minutes' WHERE sync_scope = 'MEDIA' AND status = 'PENDING';
