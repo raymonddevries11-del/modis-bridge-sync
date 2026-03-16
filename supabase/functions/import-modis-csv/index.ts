@@ -96,6 +96,16 @@ function normalizeImagePath(raw: string): string | null {
   return path;
 }
 
+function splitImagesField(raw: string): string[] {
+  if (!raw) return [];
+
+  // Woo exports image lists comma-separated; accept pipe/semicolon as fallback.
+  return raw
+    .split(/[|,;]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 function normalizeHeader(name: string): string {
   return name
     .toLowerCase()
