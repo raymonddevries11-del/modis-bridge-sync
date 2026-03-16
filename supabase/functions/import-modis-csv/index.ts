@@ -96,6 +96,16 @@ function normalizeImagePath(raw: string): string | null {
   return path;
 }
 
+function splitImagesField(raw: string): string[] {
+  if (!raw) return [];
+
+  // Woo exports image lists comma-separated; accept pipe/semicolon as fallback.
+  return raw
+    .split(/[|,;]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 function normalizeHeader(name: string): string {
   return name
     .toLowerCase()
@@ -179,7 +189,7 @@ function parseAllRows(rows: string[][], headers: string[]) {
 
       const cats = row[categoriesIdx]?.trim() || '';
       const imgsRaw = row[imagesIdx]?.trim() || '';
-      const imgsSplit = imgsRaw ? imgsRaw.split(';').map(i => i.trim()).filter(Boolean) : [];
+      const imgsSplit = splitImagesField(imgsRaw);
       const normalizedImages = imgsSplit.map(normalizeImagePath).filter((p): p is string => p !== null);
       if (imgsSplit.length > normalizedImages.length) {
         console.warn(`[import-modis-csv] Product ${sku}: dropped ${imgsSplit.length - normalizedImages.length} invalid image path(s)`);
