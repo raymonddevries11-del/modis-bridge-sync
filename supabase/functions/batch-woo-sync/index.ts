@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const BATCH_SIZE = 25;
+const BATCH_SIZE = 10;
 const INTER_PRODUCT_DELAY_MS = 500;
 
 // --- Circuit Breaker ---
