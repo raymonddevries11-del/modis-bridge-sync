@@ -998,6 +998,7 @@ Deno.serve(async (req) => {
         const shortDescription = (hasApprovedAi && aiContent.ai_short_description) || '';
         const metaTitle = (hasApprovedAi && aiContent.ai_meta_title) || pim.meta_title;
         const metaDescription = (hasApprovedAi && aiContent.ai_meta_description) || pim.meta_description;
+        const focusKeyword = (hasApprovedAi && aiContent.ai_keywords) || pim.focus_keyword || '';
 
         if (hasApprovedAi) {
           console.log(`Using approved AI content for ${pim.sku}: title="${productName}"`);
