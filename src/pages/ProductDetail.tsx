@@ -731,14 +731,15 @@ const ProductDetail = () => {
                 <Button size="sm" variant="outline" onClick={() => setField("publication_status", "ready")} disabled={pubStatus === 'ready' || pubStatus === 'published'}>
                   Markeer als klaar
                 </Button>
-                <Button size="sm" onClick={() => {
+                <Button size="sm" onClick={async () => {
                   setField("publication_status", "published");
-                  // Force immediate save then push
                   if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-                  setTimeout(() => pushToWooMutation.mutate('FULL'), 200);
+                  await autoSave({ ...editedFields, publication_status: "published" });
+                  setEditedFields({});
+                  pushToWooMutation.mutate('FULL');
                 }} disabled={filledCount < 4 || pushToWooMutation.isPending}>
                   <Send className="h-4 w-4 mr-1" />
-                  {pushToWooMutation.isPending ? "Bezig..." : "Publiceer in webshop"}
+                  {pushToWooMutation.isPending ? "Wordt gepubliceerd…" : publishSuccess ? "Gepubliceerd ✓" : "Publiceer in webshop"}
                 </Button>
               </div>
             </div>
