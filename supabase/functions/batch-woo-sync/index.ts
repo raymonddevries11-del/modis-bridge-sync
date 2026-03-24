@@ -296,7 +296,7 @@ Deno.serve(async (req) => {
           const price = Array.isArray(priceData) ? priceData[0] : priceData;
 
           // ── 4a. Stock updates ──
-          if (syncReasons.includes('stock') && variants.length > 0) {
+          if (doStock && variants.length > 0) {
             const varResult = await fetchWithRetry(
               wooUrl(wooConfig.url, `products/${wooProductId}/variations?per_page=100`, wooConfig),
               { method: 'GET' },
