@@ -993,12 +993,13 @@ Deno.serve(async (req) => {
         const aiContent = (pim.product_ai_content as any);
         const hasApprovedAi = aiContent?.status === 'approved';
 
-        const productName = (hasApprovedAi && aiContent.ai_title) || pim.title;
-        const longDescription = (hasApprovedAi && aiContent.ai_long_description) || pim.webshop_text || '';
-        const shortDescription = (hasApprovedAi && aiContent.ai_short_description) || '';
-        const metaTitle = (hasApprovedAi && aiContent.ai_meta_title) || pim.meta_title;
-        const metaDescription = (hasApprovedAi && aiContent.ai_meta_description) || pim.meta_description;
-        const focusKeyword = (hasApprovedAi && aiContent.ai_keywords) || pim.focus_keyword || '';
+        // PIM fields always win; AI content is fallback only
+        const productName = pim.title?.trim() || (hasApprovedAi && aiContent.ai_title) || pim.title;
+        const longDescription = pim.webshop_text?.trim() || (hasApprovedAi && aiContent.ai_long_description) || '';
+        const shortDescription = pim.short_description?.trim() || (hasApprovedAi && aiContent.ai_short_description) || '';
+        const metaTitle = pim.meta_title?.trim() || (hasApprovedAi && aiContent.ai_meta_title) || '';
+        const metaDescription = pim.meta_description?.trim() || (hasApprovedAi && aiContent.ai_meta_description) || '';
+        const focusKeyword = pim.focus_keyword?.trim() || (hasApprovedAi && aiContent.ai_keywords) || '';
 
         if (hasApprovedAi) {
           console.log(`Using approved AI content for ${pim.sku}: title="${productName}"`);
