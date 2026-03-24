@@ -844,6 +844,7 @@ export type Database = {
           dirty_variations: boolean
           discount_percentage: number | null
           field_sources: Json
+          focus_keyword: string | null
           id: string
           images: Json | null
           internal_description: string | null
@@ -891,6 +892,7 @@ export type Database = {
           dirty_variations?: boolean
           discount_percentage?: number | null
           field_sources?: Json
+          focus_keyword?: string | null
           id?: string
           images?: Json | null
           internal_description?: string | null
@@ -938,6 +940,7 @@ export type Database = {
           dirty_variations?: boolean
           discount_percentage?: number | null
           field_sources?: Json
+          focus_keyword?: string | null
           id?: string
           images?: Json | null
           internal_description?: string | null

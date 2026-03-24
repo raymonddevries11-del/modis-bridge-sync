@@ -782,7 +782,7 @@ Deno.serve(async (req) => {
     const { data: pimProducts, error: pimErr } = await supabase
       .from('products')
       .select(`
-        id, sku, title, webshop_text, meta_title, meta_description, images, categories, attributes, url_key, color, is_promotion,
+        id, sku, title, webshop_text, meta_title, meta_description, focus_keyword, images, categories, attributes, url_key, color, is_promotion,
         brands!products_brand_id_fkey (name),
         product_prices (regular, list),
         variants (id, size_label, maat_id, ean, active, stock_totals (qty)),
@@ -998,6 +998,7 @@ Deno.serve(async (req) => {
         const shortDescription = (hasApprovedAi && aiContent.ai_short_description) || '';
         const metaTitle = (hasApprovedAi && aiContent.ai_meta_title) || pim.meta_title;
         const metaDescription = (hasApprovedAi && aiContent.ai_meta_description) || pim.meta_description;
+        const focusKeyword = (hasApprovedAi && aiContent.ai_keywords) || pim.focus_keyword || '';
 
         if (hasApprovedAi) {
           console.log(`Using approved AI content for ${pim.sku}: title="${productName}"`);
@@ -1022,8 +1023,9 @@ Deno.serve(async (req) => {
           desiredData.sku = pim.sku;
           desiredData.slug = pim.url_key || undefined;
           desiredData.meta_data = [
-            ...(metaTitle ? [{ key: '_yoast_wpseo_title', value: metaTitle }] : []),
-            ...(metaDescription ? [{ key: '_yoast_wpseo_metadesc', value: metaDescription }] : []),
+            ...(focusKeyword ? [{ key: 'rank_math_focus_keyword', value: focusKeyword }] : []),
+            ...(metaTitle ? [{ key: 'rank_math_title', value: metaTitle }] : []),
+            ...(metaDescription ? [{ key: 'rank_math_description', value: metaDescription }] : []),
           ];
         }
 
@@ -1035,8 +1037,9 @@ Deno.serve(async (req) => {
           desiredData.short_description = shortDescription;
           desiredData.slug = pim.url_key || undefined;
           desiredData.meta_data = [
-            ...(metaTitle ? [{ key: '_yoast_wpseo_title', value: metaTitle }] : []),
-            ...(metaDescription ? [{ key: '_yoast_wpseo_metadesc', value: metaDescription }] : []),
+            ...(focusKeyword ? [{ key: 'rank_math_focus_keyword', value: focusKeyword }] : []),
+            ...(metaTitle ? [{ key: 'rank_math_title', value: metaTitle }] : []),
+            ...(metaDescription ? [{ key: 'rank_math_description', value: metaDescription }] : []),
           ];
           if (!isVariable) {
             desiredData.regular_price = regularPrice;
