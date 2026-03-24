@@ -191,10 +191,12 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
       if (!product) throw new Error("Geen product");
       setPublishError(null);
       setPublishSuccess(false);
-      const resp = await invokeEdgeFunction("push-to-woocommerce", {
-        tenantId: product.tenant_id,
-        productIds: [product.id],
-        syncScope: "FULL",
+      const resp = await invokeEdgeFunction<any>("push-to-woocommerce", {
+        body: {
+          tenantId: product.tenant_id,
+          productIds: [product.id],
+          syncScope: "FULL",
+        },
       });
       if (resp?.error) throw new Error(typeof resp.error === 'string' ? resp.error : JSON.stringify(resp.error));
       return resp;
