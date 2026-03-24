@@ -412,6 +412,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "image_sync_status_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "v_sync_status"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "image_sync_status_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
@@ -707,6 +714,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "product_ai_content_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "v_sync_status"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "product_ai_content_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
@@ -743,6 +757,13 @@ export type Database = {
             columns: ["product_id"]
             isOneToOne: true
             referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_prices_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "v_sync_status"
             referencedColumns: ["id"]
           },
         ]
@@ -796,6 +817,13 @@ export type Database = {
             columns: ["product_id"]
             isOneToOne: true
             referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_sync_status_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "v_sync_status"
             referencedColumns: ["id"]
           },
         ]
@@ -1256,6 +1284,13 @@ export type Database = {
             referencedRelation: "products"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "variants_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "v_sync_status"
+            referencedColumns: ["id"]
+          },
         ]
       }
       woo_category_mappings: {
@@ -1482,6 +1517,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "woo_products_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "v_sync_status"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "woo_products_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
@@ -1542,7 +1584,42 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      v_sync_status: {
+        Row: {
+          attempts: number | null
+          dirty_content: boolean | null
+          dirty_media: boolean | null
+          dirty_price_stock: boolean | null
+          dirty_taxonomy: boolean | null
+          dirty_variations: boolean | null
+          id: string | null
+          last_error: string | null
+          last_error_at: string | null
+          last_pushed_at: string | null
+          last_synced_at: string | null
+          modis_updated_at: string | null
+          next_retry_at: string | null
+          permalink: string | null
+          queue_status: string | null
+          sku: string | null
+          sync_count: number | null
+          sync_scopes: string[] | null
+          tenant_id: string | null
+          title: string | null
+          woo_id: number | null
+          woo_linked: boolean | null
+          woocommerce_product_id: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "products_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       assert_no_trigger_violations: { Args: never; Returns: undefined }

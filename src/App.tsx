@@ -22,6 +22,7 @@ import NotFound from "./pages/NotFound";
 import TriggerAudit from "./pages/TriggerAudit";
 import PipelineHealth from "./pages/PipelineHealth";
 import ErrorDashboard from "./pages/ErrorDashboard";
+import SyncStatus from "./pages/SyncStatus";
 
 const queryClient = new QueryClient();
 
@@ -49,6 +50,7 @@ const App = () => (
           <Route path="/pipeline-health" element={<ProtectedRoute><PipelineHealth /></ProtectedRoute>} />
           <Route path="/trigger-audit" element={<ProtectedRoute><TriggerAudit /></ProtectedRoute>} />
           <Route path="/error-dashboard" element={<ProtectedRoute><ErrorDashboard /></ProtectedRoute>} />
+          <Route path="/sync-status" element={<ProtectedRoute><SyncStatus /></ProtectedRoute>} />
           {/* Legacy redirects */}
           <Route path="/google-feed" element={<Navigate to="/channels/google" replace />} />
           <Route path="/jobs" element={<Navigate to="/activity?tab=jobs" replace />} />
