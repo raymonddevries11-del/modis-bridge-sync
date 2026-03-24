@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const BATCH_SIZE = 25;
+const BATCH_SIZE = 10;
 const INTER_PRODUCT_DELAY_MS = 500;
 
 // --- Circuit Breaker ---
@@ -175,7 +175,8 @@ Deno.serve(async (req) => {
     // ── 1. Fetch pending syncs (max BATCH_SIZE) ──
     const { data: pendingSyncs, error: fetchErr } = await supabase
       .from('pending_product_syncs')
-      .select('product_id, tenant_id, reason, created_at')
+      .select('product_id, tenant_id, reason, sync_scope, created_at')
+      .in('status', ['PENDING', 'pending'])
       .order('created_at', { ascending: true })
       .limit(BATCH_SIZE);
 
@@ -244,7 +245,15 @@ Deno.serve(async (req) => {
       // ── 4. Process each product (with rate limiting + delay) ──
       for (const product of products) {
         const productSku = product.sku;
-        const syncReasons = syncs.filter(s => s.product_id === product.id).map(s => s.reason);
+        const productSyncs = syncs.filter(s => s.product_id === product.id);
+        const syncReasons = productSyncs.map(s => s.reason).filter(Boolean);
+        const syncScopes = productSyncs.map(s => s.sync_scope).filter(Boolean);
+        
+        // Determine if this is a full sync (FULL scope, no reason, or explicit 'full' reason)
+        const isFullSync = syncScopes.includes('FULL') || syncReasons.length === 0 || syncReasons.includes('full');
+        const doStock = isFullSync || syncReasons.includes('stock');
+        const doPrice = isFullSync || syncReasons.includes('price');
+        const doContent = isFullSync || syncReasons.includes('content');
 
         // Abort if rate limiter is fully throttled (3+ consecutive blocks)
         if (rateLimiter.isThrottled) {
@@ -287,7 +296,7 @@ Deno.serve(async (req) => {
           const price = Array.isArray(priceData) ? priceData[0] : priceData;
 
           // ── 4a. Stock updates ──
-          if (syncReasons.includes('stock') && variants.length > 0) {
+          if (doStock && variants.length > 0) {
             const varResult = await fetchWithRetry(
               wooUrl(wooConfig.url, `products/${wooProductId}/variations?per_page=100`, wooConfig),
               { method: 'GET' },
@@ -345,7 +354,7 @@ Deno.serve(async (req) => {
           }
 
           // ── 4b. Price updates ──
-          if (syncReasons.includes('price') && price) {
+          if (doPrice && price) {
             const regularPrice = price.regular || 0;
             const salePrice = price.list || null;
 
@@ -432,13 +441,16 @@ Deno.serve(async (req) => {
         await new Promise(r => setTimeout(r, INTER_PRODUCT_DELAY_MS));
       }
 
-      // ── 5. Clear processed items ──
-      for (const sync of syncs) {
+      // ── 5. Clear processed items by ID ──
+      const processedIds = syncs.map(s => s.product_id);
+      const uniqueProductIds = [...new Set(processedIds)];
+      for (let i = 0; i < uniqueProductIds.length; i += 50) {
+        const chunk = uniqueProductIds.slice(i, i + 50);
         await supabase
           .from('pending_product_syncs')
           .delete()
-          .eq('product_id', sync.product_id)
-          .eq('reason', sync.reason);
+          .eq('tenant_id', tenantId)
+          .in('product_id', chunk);
       }
     }
 
