@@ -190,16 +190,19 @@ const SyncStatus = () => {
   const forceSync = useCallback(async (productId: string) => {
     setActionLoading(productId + "-sync");
     try {
-      const { error } = await supabase.functions.invoke("direct-woo-sync", { body: { productId, tenantId, scope: "all" } });
+      const { data, error } = await supabase.functions.invoke("push-to-woocommerce", {
+        body: { tenantId, productIds: [productId], syncScope: "FULL" },
+      });
       if (error) throw error;
-      toast.success("Sync gestart");
+      toast.success("Sync succesvol afgerond");
       queryClient.invalidateQueries({ queryKey: ["sync-status-rows"] });
+      queryClient.invalidateQueries({ queryKey: ["sync-stats", tenantId] });
     } catch (e: any) {
-      toast.error("Sync mislukt: " + e.message);
+      toast.error("Sync mislukt: " + (e?.message || String(e)));
     } finally {
       setActionLoading(null);
     }
-  }, [queryClient]);
+  }, [queryClient, tenantId]);
 
   const resetAttempts = useCallback(async (productId: string) => {
     setActionLoading(productId + "-reset");
