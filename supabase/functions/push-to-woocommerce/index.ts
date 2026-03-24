@@ -782,7 +782,7 @@ Deno.serve(async (req) => {
     const { data: pimProducts, error: pimErr } = await supabase
       .from('products')
       .select(`
-        id, sku, title, webshop_text, meta_title, meta_description, focus_keyword, images, categories, attributes, url_key, color, is_promotion,
+        id, sku, title, webshop_text, short_description, meta_title, meta_description, focus_keyword, images, categories, attributes, url_key, color, is_promotion,
         brands!products_brand_id_fkey (name),
         product_prices (regular, list),
         variants (id, size_label, maat_id, ean, active, stock_totals (qty)),
