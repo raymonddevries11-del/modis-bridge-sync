@@ -316,12 +316,15 @@ const ProductDetail = () => {
       if (!product) throw new Error("Geen product");
       setPublishError(null);
       setPublishSuccess(false);
-      const resp = await invokeEdgeFunction("push-to-woocommerce", {
-        tenantId: product.tenant_id,
-        productIds: [product.id],
-        syncScope: scope,
+      const resp = await invokeEdgeFunction<any>("push-to-woocommerce", {
+        body: {
+          tenantId: product.tenant_id,
+          productIds: [product.id],
+          syncScope: scope,
+        },
       });
       if (resp?.error) throw new Error(typeof resp.error === 'string' ? resp.error : JSON.stringify(resp.error));
+      return resp;
       return resp;
     },
     onSuccess: () => {
