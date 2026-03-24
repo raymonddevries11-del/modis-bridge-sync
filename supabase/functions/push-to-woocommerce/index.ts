@@ -1002,7 +1002,15 @@ Deno.serve(async (req) => {
         const focusKeyword = pim.focus_keyword?.trim() || (hasApprovedAi && aiContent.ai_keywords) || '';
 
         if (hasApprovedAi) {
-          console.log(`Using approved AI content for ${pim.sku}: title="${productName}"`);
+          const usingAiFields = [
+            !pim.webshop_text?.trim() && aiContent.ai_long_description ? 'description' : null,
+            !pim.short_description?.trim() && aiContent.ai_short_description ? 'short_description' : null,
+            !pim.meta_title?.trim() && aiContent.ai_meta_title ? 'meta_title' : null,
+            !pim.meta_description?.trim() && aiContent.ai_meta_description ? 'meta_description' : null,
+          ].filter(Boolean);
+          if (usingAiFields.length > 0) {
+            console.log(`Using approved AI content as fallback for ${pim.sku}: ${usingAiFields.join(', ')}`);
+          }
         }
 
         // --- Scope-aware payload construction ---
