@@ -169,7 +169,7 @@ const SyncStatus = () => {
       const to = from + PAGE_SIZE - 1;
       const { data, error } = await query.range(from, to).order("attempts", { ascending: false }).order("modis_updated_at", { ascending: false });
       if (error) throw error;
-      return (data ?? []) as SyncRow[];
+      return (data ?? []) as unknown as SyncRow[];
     },
   });
 
