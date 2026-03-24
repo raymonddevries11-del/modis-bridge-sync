@@ -22,6 +22,7 @@ import NotFound from "./pages/NotFound";
 import TriggerAudit from "./pages/TriggerAudit";
 import PipelineHealth from "./pages/PipelineHealth";
 import ErrorDashboard from "./pages/ErrorDashboard";
+import SyncStatus from "./pages/SyncStatus";
 
 const queryClient = new QueryClient();
 
