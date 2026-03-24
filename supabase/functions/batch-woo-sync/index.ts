@@ -245,7 +245,15 @@ Deno.serve(async (req) => {
       // ── 4. Process each product (with rate limiting + delay) ──
       for (const product of products) {
         const productSku = product.sku;
-        const syncReasons = syncs.filter(s => s.product_id === product.id).map(s => s.reason);
+        const productSyncs = syncs.filter(s => s.product_id === product.id);
+        const syncReasons = productSyncs.map(s => s.reason).filter(Boolean);
+        const syncScopes = productSyncs.map(s => s.sync_scope).filter(Boolean);
+        
+        // Determine if this is a full sync (FULL scope, no reason, or explicit 'full' reason)
+        const isFullSync = syncScopes.includes('FULL') || syncReasons.length === 0 || syncReasons.includes('full');
+        const doStock = isFullSync || syncReasons.includes('stock');
+        const doPrice = isFullSync || syncReasons.includes('price');
+        const doContent = isFullSync || syncReasons.includes('content');
 
         // Abort if rate limiter is fully throttled (3+ consecutive blocks)
         if (rateLimiter.isThrottled) {
