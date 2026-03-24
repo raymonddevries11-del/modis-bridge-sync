@@ -1037,8 +1037,9 @@ Deno.serve(async (req) => {
           desiredData.short_description = shortDescription;
           desiredData.slug = pim.url_key || undefined;
           desiredData.meta_data = [
-            ...(metaTitle ? [{ key: '_yoast_wpseo_title', value: metaTitle }] : []),
-            ...(metaDescription ? [{ key: '_yoast_wpseo_metadesc', value: metaDescription }] : []),
+            ...(focusKeyword ? [{ key: 'rank_math_focus_keyword', value: focusKeyword }] : []),
+            ...(metaTitle ? [{ key: 'rank_math_title', value: metaTitle }] : []),
+            ...(metaDescription ? [{ key: 'rank_math_description', value: metaDescription }] : []),
           ];
           if (!isVariable) {
             desiredData.regular_price = regularPrice;
