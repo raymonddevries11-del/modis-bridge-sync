@@ -746,6 +746,9 @@ const ProductDetail = () => {
                 </Button>
               </div>
             </div>
+            {publishError && (
+              <p className="text-xs text-destructive">{publishError}</p>
+            )}
             {/* Missing fields */}
             {missingFields.length > 0 && (
               <div className="flex flex-wrap gap-1.5">

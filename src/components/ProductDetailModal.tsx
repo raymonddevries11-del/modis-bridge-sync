@@ -417,16 +417,21 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setField("publication_status", "ready")} disabled={pubStatus === 'ready' || pubStatus === 'published'}>
                 Markeer als klaar
               </Button>
-              <Button size="sm" className="h-7 text-xs" onClick={() => {
+              <Button size="sm" className="h-7 text-xs" onClick={async () => {
                 setField("publication_status", "published");
                 if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-                setTimeout(() => pushToWooMutation.mutate(), 200);
+                await autoSave({ ...editedFields, publication_status: "published" });
+                setEditedFields({});
+                pushToWooMutation.mutate();
               }} disabled={filledCount < 4 || pushToWooMutation.isPending}>
                 <Send className="h-3 w-3 mr-1" />
-                {pushToWooMutation.isPending ? "Bezig..." : "Publiceer"}
+                {pushToWooMutation.isPending ? "Wordt gepubliceerd…" : publishSuccess ? "Gepubliceerd ✓" : "Publiceer"}
               </Button>
             </div>
           </div>
+          {publishError && (
+            <p className="text-xs text-destructive mt-1">{publishError}</p>
+          )}
           {missingFields.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {missingFields.map(f => (
