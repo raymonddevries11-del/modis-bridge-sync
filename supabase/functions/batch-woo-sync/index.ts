@@ -175,7 +175,8 @@ Deno.serve(async (req) => {
     // ── 1. Fetch pending syncs (max BATCH_SIZE) ──
     const { data: pendingSyncs, error: fetchErr } = await supabase
       .from('pending_product_syncs')
-      .select('product_id, tenant_id, reason, created_at')
+      .select('product_id, tenant_id, reason, sync_scope, created_at')
+      .in('status', ['PENDING', 'pending'])
       .order('created_at', { ascending: true })
       .limit(BATCH_SIZE);
 
