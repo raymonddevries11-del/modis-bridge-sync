@@ -190,7 +190,7 @@ const SyncStatus = () => {
   const forceSync = useCallback(async (productId: string) => {
     setActionLoading(productId + "-sync");
     try {
-      const { error } = await supabase.functions.invoke("direct-woo-sync", { body: { product_id: productId } });
+      const { error } = await supabase.functions.invoke("direct-woo-sync", { body: { productId, tenantId, scope: "all" } });
       if (error) throw error;
       toast.success("Sync gestart");
       queryClient.invalidateQueries({ queryKey: ["sync-status-rows"] });
