@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { invokeEdgeFunction } from "@/lib/edge-function-client";
 import { toast } from "sonner";
 import { AiContentTab } from "@/components/AiContentTab";
 import { ProductAttributesTab } from "@/components/ProductAttributesTab";
@@ -182,14 +183,34 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
   });
 
   // ── Publish mutation ──
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishSuccess, setPublishSuccess] = useState(false);
+
   const pushToWooMutation = useMutation({
     mutationFn: async () => {
       if (!product) throw new Error("Geen product");
-      const { error } = await supabase.from("jobs").insert({ type: "SYNC_TO_WOO", state: "ready", tenant_id: product.tenant_id, scope: "FULL", payload: { productIds: [product.id], syncScope: "FULL" } });
-      if (error && error.code !== "23505") throw error;
+      setPublishError(null);
+      setPublishSuccess(false);
+      const resp = await invokeEdgeFunction<any>("push-to-woocommerce", {
+        body: {
+          tenantId: product.tenant_id,
+          productIds: [product.id],
+          syncScope: "FULL",
+        },
+      });
+      if (resp?.error) throw new Error(typeof resp.error === 'string' ? resp.error : JSON.stringify(resp.error));
+      return resp;
     },
-    onSuccess: () => { toast.success("Sync-job aangemaakt"); queryClient.invalidateQueries({ queryKey: ["products"] }); },
-    onError: (e: any) => toast.error(`Fout: ${e.message}`),
+    onSuccess: () => {
+      setPublishSuccess(true);
+      toast.success("Product gepubliceerd naar WooCommerce");
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      setTimeout(() => setPublishSuccess(false), 4000);
+    },
+    onError: (e: any) => {
+      setPublishError(e.message || "Onbekende fout bij publicatie");
+      toast.error(`Publicatie mislukt: ${e.message}`);
+    },
   });
 
   if (!product) return null;
@@ -396,16 +417,21 @@ export const ProductDetailModal = ({ product, open, onOpenChange }: ProductDetai
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setField("publication_status", "ready")} disabled={pubStatus === 'ready' || pubStatus === 'published'}>
                 Markeer als klaar
               </Button>
-              <Button size="sm" className="h-7 text-xs" onClick={() => {
+              <Button size="sm" className="h-7 text-xs" onClick={async () => {
                 setField("publication_status", "published");
                 if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-                setTimeout(() => pushToWooMutation.mutate(), 200);
+                await autoSave({ ...editedFields, publication_status: "published" });
+                setEditedFields({});
+                pushToWooMutation.mutate();
               }} disabled={filledCount < 4 || pushToWooMutation.isPending}>
                 <Send className="h-3 w-3 mr-1" />
-                {pushToWooMutation.isPending ? "Bezig..." : "Publiceer"}
+                {pushToWooMutation.isPending ? "Wordt gepubliceerd…" : publishSuccess ? "Gepubliceerd ✓" : "Publiceer"}
               </Button>
             </div>
           </div>
+          {publishError && (
+            <p className="text-xs text-destructive mt-1">{publishError}</p>
+          )}
           {missingFields.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {missingFields.map(f => (

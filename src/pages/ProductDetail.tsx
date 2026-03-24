@@ -308,28 +308,37 @@ const ProductDetail = () => {
     onError: (e: any) => toast.error(`Fout: ${e.message}`),
   });
 
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishSuccess, setPublishSuccess] = useState(false);
+
   const pushToWooMutation = useMutation({
     mutationFn: async (scope: string = 'FULL') => {
       if (!product) throw new Error("Geen product");
-      const { data: existingJobs } = await supabase.from("jobs").select("id, state, created_at, payload").eq("type", "SYNC_TO_WOO").in("state", ["ready", "processing"]).limit(100);
-      const alreadyQueued = existingJobs?.find((job: any) => { const ids = (job.payload as any)?.productIds; return Array.isArray(ids) && ids.includes(product.id); });
-      if (alreadyQueued) {
-        toast.info(`Dit product ${alreadyQueued.state === "processing" ? "wordt nu verwerkt" : "staat al in de wachtrij"}`);
-        return "dedupe";
-      }
-      const { error } = await supabase.from("jobs").insert({ type: "SYNC_TO_WOO", state: "ready", tenant_id: product.tenant_id, scope, payload: { productIds: [product.id], syncScope: scope } });
-      if (error) {
-        if (error.code === "23505") { toast.info("Er staat al een sync-job klaar"); return "dedupe"; }
-        throw error;
-      }
-      return "created";
+      setPublishError(null);
+      setPublishSuccess(false);
+      const resp = await invokeEdgeFunction<any>("push-to-woocommerce", {
+        body: {
+          tenantId: product.tenant_id,
+          productIds: [product.id],
+          syncScope: scope,
+        },
+      });
+      if (resp?.error) throw new Error(typeof resp.error === 'string' ? resp.error : JSON.stringify(resp.error));
+      return resp;
+      return resp;
     },
-    onSuccess: (result) => {
-      if (result !== "dedupe") toast.success("Sync-job aangemaakt — product wordt naar WooCommerce gepusht");
+    onSuccess: () => {
+      setPublishSuccess(true);
+      toast.success("Product gepubliceerd naar WooCommerce");
       queryClient.invalidateQueries({ queryKey: ["woo-link", id] });
       queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] });
+      queryClient.invalidateQueries({ queryKey: ["product-detail", id] });
+      setTimeout(() => setPublishSuccess(false), 4000);
     },
-    onError: (e: any) => toast.error(`Fout: ${e.message}`),
+    onError: (e: any) => {
+      setPublishError(e.message || "Onbekende fout bij publicatie");
+      toast.error(`Publicatie mislukt: ${e.message}`);
+    },
   });
 
   // Variant update mutation
@@ -725,17 +734,21 @@ const ProductDetail = () => {
                 <Button size="sm" variant="outline" onClick={() => setField("publication_status", "ready")} disabled={pubStatus === 'ready' || pubStatus === 'published'}>
                   Markeer als klaar
                 </Button>
-                <Button size="sm" onClick={() => {
+                <Button size="sm" onClick={async () => {
                   setField("publication_status", "published");
-                  // Force immediate save then push
                   if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-                  setTimeout(() => pushToWooMutation.mutate('FULL'), 200);
+                  await autoSave({ ...editedFields, publication_status: "published" });
+                  setEditedFields({});
+                  pushToWooMutation.mutate('FULL');
                 }} disabled={filledCount < 4 || pushToWooMutation.isPending}>
                   <Send className="h-4 w-4 mr-1" />
-                  {pushToWooMutation.isPending ? "Bezig..." : "Publiceer in webshop"}
+                  {pushToWooMutation.isPending ? "Wordt gepubliceerd…" : publishSuccess ? "Gepubliceerd ✓" : "Publiceer in webshop"}
                 </Button>
               </div>
             </div>
+            {publishError && (
+              <p className="text-xs text-destructive">{publishError}</p>
+            )}
             {/* Missing fields */}
             {missingFields.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
