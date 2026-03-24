@@ -782,7 +782,7 @@ Deno.serve(async (req) => {
     const { data: pimProducts, error: pimErr } = await supabase
       .from('products')
       .select(`
-        id, sku, title, webshop_text, meta_title, meta_description, focus_keyword, images, categories, attributes, url_key, color, is_promotion,
+        id, sku, title, webshop_text, short_description, meta_title, meta_description, focus_keyword, images, categories, attributes, url_key, color, is_promotion,
         brands!products_brand_id_fkey (name),
         product_prices (regular, list),
         variants (id, size_label, maat_id, ean, active, stock_totals (qty)),
@@ -993,15 +993,24 @@ Deno.serve(async (req) => {
         const aiContent = (pim.product_ai_content as any);
         const hasApprovedAi = aiContent?.status === 'approved';
 
-        const productName = (hasApprovedAi && aiContent.ai_title) || pim.title;
-        const longDescription = (hasApprovedAi && aiContent.ai_long_description) || pim.webshop_text || '';
-        const shortDescription = (hasApprovedAi && aiContent.ai_short_description) || '';
-        const metaTitle = (hasApprovedAi && aiContent.ai_meta_title) || pim.meta_title;
-        const metaDescription = (hasApprovedAi && aiContent.ai_meta_description) || pim.meta_description;
-        const focusKeyword = (hasApprovedAi && aiContent.ai_keywords) || pim.focus_keyword || '';
+        // PIM fields always win; AI content is fallback only
+        const productName = pim.title?.trim() || (hasApprovedAi && aiContent.ai_title) || pim.title;
+        const longDescription = pim.webshop_text?.trim() || (hasApprovedAi && aiContent.ai_long_description) || '';
+        const shortDescription = pim.short_description?.trim() || (hasApprovedAi && aiContent.ai_short_description) || '';
+        const metaTitle = pim.meta_title?.trim() || (hasApprovedAi && aiContent.ai_meta_title) || '';
+        const metaDescription = pim.meta_description?.trim() || (hasApprovedAi && aiContent.ai_meta_description) || '';
+        const focusKeyword = pim.focus_keyword?.trim() || (hasApprovedAi && aiContent.ai_keywords) || '';
 
         if (hasApprovedAi) {
-          console.log(`Using approved AI content for ${pim.sku}: title="${productName}"`);
+          const usingAiFields = [
+            !pim.webshop_text?.trim() && aiContent.ai_long_description ? 'description' : null,
+            !pim.short_description?.trim() && aiContent.ai_short_description ? 'short_description' : null,
+            !pim.meta_title?.trim() && aiContent.ai_meta_title ? 'meta_title' : null,
+            !pim.meta_description?.trim() && aiContent.ai_meta_description ? 'meta_description' : null,
+          ].filter(Boolean);
+          if (usingAiFields.length > 0) {
+            console.log(`Using approved AI content as fallback for ${pim.sku}: ${usingAiFields.join(', ')}`);
+          }
         }
 
         // --- Scope-aware payload construction ---
