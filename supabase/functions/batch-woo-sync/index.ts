@@ -354,7 +354,7 @@ Deno.serve(async (req) => {
           }
 
           // ── 4b. Price updates ──
-          if (syncReasons.includes('price') && price) {
+          if (doPrice && price) {
             const regularPrice = price.regular || 0;
             const salePrice = price.list || null;
 
