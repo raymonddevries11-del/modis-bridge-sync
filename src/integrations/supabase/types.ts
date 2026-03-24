@@ -856,6 +856,8 @@ export type Database = {
           outlet_sale: boolean | null
           plan_period: string | null
           product_type: string
+          publication_status: string
+          short_description: string | null
           sku: string
           supplier_id: string | null
           tags: string[] | null
@@ -904,6 +906,8 @@ export type Database = {
           outlet_sale?: boolean | null
           plan_period?: string | null
           product_type?: string
+          publication_status?: string
+          short_description?: string | null
           sku: string
           supplier_id?: string | null
           tags?: string[] | null
@@ -952,6 +956,8 @@ export type Database = {
           outlet_sale?: boolean | null
           plan_period?: string | null
           product_type?: string
+          publication_status?: string
+          short_description?: string | null
           sku?: string
           supplier_id?: string | null
           tags?: string[] | null
