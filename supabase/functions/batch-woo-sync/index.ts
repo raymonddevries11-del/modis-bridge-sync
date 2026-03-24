@@ -441,13 +441,16 @@ Deno.serve(async (req) => {
         await new Promise(r => setTimeout(r, INTER_PRODUCT_DELAY_MS));
       }
 
-      // ── 5. Clear processed items ──
-      for (const sync of syncs) {
+      // ── 5. Clear processed items by ID ──
+      const processedIds = syncs.map(s => s.product_id);
+      const uniqueProductIds = [...new Set(processedIds)];
+      for (let i = 0; i < uniqueProductIds.length; i += 50) {
+        const chunk = uniqueProductIds.slice(i, i + 50);
         await supabase
           .from('pending_product_syncs')
           .delete()
-          .eq('product_id', sync.product_id)
-          .eq('reason', sync.reason);
+          .eq('tenant_id', tenantId)
+          .in('product_id', chunk);
       }
     }
 
