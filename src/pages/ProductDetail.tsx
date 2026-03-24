@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Switch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
 import { AiContentTab } from "@/components/AiContentTab";
 import { ProductAttributesTab } from "@/components/ProductAttributesTab";
@@ -23,153 +23,12 @@ import { calculateCompleteness, scoreColor, scoreBg } from "@/lib/completeness";
 import { toast } from "sonner";
 import {
   ArrowLeft, Save, Image as ImageIcon, RefreshCw, AlertCircle, AlertTriangle,
-  Package, Sparkles, Rss, Send, ChevronRight, ChevronDown, CheckCircle2, XCircle,
-  Plus, Lock, Unlock,
+  Package, Sparkles, Send, ChevronRight, ChevronDown, CheckCircle2, XCircle,
+  Plus, Lock, Unlock, FileText, Search as SearchIcon, Layers, Database, Eye,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
-const SIZE_TYPE_OPTIONS = ['regular', 'petite', 'plus', 'tall', 'big', 'maternity'] as const;
-
-const VariantStockCard = ({ variant, tenantId, productSku }: { variant: any; tenantId: string; productSku: string }) => {
-  const queryClient = useQueryClient();
-  const currentStock = variant.stock_totals?.qty ?? 0;
-  const [stockValue, setStockValue] = useState<string>(currentStock.toString());
-  const [isEditing, setIsEditing] = useState(false);
-
-  const updateStockMutation = useMutation({
-    mutationFn: async (newQty: number) => {
-      const { error: stockError } = await supabase.from("stock_totals").upsert({ variant_id: variant.id, qty: newQty, updated_at: new Date().toISOString() }, { onConflict: "variant_id" });
-      if (stockError) throw stockError;
-      const { error: jobError } = await supabase.from("jobs").insert({ type: "SYNC_TO_WOO", state: "ready", tenant_id: tenantId, payload: { variantIds: [variant.id] } });
-      if (jobError && jobError.code !== "23505") throw jobError;
-    },
-    onSuccess: () => { toast.success(`Voorraad bijgewerkt naar ${stockValue}`); queryClient.invalidateQueries({ queryKey: ["product-detail"] }); setIsEditing(false); },
-    onError: (error: any) => toast.error(`Update mislukt: ${error.message}`),
-  });
-
-  const updateSizeTypeMutation = useMutation({
-    mutationFn: async (newSizeType: string) => {
-      const { error } = await supabase.from("variants").update({ size_type: newSizeType }).eq("id", variant.id);
-      if (error) throw error;
-    },
-    onSuccess: () => { toast.success("Size type bijgewerkt"); queryClient.invalidateQueries({ queryKey: ["product-detail"] }); },
-    onError: (error: any) => toast.error(`Update mislukt: ${error.message}`),
-  });
-
-  const handleSave = () => {
-    const n = parseInt(stockValue, 10);
-    if (isNaN(n) || n < 0) { toast.error("Ongeldig aantal"); return; }
-    if (n === currentStock) { setIsEditing(false); return; }
-    updateStockMutation.mutate(n);
-  };
-
-  const hasEan = variant.ean && variant.ean !== "0" && variant.ean !== "";
-
-  return (
-    <div className={`flex items-center justify-between py-3 border-b border-border/60 last:border-0 ${!hasEan ? "bg-destructive/5" : ""}`}>
-      <div className="flex items-center gap-4">
-        <span className="text-sm font-medium w-20">{variant.size_label}</span>
-        {hasEan ? (
-          <span className="text-xs font-mono text-muted-foreground w-32">{variant.ean}</span>
-        ) : (
-          <span className="text-xs text-destructive font-medium w-32 flex items-center gap-1">
-            <AlertTriangle className="h-3 w-3" />
-            Geen EAN
-          </span>
-        )}
-        <Badge variant={variant.active ? "secondary" : "outline"} className="text-[11px]">
-          {variant.active ? "Actief" : "Inactief"}
-        </Badge>
-        <Select value={variant.size_type || 'regular'} onValueChange={(val) => updateSizeTypeMutation.mutate(val)}>
-          <SelectTrigger className="h-7 w-[100px] text-[11px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {SIZE_TYPE_OPTIONS.map((opt) => (
-              <SelectItem key={opt} value={opt} className="text-xs">{opt}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="flex items-center gap-2">
-        {isEditing ? (
-          <>
-            <Input type="number" min="0" value={stockValue} onChange={(e) => setStockValue(e.target.value)} className="w-20 h-8 text-center" autoFocus />
-            <Button size="sm" onClick={handleSave} disabled={updateStockMutation.isPending}>{updateStockMutation.isPending ? "..." : "OK"}</Button>
-            <Button size="sm" variant="ghost" onClick={() => { setStockValue(currentStock.toString()); setIsEditing(false); }}>✕</Button>
-          </>
-        ) : (
-          <Badge variant={currentStock > 0 ? "default" : "destructive"} className="cursor-pointer hover:opacity-80 min-w-[60px] justify-center" onClick={() => setIsEditing(true)}>
-            {currentStock}
-          </Badge>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const CreateVariantsFromAttributes = ({ product }: { product: any }) => {
-  const queryClient = useQueryClient();
-  const attrs = product.attributes as Record<string, any> | null;
-  const maatStr = attrs?.Maat as string | undefined;
-
-  const parseSizes = (maat: string): string[] => {
-    // Format: "35 = 2½, 36 = 3, 36.5 = 3½, 37 = 4, ..."
-    return maat.split(",").map((s) => s.trim()).filter(Boolean);
-  };
-
-  const createMutation = useMutation({
-    mutationFn: async () => {
-      if (!maatStr) throw new Error("Geen Maat attribuut gevonden");
-      const sizes = parseSizes(maatStr);
-      if (sizes.length === 0) throw new Error("Geen maten gevonden");
-
-      const variants = sizes.map((sizeEntry) => {
-        // Extract EU size as size_label (part before " = ")
-        const euSize = sizeEntry.split("=")[0].trim();
-        return {
-          product_id: product.id,
-          size_label: euSize,
-          maat_web: sizeEntry,
-          maat_id: `${product.sku}-${euSize.replace(/[^0-9.]/g, "")}`,
-          active: true,
-        };
-      });
-
-      const { data, error } = await supabase.from("variants").insert(variants).select();
-      if (error) throw error;
-
-      // Create stock_totals entries for new variants
-      if (data && data.length > 0) {
-        const stockEntries = data.map((v: any) => ({
-          variant_id: v.id,
-          qty: 0,
-          updated_at: new Date().toISOString(),
-        }));
-        const { error: stockErr } = await supabase.from("stock_totals").insert(stockEntries);
-        if (stockErr) throw stockErr;
-      }
-
-      return data;
-    },
-    onSuccess: (data) => {
-      toast.success(`${data?.length || 0} varianten aangemaakt`);
-      queryClient.invalidateQueries({ queryKey: ["product-detail", product.id] });
-    },
-    onError: (e: any) => toast.error(`Fout: ${e.message}`),
-  });
-
-  if (!maatStr) return null;
-  const sizes = parseSizes(maatStr);
-
-  return (
-    <Button size="sm" variant="outline" onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
-      <Plus className="h-4 w-4 mr-1" />
-      {createMutation.isPending ? "Aanmaken..." : `${sizes.length} varianten aanmaken`}
-    </Button>
-  );
-};
-// Source badge config
+// ── Source badge ──
 const sourceConfig: Record<string, { label: string; className: string }> = {
   modis: { label: 'Modis', className: 'bg-blue-500/10 text-blue-600 border-blue-200' },
   'woocommerce-csv': { label: 'WooCommerce', className: 'bg-purple-500/10 text-purple-600 border-purple-200' },
@@ -182,7 +41,7 @@ const SourceBadge = ({ source }: { source?: string }) => {
   return <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${config.className}`}>{config.label}</span>;
 };
 
-// Lockable field wrapper with source indicator
+// ── Lockable field wrapper ──
 const LockableField = ({ fieldName, lockedFields, fieldSources, onToggleLock, children }: {
   fieldName: string;
   lockedFields: string[];
@@ -201,16 +60,13 @@ const LockableField = ({ fieldName, lockedFields, fieldSources, onToggleLock, ch
           <TooltipProvider delayDuration={200}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => onToggleLock(fieldName)}
-                  className={`p-1 rounded-md transition-colors ${isLocked ? 'text-amber-500 hover:text-amber-600 bg-amber-500/10' : 'text-muted-foreground/30 hover:text-muted-foreground/60'}`}
-                >
+                <button type="button" onClick={() => onToggleLock(fieldName)}
+                  className={`p-1 rounded-md transition-colors ${isLocked ? 'text-amber-500 hover:text-amber-600 bg-amber-500/10' : 'text-muted-foreground/30 hover:text-muted-foreground/60'}`}>
                   {isLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
                 </button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                {isLocked ? 'Vergrendeld — wordt niet overschreven bij import. Klik om te ontgrendelen.' : 'Ontgrendeld — kan overschreven worden bij import. Klik om te vergrendelen.'}
+                {isLocked ? 'Vergrendeld — wordt niet overschreven bij import.' : 'Ontgrendeld — kan overschreven worden bij import.'}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -220,20 +76,100 @@ const LockableField = ({ fieldName, lockedFields, fieldSources, onToggleLock, ch
   );
 };
 
-const wooFieldMapping = [
-  { label: "Title", dbField: "title", wooField: "name" },
-  { label: "SKU", dbField: "sku", wooField: "sku" },
-  { label: "Price", dbField: "product_prices.regular", wooField: "regular_price" },
-  { label: "List Price", dbField: "product_prices.list", wooField: "sale_price" },
-  { label: "Tax Code", dbField: "tax_code", wooField: "tax_class" },
-  { label: "URL Key", dbField: "url_key", wooField: "slug" },
-];
+// ── Character counter ──
+const CharCounter = ({ value, max, greenAbove }: { value: string; max: number; greenAbove: number }) => {
+  const len = value.length;
+  const color = len === 0 ? 'text-muted-foreground' : len >= greenAbove && len <= max ? 'text-emerald-600' : len > max ? 'text-destructive' : 'text-amber-500';
+  return <span className={`text-[11px] ${color}`}>{len}/{max}</span>;
+};
 
+// ── Google Preview ──
+const GooglePreview = ({ url, title, description }: { url: string; title: string; description: string }) => (
+  <div className="rounded-lg border border-border bg-card p-4 space-y-1">
+    <p className="text-[11px] text-muted-foreground font-medium mb-1">Google zoekresultaat preview</p>
+    <p className="text-sm text-blue-600 truncate">{title || 'Pagina titel'}</p>
+    <p className="text-xs text-emerald-700 truncate">{url || 'https://www.example.com/product'}</p>
+    <p className="text-xs text-muted-foreground line-clamp-2">{description || 'Meta description verschijnt hier...'}</p>
+  </div>
+);
+
+// ── Variant row ──
+const VariantRow = ({ variant, onUpdate }: { variant: any; onUpdate: (id: string, field: string, value: any) => void }) => {
+  const stock = variant.stock_totals?.qty ?? 0;
+  const stockColor = stock >= 3 ? 'bg-emerald-500/15 text-emerald-700 border-emerald-200' : stock >= 1 ? 'bg-amber-500/15 text-amber-700 border-amber-200' : 'bg-destructive/15 text-destructive border-destructive/20';
+
+  return (
+    <tr className="border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors">
+      <td className="py-2.5 px-3 text-sm font-medium">{variant.size_label}</td>
+      <td className="py-2.5 px-3">
+        <Input className="h-7 text-xs w-24" defaultValue={variant.maat_web || ''} onBlur={(e) => {
+          if (e.target.value !== (variant.maat_web || '')) onUpdate(variant.id, 'maat_web', e.target.value);
+        }} />
+      </td>
+      <td className="py-2.5 px-3">
+        <Input className="h-7 text-xs font-mono w-32" defaultValue={variant.ean || ''} onBlur={(e) => {
+          if (e.target.value !== (variant.ean || '')) onUpdate(variant.id, 'ean', e.target.value);
+        }} />
+      </td>
+      <td className="py-2.5 px-3 text-xs font-mono text-muted-foreground">{variant.maat_id}</td>
+      <td className="py-2.5 px-3">
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${stockColor}`}>{stock}</span>
+      </td>
+      <td className="py-2.5 px-3 text-sm text-muted-foreground">€{Number(variant.price || 0).toFixed(2)}</td>
+      <td className="py-2.5 px-3">
+        <Switch checked={variant.active} onCheckedChange={(v) => onUpdate(variant.id, 'active', v)} />
+      </td>
+      <td className="py-2.5 px-3">
+        <Switch checked={variant.allow_backorder || false} onCheckedChange={(v) => onUpdate(variant.id, 'allow_backorder', v)} />
+      </td>
+    </tr>
+  );
+};
+
+// ── Create variants from attributes ──
+const CreateVariantsFromAttributes = ({ product }: { product: any }) => {
+  const queryClient = useQueryClient();
+  const attrs = product.attributes as Record<string, any> | null;
+  const maatStr = attrs?.Maat as string | undefined;
+  const parseSizes = (maat: string) => maat.split(",").map((s) => s.trim()).filter(Boolean);
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      if (!maatStr) throw new Error("Geen Maat attribuut gevonden");
+      const sizes = parseSizes(maatStr);
+      if (sizes.length === 0) throw new Error("Geen maten gevonden");
+      const variants = sizes.map((sizeEntry) => {
+        const euSize = sizeEntry.split("=")[0].trim();
+        return { product_id: product.id, size_label: euSize, maat_web: sizeEntry, maat_id: `${product.sku}-${euSize.replace(/[^0-9.]/g, "")}`, active: true };
+      });
+      const { data, error } = await supabase.from("variants").insert(variants).select();
+      if (error) throw error;
+      if (data?.length) {
+        await supabase.from("stock_totals").insert(data.map((v: any) => ({ variant_id: v.id, qty: 0, updated_at: new Date().toISOString() })));
+      }
+      return data;
+    },
+    onSuccess: (data) => { toast.success(`${data?.length || 0} varianten aangemaakt`); queryClient.invalidateQueries({ queryKey: ["product-detail", product.id] }); },
+    onError: (e: any) => toast.error(`Fout: ${e.message}`),
+  });
+
+  if (!maatStr) return null;
+  return (
+    <Button size="sm" variant="outline" onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
+      <Plus className="h-4 w-4 mr-1" />{createMutation.isPending ? "Aanmaken..." : `${parseSizes(maatStr).length} varianten aanmaken`}
+    </Button>
+  );
+};
+
+// ═══════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════
 const ProductDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  // ── Data queries ──
   const { data: product, isLoading } = useQuery({
     queryKey: ["product-detail", id],
     queryFn: async () => {
@@ -251,12 +187,16 @@ const ProductDetail = () => {
   const { data: wooLink } = useQuery({
     queryKey: ["woo-link", id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("woo_products")
-        .select("woo_id, status, permalink, last_pushed_at")
-        .eq("product_id", id!)
-        .maybeSingle();
-      if (error) throw error;
+      const { data } = await supabase.from("woo_products").select("woo_id, status, permalink, last_pushed_at").eq("product_id", id!).maybeSingle();
+      return data;
+    },
+    enabled: !!id,
+  });
+
+  const { data: syncStatus } = useQuery({
+    queryKey: ["sync-status", id],
+    queryFn: async () => {
+      const { data } = await supabase.from("product_sync_status").select("*").eq("product_id", id!).maybeSingle();
       return data;
     },
     enabled: !!id,
@@ -265,99 +205,17 @@ const ProductDetail = () => {
   const { data: pendingSyncJob } = useQuery({
     queryKey: ["pending-sync-job", id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("jobs")
-        .select("id, state, created_at, error, attempts")
-        .eq("type", "SYNC_TO_WOO")
-        .in("state", ["ready", "processing", "error"])
-        .order("created_at", { ascending: false })
-        .limit(50);
-      if (error) throw error;
-      // Find a job that contains this product id in its payload
-      return data?.find((job: any) => {
-        const productIds = (job.payload as any)?.productIds;
-        return Array.isArray(productIds) && productIds.includes(id);
-      }) || null;
+      const { data } = await supabase.from("jobs").select("id, state, created_at, error, attempts, payload").eq("type", "SYNC_TO_WOO").in("state", ["ready", "processing", "error"]).order("created_at", { ascending: false }).limit(50);
+      return data?.find((job: any) => { const ids = (job.payload as any)?.productIds; return Array.isArray(ids) && ids.includes(id); }) || null;
     },
     enabled: !!id,
     refetchInterval: 10000,
   });
 
-  const retryJobMutation = useMutation({
-    mutationFn: async (jobId: string) => {
-      const { error } = await supabase
-        .from("jobs")
-        .update({ state: "ready", attempts: 0, error: null, updated_at: new Date().toISOString() })
-        .eq("id", jobId);
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      toast.success("Sync-job opnieuw ingepland");
-      queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] });
-    },
-    onError: (e: any) => toast.error(`Fout: ${e.message}`),
-  });
-
-  const pushToWooMutation = useMutation({
-    mutationFn: async () => {
-      if (!product) throw new Error("Geen product");
-
-      // Pre-flight: check for existing pending/processing job to avoid hitting the constraint
-      const { data: existingJobs } = await supabase
-        .from("jobs")
-        .select("id, state, created_at")
-        .eq("type", "SYNC_TO_WOO")
-        .in("state", ["ready", "processing"])
-        .limit(100);
-
-      const alreadyQueued = existingJobs?.find((job: any) => {
-        const ids = (job.payload as any)?.productIds;
-        return Array.isArray(ids) && ids.includes(product.id);
-      });
-
-      if (alreadyQueued) {
-        const stateLabel = alreadyQueued.state === "processing" ? "wordt nu verwerkt" : "staat al in de wachtrij";
-        toast.info(`Dit product ${stateLabel} (sinds ${new Date(alreadyQueued.created_at).toLocaleString("nl-NL")})`);
-        queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] });
-        return "dedupe";
-      }
-
-      const { error } = await supabase.from("jobs").insert({
-        type: "SYNC_TO_WOO",
-        state: "ready",
-        tenant_id: product.tenant_id,
-        payload: { productIds: [product.id] },
-      });
-      if (error) {
-        // Fallback: handle race-condition duplicate at DB level
-        if (error.message?.includes("idx_jobs_dedupe") || error.code === "23505") {
-          toast.info("Er staat al een sync-job klaar voor dit product");
-          queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] });
-          return "dedupe";
-        }
-        throw error;
-      }
-      return "created";
-    },
-    onSuccess: (result) => {
-      if (result !== "dedupe") {
-        toast.success("Sync-job aangemaakt — product wordt naar WooCommerce gepusht");
-      }
-      queryClient.invalidateQueries({ queryKey: ["woo-link", id] });
-      queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] });
-    },
-    onError: (e: any) => toast.error(`Fout: ${e.message}`),
-  });
-
   const { data: aiContentForScore } = useQuery({
     queryKey: ["ai-content", id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("product_ai_content")
-        .select("*")
-        .eq("product_id", id!)
-        .maybeSingle();
-      if (error) throw error;
+      const { data } = await supabase.from("product_ai_content").select("*").eq("product_id", id!).maybeSingle();
       return data;
     },
     enabled: !!id,
@@ -366,30 +224,30 @@ const ProductDetail = () => {
   const { data: allBrands } = useQuery({
     queryKey: ["brands"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("brands").select("id, name").order("name");
-      if (error) throw error;
+      const { data } = await supabase.from("brands").select("id, name").order("name");
       return data;
     },
   });
 
-  const [brandPopoverOpen, setBrandPopoverOpen] = useState(false);
-  const [brandSearch, setBrandSearch] = useState("");
-
+  // ── Edit state ──
   const [editedFields, setEditedFields] = useState<Record<string, any>>({});
   const [pendingLockChanges, setPendingLockChanges] = useState<Record<string, boolean>>({});
+  const [brandPopoverOpen, setBrandPopoverOpen] = useState(false);
+  const [brandSearch, setBrandSearch] = useState("");
+  const [savedIndicator, setSavedIndicator] = useState(false);
+
   const edited = product ? { ...product, ...editedFields, product_prices: { ...product.product_prices, ...(editedFields.product_prices || {}) } } : null;
   const hasChanges = Object.keys(editedFields).length > 0 || Object.keys(pendingLockChanges).length > 0;
   const setField = (field: string, value: any) => setEditedFields((prev) => ({ ...prev, [field]: value }));
   const setPriceField = (field: string, value: any) => setEditedFields((prev) => ({ ...prev, product_prices: { ...(prev.product_prices || {}), [field]: value } }));
 
-  // Locked fields logic
+  // Locked fields
   const currentLockedFields: string[] = Array.isArray((product as any)?.locked_fields) ? (product as any).locked_fields : [];
   const fieldSources: Record<string, string> = (product as any)?.field_sources || {};
   const effectiveLockedFields = (() => {
     const fields = new Set(currentLockedFields);
     for (const [field, locked] of Object.entries(pendingLockChanges)) {
-      if (locked) fields.add(field);
-      else fields.delete(field);
+      if (locked) fields.add(field); else fields.delete(field);
     }
     return Array.from(fields);
   })();
@@ -398,70 +256,101 @@ const ProductDetail = () => {
     setPendingLockChanges((prev) => ({ ...prev, [field]: !isCurrentlyLocked }));
   };
 
-  const updateMutation = useMutation({
-    mutationFn: async () => {
-      if (!product || !edited) return;
-      // Auto-lock any manually edited fields and update sources
-      const newLockedFields = new Set(effectiveLockedFields);
-      const newFieldSources: Record<string, string> = { ...fieldSources };
-      for (const field of Object.keys(editedFields)) {
-        if (field !== 'product_prices' && field !== 'product_type') {
-          newLockedFields.add(field);
-          newFieldSources[field] = 'manual';
-        }
-      }
-      const updateFields: any = {
-        title: edited.title, sku: edited.sku, tax_code: edited.tax_code, url_key: edited.url_key,
-        locked_fields: Array.from(newLockedFields),
-        field_sources: newFieldSources,
-      };
-      if (editedFields.product_type !== undefined) updateFields.product_type = editedFields.product_type;
-      if (editedFields.brand_id !== undefined) { updateFields.brand_id = editedFields.brand_id; newLockedFields.add('brand_id'); newFieldSources['brand_id'] = 'manual'; updateFields.locked_fields = Array.from(newLockedFields); updateFields.field_sources = newFieldSources; }
-      const { error: pErr } = await supabase.from("products").update(updateFields).eq("id", product.id);
-      if (pErr) throw pErr;
-      if (editedFields.product_prices) {
-        const { error: prErr } = await supabase.from("product_prices").update({ regular: edited.product_prices.regular, list: edited.product_prices.list }).eq("product_id", product.id);
-        if (prErr) throw prErr;
-      }
-    },
-    onSuccess: () => { toast.success("Product opgeslagen"); setEditedFields({}); setPendingLockChanges({}); queryClient.invalidateQueries({ queryKey: ["product-detail", id] }); queryClient.invalidateQueries({ queryKey: ["products"] }); },
-    onError: (e: any) => toast.error(`Opslaan mislukt: ${e.message}`),
-  });
+  // ── Debounced auto-save ──
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Save lock changes only (without field edits)
-  const saveLocksMutation = useMutation({
-    mutationFn: async () => {
-      if (!product) return;
-      const { error } = await supabase.from("products").update({ locked_fields: effectiveLockedFields } as any).eq("id", product.id);
+  const autoSave = useCallback(async (fieldsToSave: Record<string, any>) => {
+    if (!product) return;
+    const newLockedFields = new Set(effectiveLockedFields);
+    const newFieldSources: Record<string, string> = { ...fieldSources };
+    for (const field of Object.keys(fieldsToSave)) {
+      if (field !== 'product_prices' && field !== 'product_type') {
+        newLockedFields.add(field);
+        newFieldSources[field] = 'manual';
+      }
+    }
+    const updateFields: any = { locked_fields: Array.from(newLockedFields), field_sources: newFieldSources };
+    const simpleFields = ['title', 'sku', 'tax_code', 'url_key', 'webshop_text', 'webshop_text_en', 'short_description', 'meta_title', 'meta_description', 'focus_keyword', 'product_type', 'brand_id', 'publication_status'];
+    for (const f of simpleFields) {
+      if (f in fieldsToSave) updateFields[f] = fieldsToSave[f];
+    }
+    const { error: pErr } = await supabase.from("products").update(updateFields).eq("id", product.id);
+    if (pErr) { toast.error(`Opslaan mislukt: ${pErr.message}`); return; }
+    if (fieldsToSave.product_prices) {
+      const { error: prErr } = await supabase.from("product_prices").update({ regular: edited?.product_prices?.regular, list: edited?.product_prices?.list }).eq("product_id", product.id);
+      if (prErr) { toast.error(`Prijs opslaan mislukt: ${prErr.message}`); return; }
+    }
+    setSavedIndicator(true);
+    setTimeout(() => setSavedIndicator(false), 2000);
+    queryClient.invalidateQueries({ queryKey: ["product-detail", id] });
+    queryClient.invalidateQueries({ queryKey: ["products"] });
+  }, [product, effectiveLockedFields, fieldSources, edited, id, queryClient]);
+
+  // Trigger debounced save when editedFields change
+  useEffect(() => {
+    if (Object.keys(editedFields).length === 0) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      autoSave(editedFields);
+      setEditedFields({});
+      setPendingLockChanges({});
+    }, 1000);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [editedFields, autoSave]);
+
+  // ── Mutations ──
+  const retryJobMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      const { error } = await supabase.from("jobs").update({ state: "ready", attempts: 0, error: null, updated_at: new Date().toISOString() }).eq("id", jobId);
       if (error) throw error;
     },
-    onSuccess: () => { toast.success("Veldvergrendelingen opgeslagen"); setPendingLockChanges({}); queryClient.invalidateQueries({ queryKey: ["product-detail", id] }); },
-    onError: (e: any) => toast.error(`Opslaan mislukt: ${e.message}`),
+    onSuccess: () => { toast.success("Sync-job opnieuw ingepland"); queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] }); },
+    onError: (e: any) => toast.error(`Fout: ${e.message}`),
   });
 
-  const { data: compareData, isLoading: isComparing, refetch: refetchCompare } = useQuery({
-    queryKey: ["product-compare", id],
-    queryFn: async () => {
-      return await invokeEdgeFunction<{ differences: { exists: boolean; fields: Record<string, any> } }>("compare-product", { body: { productId: id, tenantId: product?.tenant_id }, maxRetries: 2 });
+  const pushToWooMutation = useMutation({
+    mutationFn: async (scope: string = 'FULL') => {
+      if (!product) throw new Error("Geen product");
+      const { data: existingJobs } = await supabase.from("jobs").select("id, state, created_at, payload").eq("type", "SYNC_TO_WOO").in("state", ["ready", "processing"]).limit(100);
+      const alreadyQueued = existingJobs?.find((job: any) => { const ids = (job.payload as any)?.productIds; return Array.isArray(ids) && ids.includes(product.id); });
+      if (alreadyQueued) {
+        toast.info(`Dit product ${alreadyQueued.state === "processing" ? "wordt nu verwerkt" : "staat al in de wachtrij"}`);
+        return "dedupe";
+      }
+      const { error } = await supabase.from("jobs").insert({ type: "SYNC_TO_WOO", state: "ready", tenant_id: product.tenant_id, scope, payload: { productIds: [product.id], syncScope: scope } });
+      if (error) {
+        if (error.code === "23505") { toast.info("Er staat al een sync-job klaar"); return "dedupe"; }
+        throw error;
+      }
+      return "created";
     },
-    enabled: false,
+    onSuccess: (result) => {
+      if (result !== "dedupe") toast.success("Sync-job aangemaakt — product wordt naar WooCommerce gepusht");
+      queryClient.invalidateQueries({ queryKey: ["woo-link", id] });
+      queryClient.invalidateQueries({ queryKey: ["pending-sync-job", id] });
+    },
+    onError: (e: any) => toast.error(`Fout: ${e.message}`),
   });
 
-  if (isLoading) {
-    return <Layout><div className="flex items-center justify-center py-20"><RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" /></div></Layout>;
-  }
+  // Variant update mutation
+  const updateVariantMutation = useMutation({
+    mutationFn: async ({ variantId, field, value }: { variantId: string; field: string; value: any }) => {
+      const { error } = await supabase.from("variants").update({ [field]: value }).eq("id", variantId);
+      if (error) throw error;
+    },
+    onSuccess: () => { setSavedIndicator(true); setTimeout(() => setSavedIndicator(false), 2000); queryClient.invalidateQueries({ queryKey: ["product-detail", id] }); },
+    onError: (e: any) => toast.error(`Update mislukt: ${e.message}`),
+  });
 
-  if (!product) {
-    return (
-      <Layout>
-        <div className="text-center py-20">
-          <p className="text-muted-foreground">Product niet gevonden</p>
-          <Button variant="ghost" className="mt-4" onClick={() => navigate("/products")}><ArrowLeft className="h-4 w-4 mr-2" /> Terug</Button>
-        </div>
-      </Layout>
-    );
-  }
+  const handleVariantUpdate = (variantId: string, field: string, value: any) => {
+    updateVariantMutation.mutate({ variantId, field, value });
+  };
 
+  // ── Loading / not found ──
+  if (isLoading) return <Layout><div className="flex items-center justify-center py-20"><RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" /></div></Layout>;
+  if (!product) return <Layout><div className="text-center py-20"><p className="text-muted-foreground">Product niet gevonden</p><Button variant="ghost" className="mt-4" onClick={() => navigate("/products")}><ArrowLeft className="h-4 w-4 mr-2" /> Terug</Button></div></Layout>;
+
+  // ── Derived data ──
   const totalStock = product.variants?.reduce((sum: number, v: any) => sum + (v.stock_totals?.qty ?? 0), 0) ?? 0;
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const storageBaseUrl = `${supabaseUrl}/storage/v1/object/public/product-images/`;
@@ -469,17 +358,28 @@ const ProductDetail = () => {
     ? (product.images as string[]).map((img) => {
         if (typeof img !== 'string' || !img) return '';
         if (img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:')) return img;
-        // Strip legacy modis/foto/ prefix — files live at bucket root
-        const cleaned = img.replace(/^modis\/foto\//i, '');
-        return `${storageBaseUrl}${cleaned}`;
+        return `${storageBaseUrl}${img.replace(/^modis\/foto\//i, '')}`;
       }).filter(Boolean)
     : [];
-  const imageCount = images.length;
   const variantCount = product.variants?.length ?? 0;
   const price = Number(product.product_prices?.regular || 0);
-  const color = product.color as Record<string, any> | null;
-  const attrs = product.attributes as Record<string, any> | null;
+  const isVariable = (edited?.product_type || product.product_type) !== 'simple';
   const productTags = Array.isArray(product.tags) ? (product.tags as string[]) : [];
+  const wooUrl = wooLink?.permalink || (product.url_key ? `https://www.example.com/${product.url_key}` : '');
+
+  // ── Completeness for publish bar ──
+  const publishFields = [
+    { name: 'title', filled: !!product.title?.trim() },
+    { name: 'short_description', filled: !!(product as any).short_description?.trim() },
+    { name: 'webshop_text', filled: !!product.webshop_text?.trim() },
+    { name: 'meta_title', filled: !!product.meta_title?.trim() },
+    { name: 'meta_description', filled: !!product.meta_description?.trim() },
+    { name: 'focus_keyword', filled: !!(product as any).focus_keyword?.trim() },
+  ];
+  const filledCount = publishFields.filter(f => f.filled).length;
+  const missingFields = publishFields.filter(f => !f.filled);
+  const variantsWithoutEan = isVariable ? (product.variants || []).filter((v: any) => v.active && (!v.ean || v.ean === '0' || v.ean === '')).length : 0;
+  const pubStatus = (product as any).publication_status || 'concept';
 
   return (
     <Layout>
@@ -497,118 +397,57 @@ const ProductDetail = () => {
             {images.length > 0 ? (
               <img src={images[0]} alt={product.title} className="h-full w-full object-cover" onError={(e) => {
                 const img = e.target as HTMLImageElement;
-                const rootUrl = img.src;
-                const filename = rootUrl.split("/").pop() || "";
-                if (!rootUrl.includes("modis/foto/") && !img.dataset.retried) {
-                  img.dataset.retried = "1";
-                  img.src = rootUrl.replace(`/product-images/${filename}`, `/product-images/modis/foto/${filename}`);
-                } else {
-                  img.src = "/placeholder.svg";
-                }
+                const fn = img.src.split("/").pop() || "";
+                if (!img.src.includes("modis/foto/") && !img.dataset.retried) { img.dataset.retried = "1"; img.src = img.src.replace(`/product-images/${fn}`, `/product-images/modis/foto/${fn}`); }
+                else img.src = "/placeholder.svg";
               }} />
-            ) : (
-              <ImageIcon className="h-8 w-8 text-muted-foreground/40" />
-            )}
+            ) : <ImageIcon className="h-8 w-8 text-muted-foreground/40" />}
           </div>
           <div className="flex-1 min-w-0">
             <h1 className="text-xl font-semibold truncate">{product.title}</h1>
             <div className="flex items-center gap-3 mt-1.5 text-sm text-muted-foreground">
-              <span className="font-mono">{product.sku}</span>
-              <span>•</span>
-              <span>{product.brands?.name || "Geen merk"}</span>
-              <span>•</span>
+              <span className="font-mono">{product.sku}</span><span>•</span>
+              <span>{product.brands?.name || "Geen merk"}</span><span>•</span>
               <span>€{price.toFixed(2)}</span>
             </div>
             <div className="flex flex-wrap items-center gap-2 mt-2">
               {totalStock > 0 ? <span className="badge-success">● {totalStock} op voorraad</span> : <span className="badge-error">● Niet op voorraad</span>}
               <span className="badge-info">{variantCount} varianten</span>
-              <Badge variant="outline" className="text-[11px]">{(product as any).product_type === "simple" ? "Simple" : "Variable"}</Badge>
-              {imageCount > 0 ? <span className="badge-neutral">{imageCount} afbeeldingen</span> : <span className="badge-warning">Geen afbeeldingen</span>}
-              {product.is_promotion && !productTags.includes("Sale") && <Badge className="bg-destructive text-destructive-foreground text-[11px]">Sale</Badge>}
+              <Badge variant="outline" className="text-[11px]">{isVariable ? "Variable" : "Simple"}</Badge>
+              {images.length > 0 ? <span className="badge-neutral">{images.length} afbeeldingen</span> : <span className="badge-warning">Geen afbeeldingen</span>}
+              {product.is_promotion && <Badge className="bg-destructive text-destructive-foreground text-[11px]">Sale</Badge>}
               {productTags.map((t) => <Badge key={t} variant="outline" className="text-[11px]">{t}</Badge>)}
+              <Badge variant={pubStatus === 'published' ? 'default' : pubStatus === 'ready' ? 'secondary' : 'outline'} className="text-[11px]">
+                {pubStatus === 'published' ? '● Gepubliceerd' : pubStatus === 'ready' ? '● Klaar' : '● Concept'}
+              </Badge>
+              {savedIndicator && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Opgeslagen</span>}
             </div>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Product type toggle */}
+            <Select value={edited?.product_type || "variable"} onValueChange={(v) => setField("product_type", v)}>
+              <SelectTrigger className="h-8 w-[130px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="variable">Variable</SelectItem>
+                <SelectItem value="simple">Simple</SelectItem>
+              </SelectContent>
+            </Select>
             <Button variant="outline" size="sm" onClick={() => navigate("/products")}><ArrowLeft className="h-4 w-4 mr-1" /> Terug</Button>
-            {hasChanges && (
-              <Button size="sm" onClick={() => {
-                if (Object.keys(editedFields).length > 0) {
-                  updateMutation.mutate();
-                } else {
-                  saveLocksMutation.mutate();
-                }
-              }} disabled={updateMutation.isPending || saveLocksMutation.isPending}>
-                <Save className="h-4 w-4 mr-1" /> {(updateMutation.isPending || saveLocksMutation.isPending) ? "Opslaan..." : "Opslaan"}
-              </Button>
-            )}
           </div>
         </div>
-
-        {/* Completeness Score */}
-        {(() => {
-          const { score, checks } = calculateCompleteness(product, aiContentForScore);
-          const passed = checks.filter((c) => c.passed).length;
-          return (
-            <Collapsible>
-              <Card className={`${scoreBg(score)} border-0`}>
-                <CollapsibleTrigger className="w-full">
-                  <CardContent className="py-3 px-4 flex items-center gap-4">
-                    <div className={`text-2xl font-bold ${scoreColor(score)}`}>{score}%</div>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-medium">Completeness — {passed}/{checks.length} checks</span>
-                        <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform [[data-state=open]_&]:rotate-180" />
-                      </div>
-                      <Progress value={score} className="h-1.5" />
-                    </div>
-                  </CardContent>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <div className="px-4 pb-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
-                    {checks.map((check) => (
-                      <div key={check.label} className="flex items-center gap-2 text-sm">
-                        {check.passed ? (
-                          <CheckCircle2 className="h-4 w-4 text-success flex-shrink-0" />
-                        ) : (
-                          <XCircle className="h-4 w-4 text-destructive flex-shrink-0" />
-                        )}
-                        <span className={check.passed ? "text-muted-foreground" : "font-medium"}>
-                          {check.label}
-                        </span>
-                        <span className="text-xs text-muted-foreground ml-auto">{check.weight}%</span>
-                      </div>
-                    ))}
-                  </div>
-                </CollapsibleContent>
-              </Card>
-            </Collapsible>
-          );
-        })()}
 
         {/* WooCommerce Sync Status */}
         {wooLink === null && (
           <Alert className="border-warning/50 bg-warning/10">
             <AlertTriangle className="h-4 w-4 text-warning" />
             <AlertDescription className="flex items-center justify-between">
-              <span className="text-sm">
-                Dit product is <strong>nog niet gekoppeld aan WooCommerce</strong>. Het is nog niet aangemaakt in de webshop.
-              </span>
+              <span className="text-sm">Dit product is <strong>nog niet gekoppeld aan WooCommerce</strong>.</span>
               <div className="flex items-center gap-2 ml-4 flex-shrink-0">
                 {pendingSyncJob && pendingSyncJob.state !== 'error' && (
-                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs">
-                    <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
-                    {pendingSyncJob.state === 'processing' ? 'Wordt verwerkt' : 'In wachtrij'}
-                  </Badge>
+                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs"><RefreshCw className="h-3 w-3 mr-1 animate-spin" />{pendingSyncJob.state === 'processing' ? 'Wordt verwerkt' : 'In wachtrij'}</Badge>
                 )}
-                <Button
-                  size="sm"
-                  variant="default"
-                  onClick={() => pushToWooMutation.mutate()}
-                  disabled={pushToWooMutation.isPending || (!!pendingSyncJob && pendingSyncJob.state !== 'error')}
-                  className="flex-shrink-0"
-                >
-                  <Send className="h-4 w-4 mr-1" />
-                  {pushToWooMutation.isPending ? "Bezig..." : "Nu naar WooCommerce pushen"}
+                <Button size="sm" onClick={() => pushToWooMutation.mutate('FULL')} disabled={pushToWooMutation.isPending || (!!pendingSyncJob && pendingSyncJob.state !== 'error')}>
+                  <Send className="h-4 w-4 mr-1" />{pushToWooMutation.isPending ? "Bezig..." : "Nu pushen"}
                 </Button>
               </div>
             </AlertDescription>
@@ -619,417 +458,301 @@ const ProductDetail = () => {
             <CheckCircle2 className="h-4 w-4 text-success" />
             <AlertDescription className="flex items-center justify-between">
               <span className="text-sm">
-                Gekoppeld aan WooCommerce (ID: {wooLink.woo_id}) — Status: <strong>{wooLink.status}</strong>
-                {wooLink.last_pushed_at && <span className="text-muted-foreground ml-2">· Laatst gepusht: {new Date(wooLink.last_pushed_at).toLocaleString("nl-NL")}</span>}
+                WooCommerce ID: {wooLink.woo_id} — <strong>{wooLink.status}</strong>
+                {wooLink.last_pushed_at && <span className="text-muted-foreground ml-2">· {new Date(wooLink.last_pushed_at).toLocaleString("nl-NL")}</span>}
               </span>
               <div className="flex items-center gap-2 ml-4 flex-shrink-0">
-                {pendingSyncJob && pendingSyncJob.state !== 'error' && (
-                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs">
-                    <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
-                    {pendingSyncJob.state === 'processing' ? 'Wordt verwerkt' : 'In wachtrij'}
-                  </Badge>
-                )}
-                {wooLink.permalink && (
-                  <Button size="sm" variant="outline" asChild>
-                    <a href={wooLink.permalink} target="_blank" rel="noopener noreferrer">Bekijk in webshop</a>
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => pushToWooMutation.mutate()}
-                  disabled={pushToWooMutation.isPending || (!!pendingSyncJob && pendingSyncJob.state !== 'error')}
-                >
-                  <RefreshCw className="h-4 w-4 mr-1" />
-                  {pushToWooMutation.isPending ? "Bezig..." : "Opnieuw pushen"}
+                {wooLink.permalink && <Button size="sm" variant="outline" asChild><a href={wooLink.permalink} target="_blank" rel="noopener noreferrer"><Eye className="h-3.5 w-3.5 mr-1" />Webshop</a></Button>}
+                <Button size="sm" variant="outline" onClick={() => pushToWooMutation.mutate('FULL')} disabled={pushToWooMutation.isPending}>
+                  <RefreshCw className="h-4 w-4 mr-1" />{pushToWooMutation.isPending ? "Bezig..." : "Opnieuw pushen"}
                 </Button>
               </div>
             </AlertDescription>
           </Alert>
         )}
 
-        {/* Pending Sync Job Status */}
+        {/* Pending job alert */}
         {pendingSyncJob && (
-          <Alert className={pendingSyncJob.state === 'error' 
-            ? "border-destructive/50 bg-destructive/10" 
-            : "border-primary/50 bg-primary/10"
-          }>
-            {pendingSyncJob.state === 'error' ? (
-              <XCircle className="h-4 w-4 text-destructive" />
-            ) : (
-              <RefreshCw className="h-4 w-4 text-primary animate-spin" />
-            )}
+          <Alert className={pendingSyncJob.state === 'error' ? "border-destructive/50 bg-destructive/10" : "border-primary/50 bg-primary/10"}>
+            {pendingSyncJob.state === 'error' ? <XCircle className="h-4 w-4 text-destructive" /> : <RefreshCw className="h-4 w-4 text-primary animate-spin" />}
             <AlertDescription className="flex items-center justify-between">
               <span className="text-sm">
-                {pendingSyncJob.state === 'ready' && (
-                  <>Sync-job staat <strong>klaar</strong> om verwerkt te worden</>
-                )}
-                {pendingSyncJob.state === 'processing' && (
-                  <>Sync-job wordt <strong>nu verwerkt</strong>…</>
-                )}
-                {pendingSyncJob.state === 'error' && (
-                  <>Sync-job is <strong>mislukt</strong> na {pendingSyncJob.attempts} poging(en)
-                    {pendingSyncJob.error && <span className="text-muted-foreground ml-1">— {pendingSyncJob.error.slice(0, 80)}</span>}
-                  </>
-                )}
-                <span className="text-muted-foreground ml-2 text-xs">
-                  · {new Date(pendingSyncJob.created_at).toLocaleString("nl-NL")}
-                </span>
+                {pendingSyncJob.state === 'ready' && <>Sync-job staat <strong>klaar</strong></>}
+                {pendingSyncJob.state === 'processing' && <>Sync-job wordt <strong>verwerkt</strong>…</>}
+                {pendingSyncJob.state === 'error' && <>Sync mislukt na {pendingSyncJob.attempts} poging(en){pendingSyncJob.error && <span className="text-muted-foreground ml-1">— {pendingSyncJob.error.slice(0, 80)}</span>}</>}
               </span>
               {pendingSyncJob.state === 'error' && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => retryJobMutation.mutate(pendingSyncJob.id)}
-                  disabled={retryJobMutation.isPending}
-                  className="ml-4 flex-shrink-0"
-                >
-                  <RefreshCw className="h-4 w-4 mr-1" />
-                  {retryJobMutation.isPending ? "Bezig..." : "Opnieuw proberen"}
+                <Button size="sm" variant="outline" onClick={() => retryJobMutation.mutate(pendingSyncJob.id)} disabled={retryJobMutation.isPending}>
+                  <RefreshCw className="h-4 w-4 mr-1" />{retryJobMutation.isPending ? "Bezig..." : "Opnieuw"}
                 </Button>
               )}
             </AlertDescription>
           </Alert>
         )}
 
-        {/* Tabs */}
-        <Tabs defaultValue="info" className="space-y-4">
+        {/* ═══════ TABS ═══════ */}
+        <Tabs defaultValue="content" className="space-y-4">
           <TabsList>
-            <TabsTrigger value="info">Info</TabsTrigger>
-            <TabsTrigger value="content">Content & SEO</TabsTrigger>
-            <TabsTrigger value="ai" className="flex items-center gap-1"><Sparkles className="h-3 w-3" /> AI</TabsTrigger>
-            <TabsTrigger value="attributes">Attributen</TabsTrigger>
-            <TabsTrigger value="categories">Categorieën</TabsTrigger>
-            <TabsTrigger value="variants">Varianten ({variantCount})</TabsTrigger>
-            <TabsTrigger value="images">Afbeeldingen ({imageCount})</TabsTrigger>
-            <TabsTrigger value="channels">Channel Preview</TabsTrigger>
-            <TabsTrigger value="compare">Vergelijk</TabsTrigger>
+            <TabsTrigger value="content" className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" /> Content</TabsTrigger>
+            <TabsTrigger value="seo" className="flex items-center gap-1"><SearchIcon className="h-3.5 w-3.5" /> SEO</TabsTrigger>
+            {isVariable && <TabsTrigger value="variants" className="flex items-center gap-1"><Layers className="h-3.5 w-3.5" /> Varianten ({variantCount})</TabsTrigger>}
+            <TabsTrigger value="eigenschappen" className="flex items-center gap-1"><Package className="h-3.5 w-3.5" /> Eigenschappen</TabsTrigger>
+            <TabsTrigger value="modis" className="flex items-center gap-1"><Database className="h-3.5 w-3.5" /> Modis data</TabsTrigger>
           </TabsList>
 
-          {/* INFO */}
-          <TabsContent value="info" className="space-y-6">
+          {/* ── TAB 1: Content ── */}
+          <TabsContent value="content" className="space-y-4">
             <Card className="card-elevated">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">Productgegevens</CardTitle>
-                  {effectiveLockedFields.length > 0 && (
-                    <Badge variant="outline" className="text-[11px] gap-1 text-amber-600 border-amber-300">
-                      <Lock className="h-3 w-3" /> {effectiveLockedFields.length} vergrendeld
-                    </Badge>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-4">
+              <CardContent className="pt-6 space-y-4">
                 <LockableField fieldName="title" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
-                  <Label className="text-xs text-muted-foreground">Titel</Label><Input value={edited?.title || ""} onChange={(e) => setField("title", e.target.value)} />
+                  <Label className="text-xs text-muted-foreground">Paginatitel</Label>
+                  <Input value={edited?.title || ""} onChange={(e) => setField("title", e.target.value)} />
                 </LockableField>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">SKU</Label><Input value={edited?.sku || ""} onChange={(e) => setField("sku", e.target.value)} /></div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Merk</Label>
-                  <Popover open={brandPopoverOpen} onOpenChange={setBrandPopoverOpen}>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" role="combobox" className="w-full justify-between font-normal h-9">
-                        {editedFields.brand_id !== undefined
-                          ? (allBrands?.find((b) => b.id === editedFields.brand_id)?.name || "—")
-                          : (product.brands?.name || "Selecteer merk...")}
-                        <ChevronDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-[250px] p-0" align="start">
-                      <Command shouldFilter={true}>
-                        <CommandInput placeholder="Zoek merk..." value={brandSearch} onValueChange={setBrandSearch} />
-                        <CommandList>
-                          <CommandEmpty>
-                            <button
-                              className="w-full px-2 py-1.5 text-sm text-left hover:bg-accent rounded-sm flex items-center gap-2"
-                              onClick={async () => {
-                                const name = brandSearch.trim();
-                                if (!name) return;
-                                const { data, error } = await supabase.from("brands").insert({ name }).select("id").single();
-                                if (error) { toast.error(`Merk aanmaken mislukt: ${error.message}`); return; }
-                                queryClient.invalidateQueries({ queryKey: ["brands"] });
-                                setField("brand_id", data.id);
-                                setBrandSearch("");
-                                setBrandPopoverOpen(false);
-                                toast.success(`Merk "${name}" aangemaakt`);
-                              }}
-                            >
-                              <Plus className="h-3.5 w-3.5" /> "{brandSearch}" aanmaken
-                            </button>
-                          </CommandEmpty>
-                          <CommandGroup>
-                            {allBrands?.map((brand) => (
-                              <CommandItem key={brand.id} value={brand.name} onSelect={() => { setField("brand_id", brand.id); setBrandPopoverOpen(false); setBrandSearch(""); }}>
-                                {brand.name}
-                              </CommandItem>
-                            ))}
-                          </CommandGroup>
-                        </CommandList>
-                      </Command>
-                    </PopoverContent>
-                  </Popover>
-                </div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Leverancier</Label><Input value={product.suppliers?.name || "N/A"} disabled /></div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Product type</Label>
-                  <Select value={edited?.product_type || "variable"} onValueChange={(v) => setField("product_type", v)}>
-                    <SelectTrigger className="h-9">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="variable">Variable (met maten)</SelectItem>
-                      <SelectItem value="simple">Simple (zonder maten)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <LockableField fieldName="tax_code" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
-                  <Label className="text-xs text-muted-foreground">Tax Code</Label><Input value={edited?.tax_code || ""} onChange={(e) => setField("tax_code", e.target.value)} />
+
+                <LockableField fieldName="short_description" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
+                  <Label className="text-xs text-muted-foreground">Korte omschrijving</Label>
+                  <Textarea rows={3} value={(edited as any)?.short_description || ""} onChange={(e) => setField("short_description", e.target.value)} placeholder="Korte samenvatting voor de productpagina" />
                 </LockableField>
-                <LockableField fieldName="url_key" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
-                  <Label className="text-xs text-muted-foreground">URL Key</Label><Input value={edited?.url_key || ""} onChange={(e) => setField("url_key", e.target.value)} />
+
+                <LockableField fieldName="webshop_text" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-muted-foreground">Lange omschrijving (NL)</Label>
+                    <Button size="sm" variant="ghost" className="h-6 text-xs gap-1 text-primary"><Sparkles className="h-3 w-3" /> AI genereren</Button>
+                  </div>
+                  <Textarea rows={6} value={edited?.webshop_text || ""} onChange={(e) => setField("webshop_text", e.target.value)} placeholder="Volledige productomschrijving in het Nederlands" />
                 </LockableField>
-              </CardContent>
-            </Card>
-            <Card className="card-elevated">
-              <CardHeader><CardTitle className="text-base">Prijzen</CardTitle></CardHeader>
-              <CardContent className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Reguliere prijs (€)</Label><Input type="number" step="0.01" value={edited?.product_prices?.regular ?? ""} onChange={(e) => setPriceField("regular", e.target.value)} /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Sale prijs (€)</Label><Input type="number" step="0.01" value={edited?.product_prices?.list ?? ""} onChange={(e) => setPriceField("list", e.target.value)} /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Inkoopprijs (€)</Label><Input value={product.cost_price || "—"} disabled /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Korting (%)</Label><Input value={product.discount_percentage || "0"} disabled /></div>
-              </CardContent>
-            </Card>
-            {color && (
-              <Card className="card-elevated">
-                <CardHeader><CardTitle className="text-base">Kleur</CardTitle></CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Webshop</span>
-                      <span className="font-medium">{color.webshop || "—"}</span>
+
+                <LockableField fieldName="webshop_text_en" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-muted-foreground">Lange omschrijving (EN)</Label>
+                    <Button size="sm" variant="ghost" className="h-6 text-xs gap-1 text-primary"><Sparkles className="h-3 w-3" /> AI vertalen</Button>
+                  </div>
+                  <Textarea rows={4} value={edited?.webshop_text_en || ""} onChange={(e) => setField("webshop_text_en", e.target.value)} placeholder="Full product description in English" />
+                </LockableField>
+
+                {/* Simple product: inline stock & price (read-only) */}
+                {!isVariable && (
+                  <div className="grid grid-cols-2 gap-4 pt-2 border-t border-border/50">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Voorraad</Label>
+                      <div className="flex items-center gap-2">
+                        <Badge variant={totalStock > 0 ? "default" : "destructive"}>{totalStock}</Badge>
+                        <span className="text-xs text-muted-foreground">uit Modis</span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">Artikel</span>
-                      <span className="font-medium">{color.article || "—"}</span>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Prijs</Label>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">€{price.toFixed(2)}</span>
+                        <span className="text-xs text-muted-foreground">uit Modis</span>
+                      </div>
                     </div>
                   </div>
-                  {color.webshop && color.article && color.webshop !== color.article && (
-                    <p className="text-xs text-muted-foreground flex items-center gap-1">
-                      <span>ℹ️</span>
-                      <span>De <strong>webshop</strong>-kleur (&quot;{color.webshop}&quot;) wordt getoond op de website en naar WooCommerce gestuurd. De <strong>artikel</strong>-kleur (&quot;{color.article}&quot;) is de interne leverancierskleur.</span>
-                    </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* AI Content */}
+            <AiContentTab product={product} />
+          </TabsContent>
+
+          {/* ── TAB 2: SEO ── */}
+          <TabsContent value="seo" className="space-y-4">
+            <GooglePreview
+              url={wooUrl}
+              title={edited?.meta_title || product.meta_title || edited?.title || product.title || ''}
+              description={edited?.meta_description || product.meta_description || ''}
+            />
+            <Card className="card-elevated">
+              <CardContent className="pt-6 space-y-4">
+                <LockableField fieldName="focus_keyword" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-muted-foreground">Focus keyword</Label>
+                    <span className="text-[10px] text-muted-foreground">→ rank_math_focus_keyword</span>
+                  </div>
+                  <Input value={(edited as any)?.focus_keyword || ""} onChange={(e) => setField("focus_keyword", e.target.value)} placeholder="Bijv. zwarte laarzen dames" />
+                </LockableField>
+
+                <LockableField fieldName="meta_title" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-muted-foreground">Meta title</Label>
+                    <CharCounter value={edited?.meta_title || ""} max={70} greenAbove={50} />
+                  </div>
+                  <Input maxLength={70} value={edited?.meta_title || ""} onChange={(e) => setField("meta_title", e.target.value)} placeholder="SEO titel (max 70 tekens)" />
+                </LockableField>
+
+                <LockableField fieldName="meta_description" lockedFields={effectiveLockedFields} fieldSources={fieldSources} onToggleLock={toggleLock}>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-muted-foreground">Meta description</Label>
+                    <CharCounter value={edited?.meta_description || ""} max={160} greenAbove={120} />
+                  </div>
+                  <Textarea rows={3} maxLength={160} value={edited?.meta_description || ""} onChange={(e) => setField("meta_description", e.target.value)} placeholder="SEO beschrijving (max 160 tekens)" />
+                </LockableField>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ── TAB 3: Varianten & Voorraad ── */}
+          {isVariable && (
+            <TabsContent value="variants">
+              <Card className="card-elevated">
+                <CardHeader>
+                  <CardTitle className="text-base flex items-center justify-between">
+                    <span>Varianten & Voorraad</span>
+                    <div className="flex items-center gap-2">
+                      {(!product.variants || product.variants.length === 0) && (product.attributes as any)?.Maat && <CreateVariantsFromAttributes product={product} />}
+                      <span className="badge-info">{totalStock} totaal</span>
+                    </div>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {product.variants && product.variants.length > 0 ? (
+                    <>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-border text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                              <th className="py-2 px-3 text-left">Maat</th>
+                              <th className="py-2 px-3 text-left">Maat web</th>
+                              <th className="py-2 px-3 text-left">EAN</th>
+                              <th className="py-2 px-3 text-left">Variant SKU</th>
+                              <th className="py-2 px-3 text-left">Voorraad</th>
+                              <th className="py-2 px-3 text-left">Prijs</th>
+                              <th className="py-2 px-3 text-left">Actief</th>
+                              <th className="py-2 px-3 text-left">Backorder</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {product.variants.map((v: any) => (
+                              <VariantRow key={v.id} variant={{ ...v, price: product.product_prices?.regular }} onUpdate={handleVariantUpdate} />
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-3 flex items-center gap-1">
+                        <AlertCircle className="h-3 w-3" /> Maten, voorraad en prijs komen uit Modis en zijn niet bewerkbaar
+                      </p>
+                    </>
+                  ) : (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Package className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                      <p className="text-sm">Geen varianten</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
+          {/* ── TAB 4: Eigenschappen ── */}
+          <TabsContent value="eigenschappen" className="space-y-4">
+            <ProductAttributesTab product={product} section="attributes" />
+            <ProductAttributesTab product={product} section="categories" />
+
+            {/* Color & Brand (read-only from Modis) */}
+            {(product.color || product.brands) && (
+              <Card className="card-elevated">
+                <CardHeader><CardTitle className="text-base">Modis velden (read-only)</CardTitle></CardHeader>
+                <CardContent className="grid grid-cols-2 gap-4 text-sm">
+                  {product.brands?.name && (
+                    <div><span className="text-muted-foreground">Merk:</span> <span className="font-medium ml-1">{product.brands.name}</span> <SourceBadge source="modis" /></div>
+                  )}
+                  {product.color && (
+                    <>
+                      <div><span className="text-muted-foreground">Kleur (webshop):</span> <span className="font-medium ml-1">{(product.color as any)?.webshop || '—'}</span> <SourceBadge source="modis" /></div>
+                      <div><span className="text-muted-foreground">Kleur (artikel):</span> <span className="font-medium ml-1">{(product.color as any)?.article || '—'}</span> <SourceBadge source="modis" /></div>
+                    </>
                   )}
                 </CardContent>
               </Card>
             )}
-            {attrs && Object.keys(attrs).length > 0 && (
-              <Card className="card-elevated">
-                <CardHeader><CardTitle className="text-base">Eigenschappen</CardTitle></CardHeader>
-                <CardContent className="grid grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
-                  {Object.entries(attrs).map(([key, value]) => (
-                    <div key={key}><span className="text-muted-foreground">{key}:</span> <span className="font-medium ml-1">{String(value)}</span></div>
-                  ))}
-                </CardContent>
-              </Card>
-            )}
           </TabsContent>
 
-          {/* CONTENT & SEO */}
-          <TabsContent value="content" className="space-y-6">
+          {/* ── TAB 5: Modis data ── */}
+          <TabsContent value="modis">
             <Card className="card-elevated">
-              <CardHeader><CardTitle className="text-base">Product Beschrijvingen</CardTitle></CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Interne Omschrijving</Label><SourceBadge source={fieldSources['internal_description']} /></div>
-                  <Input value={product.internal_description || ""} disabled />
-                </div>
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Beschrijving (NL)</Label><SourceBadge source={fieldSources['webshop_text']} /></div>
-                  <Textarea value={product.webshop_text || ""} disabled rows={5} />
-                </div>
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Beschrijving (EN)</Label><SourceBadge source={fieldSources['webshop_text_en']} /></div>
-                  <Textarea value={product.webshop_text_en || ""} disabled rows={5} />
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="card-elevated">
-              <CardHeader><CardTitle className="text-base">SEO</CardTitle></CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Meta Title</Label><SourceBadge source={fieldSources['meta_title']} /></div>
-                  <Input value={product.meta_title || ""} disabled />
-                </div>
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Meta Keywords</Label><SourceBadge source={fieldSources['meta_keywords']} /></div>
-                  <Input value={product.meta_keywords || ""} disabled />
-                </div>
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">Meta Description</Label><SourceBadge source={fieldSources['meta_description']} /></div>
-                  <Textarea value={product.meta_description || ""} disabled rows={3} />
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
+              <CardHeader><CardTitle className="text-base">Modis & Sync gegevens</CardTitle></CardHeader>
+              <CardContent className="grid grid-cols-2 lg:grid-cols-3 gap-y-3 gap-x-6 text-sm">
+                <div><span className="text-muted-foreground">SKU:</span> <span className="font-mono ml-1">{product.sku}</span></div>
+                <div><span className="text-muted-foreground">Artikelgroep:</span> <span className="ml-1">{(product.article_group as any)?.description || (product.article_group as any)?.id || '—'}</span></div>
+                <div><span className="text-muted-foreground">Inkoopprijs:</span> <span className="ml-1">€{Number(product.cost_price || 0).toFixed(2)}</span></div>
+                <div><span className="text-muted-foreground">Verkoopprijs:</span> <span className="ml-1">€{price.toFixed(2)}</span></div>
+                <div><span className="text-muted-foreground">Sale prijs:</span> <span className="ml-1">€{Number(product.product_prices?.list || 0).toFixed(2)}</span></div>
+                <div><span className="text-muted-foreground">Korting:</span> <span className="ml-1">{product.discount_percentage || 0}%</span></div>
+                <div><span className="text-muted-foreground">Totale voorraad:</span> <Badge variant={totalStock > 0 ? "default" : "destructive"} className="ml-1">{totalStock}</Badge></div>
+                <div><span className="text-muted-foreground">Laatste import:</span> <span className="ml-1">{new Date(product.updated_at).toLocaleString("nl-NL")}</span></div>
+                <div><span className="text-muted-foreground">WooCommerce ID:</span> <span className="font-mono ml-1">{wooLink?.woo_id || (product as any).woocommerce_product_id || '—'}</span></div>
+                <div><span className="text-muted-foreground">Laatste WC sync:</span> <span className="ml-1">{syncStatus?.last_synced_at ? new Date(syncStatus.last_synced_at).toLocaleString("nl-NL") : '—'}</span></div>
+                <div><span className="text-muted-foreground">Sync count:</span> <span className="ml-1">{syncStatus?.sync_count || 0}</span></div>
+                <div><span className="text-muted-foreground">Laatste error:</span> <span className="ml-1 text-destructive">{syncStatus?.last_error?.slice(0, 60) || '—'}</span></div>
+                <div><span className="text-muted-foreground">Tax code:</span> <span className="ml-1">{product.tax_code || '—'}</span></div>
+                <div><span className="text-muted-foreground">URL key:</span> <span className="font-mono ml-1">{product.url_key || '—'}</span></div>
+                <div><span className="text-muted-foreground">Product type:</span> <span className="ml-1">{product.product_type}</span></div>
 
-          {/* AI */}
-          <TabsContent value="ai"><AiContentTab product={product} /></TabsContent>
-
-          {/* ATTRIBUTES */}
-          <TabsContent value="attributes">
-            <ProductAttributesTab product={product} section="attributes" />
-          </TabsContent>
-
-          {/* CATEGORIES */}
-          <TabsContent value="categories">
-            <ProductAttributesTab product={product} section="categories" />
-          </TabsContent>
-
-          {/* VARIANTS */}
-          <TabsContent value="variants">
-            <Card className="card-elevated">
-              <CardHeader>
-                <CardTitle className="text-base flex items-center justify-between">
-                  <span>Varianten & Voorraad</span>
-                  <div className="flex items-center gap-2">
-                    {(!product.variants || product.variants.length === 0) && attrs?.Maat && (
-                      <CreateVariantsFromAttributes product={product} />
-                    )}
-                    <span className="badge-info">{totalStock} totaal</span>
+                {/* Dirty flags */}
+                <div className="col-span-full pt-2 border-t border-border/50">
+                  <span className="text-xs text-muted-foreground font-medium">Dirty flags:</span>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {['price_stock', 'content', 'taxonomy', 'media', 'variations'].map(scope => {
+                      const dirty = (product as any)[`dirty_${scope}`];
+                      return (
+                        <Badge key={scope} variant={dirty ? "destructive" : "outline"} className="text-[10px]">
+                          {scope}: {dirty ? 'dirty' : 'clean'}
+                        </Badge>
+                      );
+                    })}
                   </div>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {product.variants && product.variants.length > 0 ? (
-                  <div>
-                    <div className="flex items-center justify-between py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground border-b border-border">
-                      <div className="flex items-center gap-4"><span className="w-20">Maat</span><span className="w-32">EAN</span><span>Status</span><span className="w-[100px]">Size Type</span></div>
-                      <span className="w-24 text-right">Voorraad</span>
-                    </div>
-                    {product.variants.map((v: any) => <VariantStockCard key={v.id} variant={v} tenantId={product.tenant_id} productSku={product.sku} />)}
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Package className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                    <p className="text-sm">Geen varianten</p>
-                    {attrs?.Maat && <p className="text-xs mt-1">Maten gevonden in attributen — gebruik de knop hierboven om varianten aan te maken.</p>}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* IMAGES */}
-          <TabsContent value="images">
-            {images.length > 0 ? (
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {images.map((url, i) => (
-                  <div key={i} className="card-elevated rounded-xl overflow-hidden">
-                    <img
-                      src={url}
-                      alt={`${product.title} ${i + 1}`}
-                      className="w-full h-48 object-cover"
-                      onError={(e) => {
-                        const img = e.target as HTMLImageElement;
-                        // Try modis/foto/ fallback if root path failed
-                        const rootUrl = img.src;
-                        const filename = rootUrl.split("/").pop() || "";
-                        if (!rootUrl.includes("modis/foto/") && !img.dataset.retried) {
-                          img.dataset.retried = "1";
-                          img.src = rootUrl.replace(`/product-images/${filename}`, `/product-images/modis/foto/${filename}`);
-                        } else {
-                          img.style.display = "none";
-                          const parent = img.parentElement;
-                          if (parent && !parent.querySelector(".img-missing")) {
-                            const notice = document.createElement("div");
-                            notice.className = "img-missing w-full h-48 flex flex-col items-center justify-center bg-muted/30 text-muted-foreground";
-                            notice.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mb-2 opacity-40"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg><span class="text-xs">Niet in storage</span>`;
-                            parent.insertBefore(notice, img);
-                          }
-                        }
-                      }}
-                    />
-                    <div className="p-2"><p className="text-[11px] text-muted-foreground truncate">{String(url).split("/").pop()}</p></div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-xl border border-border bg-muted/30 p-12 text-center">
-                <ImageIcon className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
-                <p className="text-sm font-medium text-muted-foreground">Geen afbeeldingen</p>
-              </div>
-            )}
-          </TabsContent>
-
-          {/* CHANNEL PREVIEW */}
-          <TabsContent value="channels" className="space-y-4">
-            <div className="grid md:grid-cols-2 gap-4">
-              <Card className="card-elevated">
-                <CardHeader className="flex flex-row items-center gap-2"><Rss className="h-4 w-4 text-muted-foreground" /><CardTitle className="text-base">Google Shopping</CardTitle></CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                  <div><span className="text-muted-foreground">Title:</span><p className="font-medium">{product.title}</p></div>
-                  <div><span className="text-muted-foreground">Price:</span><p className="font-medium">€{price.toFixed(2)}</p></div>
-                  <div className="flex items-center gap-2"><span className="text-muted-foreground">GTIN:</span>{product.variants?.some((v: any) => v.ean) ? <span className="badge-success">Aanwezig</span> : <span className="badge-warning">Ontbreekt</span>}</div>
-                  <div className="flex items-center gap-2"><span className="text-muted-foreground">Afbeelding:</span>{imageCount > 0 ? <span className="badge-success">✓</span> : <span className="badge-error">Ontbreekt</span>}</div>
-                  <div className="flex items-center gap-2"><span className="text-muted-foreground">Beschikbaarheid:</span>{totalStock > 0 ? <span className="badge-success">in_stock</span> : <span className="badge-warning">out_of_stock</span>}</div>
-                </CardContent>
-              </Card>
-              <Card className="card-elevated">
-                <CardHeader className="flex flex-row items-center gap-2"><Send className="h-4 w-4 text-muted-foreground" /><CardTitle className="text-base">WooCommerce</CardTitle></CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                  {wooFieldMapping.map((m) => (
-                    <div key={m.dbField} className="flex items-center justify-between">
-                      <span className="text-muted-foreground">{m.label}:</span>
-                      <span className="font-mono text-xs text-right max-w-[200px] truncate">
-                        {m.dbField.includes(".") ? String((product.product_prices as any)?.[m.dbField.split(".")[1]] || "—") : String((product as any)[m.dbField] || "—")}
-                      </span>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
-
-          {/* COMPARE */}
-          <TabsContent value="compare">
-            <Card className="card-elevated">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">Database vs WooCommerce</CardTitle>
-                  <Button onClick={() => refetchCompare()} disabled={isComparing} size="sm" variant="outline">
-                    <RefreshCw className={`h-4 w-4 mr-1 ${isComparing ? "animate-spin" : ""}`} /> {isComparing ? "Vergelijken..." : "Vergelijk"}
-                  </Button>
                 </div>
-              </CardHeader>
-              <CardContent>
-                {!compareData && !isComparing && (
-                  <div className="text-center py-8 text-muted-foreground"><AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-40" /><p className="text-sm">Klik op "Vergelijk"</p></div>
-                )}
-                {isComparing && <div className="text-center py-8"><RefreshCw className="h-8 w-8 mx-auto mb-2 animate-spin text-muted-foreground" /></div>}
-                {compareData && !isComparing && (
-                  <div className="space-y-3">
-                    {!compareData.differences?.exists && <Alert><AlertCircle className="h-4 w-4" /><AlertDescription>Product niet gevonden in WooCommerce.</AlertDescription></Alert>}
-                    {compareData.differences?.exists && Object.keys(compareData.differences.fields).length === 0 && <Alert><AlertDescription className="text-success">✓ Alle velden zijn synchroon</AlertDescription></Alert>}
-                    {compareData.differences?.exists && Object.keys(compareData.differences.fields).length > 0 && (
-                      <>
-                        <Alert variant="destructive"><AlertCircle className="h-4 w-4" /><AlertDescription>{Object.keys(compareData.differences.fields).length} verschil(len)</AlertDescription></Alert>
-                        {Object.entries(compareData.differences.fields).map(([field, values]: [string, any]) => (
-                          <div key={field} className="flex items-center gap-4 py-2 border-b border-border/60 text-sm">
-                            <span className="font-medium w-32">{field}</span>
-                            <div className="flex-1 grid grid-cols-2 gap-4">
-                              <div><span className="text-[11px] text-muted-foreground">DB:</span><p className="font-mono text-xs">{values.database || "—"}</p></div>
-                              <div><span className="text-[11px] text-muted-foreground">Woo:</span><p className="font-mono text-xs">{values.woocommerce || "—"}</p></div>
-                            </div>
-                          </div>
-                        ))}
-                      </>
-                    )}
-                  </div>
-                )}
               </CardContent>
             </Card>
           </TabsContent>
         </Tabs>
+
+        {/* ═══════ PUBLICATION BAR ═══════ */}
+        <Card className="card-elevated border-t-2 border-primary/20">
+          <CardContent className="py-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-sm font-medium">{filledCount} van 6 velden ingevuld</span>
+                  <Badge variant={pubStatus === 'published' ? 'default' : pubStatus === 'ready' ? 'secondary' : 'outline'} className="text-[11px]">
+                    {pubStatus === 'published' ? 'Gepubliceerd' : pubStatus === 'ready' ? 'Klaar voor publicatie' : 'Concept'}
+                  </Badge>
+                </div>
+                <Progress value={(filledCount / 6) * 100} className="h-1.5" />
+              </div>
+              <div className="flex items-center gap-2 ml-6">
+                <Button size="sm" variant="outline" onClick={() => setField("publication_status", "ready")} disabled={pubStatus === 'ready' || pubStatus === 'published'}>
+                  Markeer als klaar
+                </Button>
+                <Button size="sm" onClick={() => {
+                  setField("publication_status", "published");
+                  // Force immediate save then push
+                  if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+                  setTimeout(() => pushToWooMutation.mutate('FULL'), 200);
+                }} disabled={filledCount < 4 || pushToWooMutation.isPending}>
+                  <Send className="h-4 w-4 mr-1" />
+                  {pushToWooMutation.isPending ? "Bezig..." : "Publiceer in webshop"}
+                </Button>
+              </div>
+            </div>
+            {/* Missing fields */}
+            {missingFields.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {missingFields.map(f => (
+                  <span key={f.name} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-amber-500/10 text-amber-700 border border-amber-200">
+                    <AlertTriangle className="h-3 w-3" /> {f.name.replace(/_/g, ' ')}
+                  </span>
+                ))}
+              </div>
+            )}
+            {isVariable && variantsWithoutEan > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-amber-500/10 text-amber-700 border border-amber-200">
+                <AlertTriangle className="h-3 w-3" /> {variantsWithoutEan} variant(en) zonder EAN
+              </span>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </Layout>
   );
