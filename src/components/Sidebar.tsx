@@ -56,6 +56,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: "Google Shopping", href: "/channels/google", icon: Rss },
       { name: "WooCommerce", href: "/channels/woocommerce", icon: Send },
+      { name: "Sync Status", href: "/sync-status", icon: ArrowLeftRight },
     ],
   },
   {
