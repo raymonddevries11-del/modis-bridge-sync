@@ -13,6 +13,7 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     // Manual repair-only mode — NOT scheduled via cron.
@@ -49,7 +50,6 @@ Deno.serve(async (req) => {
 
     for (const tenant of tenants || []) {
       // Set all dirty flags to true for this tenant's products
-      // This will cause the normal drain-pending-syncs cycle to pick them up
       const { data: products, error: productsError } = await supabase
         .from('products')
         .select('id')
@@ -84,7 +84,7 @@ Deno.serve(async (req) => {
           .in('id', chunk);
       }
 
-      // Insert pending syncs for each scope (triggers will be picked up by drain)
+      // Insert pending syncs for each scope (will be picked up by batch-woo-sync)
       const scopes = [
         { scope: 'PRICE_STOCK', priority: 100 },
         { scope: 'CONTENT', priority: 60 },
@@ -105,7 +105,6 @@ Deno.serve(async (req) => {
             reason: 'repair',
           }));
 
-          // Upsert to avoid conflicts
           await supabase
             .from('pending_product_syncs')
             .upsert(rows, { onConflict: 'tenant_id,product_id,sync_scope' });
@@ -116,6 +115,24 @@ Deno.serve(async (req) => {
       console.log(`✓ Flagged ${productIds.length} products for repair (tenant: ${tenant.name})`);
     }
 
+    // Trigger batch-woo-sync to start processing the queue
+    if (!dryRun && totalProductsFlagged > 0) {
+      console.log('Triggering batch-woo-sync to start processing...');
+      try {
+        await fetch(`${supabaseUrl}/functions/v1/batch-woo-sync`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${anonKey}`,
+          },
+          body: JSON.stringify({ continuation: true }),
+        });
+        console.log('→ batch-woo-sync triggered (will self-continue for remaining items)');
+      } catch (e) {
+        console.error('Failed to trigger batch-woo-sync:', e);
+      }
+    }
+
     console.log(`Repair sync complete. ${totalProductsFlagged} products flagged across ${tenants?.length || 0} tenants.`);
 
     return new Response(
@@ -124,6 +141,7 @@ Deno.serve(async (req) => {
         mode: 'repair',
         tenantsProcessed: tenants?.length || 0,
         productsFlagged: totalProductsFlagged,
+        batchSyncTriggered: !dryRun && totalProductsFlagged > 0,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     );
