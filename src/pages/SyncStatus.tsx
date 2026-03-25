@@ -126,7 +126,19 @@ const SyncStatus = () => {
   const [page, setPage] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [sortCol, setSortCol] = useState<SortColumn>("modis_updated_at");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const queryClient = useQueryClient();
+
+  const toggleSort = (col: SortColumn) => {
+    if (sortCol === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(col);
+      setSortDir("desc");
+    }
+    setPage(0);
+  };
 
   // Reset page when filter/search changes
   useEffect(() => { setPage(0); }, [filter, search, tenantId]);
