@@ -183,7 +183,12 @@ const SyncStatus = () => {
 
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
-      const { data, error } = await query.range(from, to).order("attempts", { ascending: false }).order("modis_updated_at", { ascending: false });
+      query = query.order(sortCol, { ascending: sortDir === "asc" });
+      // Secondary sort for stability
+      if (sortCol !== "modis_updated_at") {
+        query = query.order("modis_updated_at", { ascending: false });
+      }
+      const { data, error } = await query.range(from, to);
       if (error) throw error;
       return (data ?? []) as unknown as SyncRow[];
     },
