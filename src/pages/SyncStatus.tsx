@@ -60,6 +60,9 @@ interface Stats {
 
 type Filter = "all" | "pending" | "errors" | "unlinked" | "dirty";
 
+type SortColumn = "title" | "last_synced_at" | "modis_updated_at" | "last_pushed_at" | "attempts";
+type SortDir = "asc" | "desc";
+
 const PAGE_SIZE = 50;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
