@@ -117,6 +117,29 @@ function ScopePills({ row }: { row: SyncRow }) {
   );
 }
 
+function SortableHead({ column, label, sortCol, sortDir, onSort, className }: {
+  column: SortColumn;
+  label: string;
+  sortCol: SortColumn;
+  sortDir: SortDir;
+  onSort: (col: SortColumn) => void;
+  className?: string;
+}) {
+  const active = sortCol === column;
+  return (
+    <TableHead className={cn("cursor-pointer select-none hover:bg-muted/50 transition-colors", className)} onClick={() => onSort(column)}>
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {active ? (
+          sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 text-muted-foreground/40" />
+        )}
+      </span>
+    </TableHead>
+  );
+}
+
 // ─── Page Component ──────────────────────────────────────────────────────────
 
 const SyncStatus = () => {
