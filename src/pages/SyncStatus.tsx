@@ -313,13 +313,13 @@ const SyncStatus = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8" />
-                    <TableHead>Product</TableHead>
+                    <SortableHead column="title" label="Product" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} />
                     <TableHead>Status</TableHead>
                     <TableHead>Scopes</TableHead>
-                    <TableHead>Laatste sync</TableHead>
-                    <TableHead>Modis wijziging</TableHead>
-                    <TableHead>WooCommerce wijziging</TableHead>
-                    <TableHead className="text-right">Pogingen</TableHead>
+                    <SortableHead column="last_synced_at" label="Laatste sync" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} />
+                    <SortableHead column="modis_updated_at" label="Modis wijziging" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} />
+                    <SortableHead column="last_pushed_at" label="WooCommerce wijziging" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} />
+                    <SortableHead column="attempts" label="Pogingen" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} className="text-right" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
