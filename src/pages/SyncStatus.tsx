@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import {
   Link2, CheckCircle2, Clock, AlertTriangle, Unlink,
   ChevronDown, ChevronRight, Search, RefreshCw, RotateCcw, ExternalLink, Loader2,
+  ArrowUpDown, ArrowUp, ArrowDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -58,6 +59,9 @@ interface Stats {
 }
 
 type Filter = "all" | "pending" | "errors" | "unlinked" | "dirty";
+
+type SortColumn = "title" | "last_synced_at" | "modis_updated_at" | "last_pushed_at" | "attempts";
+type SortDir = "asc" | "desc";
 
 const PAGE_SIZE = 50;
 
@@ -113,6 +117,29 @@ function ScopePills({ row }: { row: SyncRow }) {
   );
 }
 
+function SortableHead({ column, label, sortCol, sortDir, onSort, className }: {
+  column: SortColumn;
+  label: string;
+  sortCol: SortColumn;
+  sortDir: SortDir;
+  onSort: (col: SortColumn) => void;
+  className?: string;
+}) {
+  const active = sortCol === column;
+  return (
+    <TableHead className={cn("cursor-pointer select-none hover:bg-muted/50 transition-colors", className)} onClick={() => onSort(column)}>
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {active ? (
+          sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 text-muted-foreground/40" />
+        )}
+      </span>
+    </TableHead>
+  );
+}
+
 // ─── Page Component ──────────────────────────────────────────────────────────
 
 const SyncStatus = () => {
@@ -122,7 +149,19 @@ const SyncStatus = () => {
   const [page, setPage] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [sortCol, setSortCol] = useState<SortColumn>("modis_updated_at");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const queryClient = useQueryClient();
+
+  const toggleSort = (col: SortColumn) => {
+    if (sortCol === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(col);
+      setSortDir("desc");
+    }
+    setPage(0);
+  };
 
   // Reset page when filter/search changes
   useEffect(() => { setPage(0); }, [filter, search, tenantId]);
@@ -149,7 +188,7 @@ const SyncStatus = () => {
 
   // ── Data ─────────────────────────────────────────────────────────────────
   const { data: rows, isLoading } = useQuery<SyncRow[]>({
-    queryKey: ["sync-status-rows", tenantId, filter, search, page],
+    queryKey: ["sync-status-rows", tenantId, filter, search, page, sortCol, sortDir],
     enabled: !!tenantId,
     queryFn: async () => {
       let query = supabase.from("v_sync_status" as any).select("*").eq("tenant_id", tenantId!);
@@ -167,7 +206,12 @@ const SyncStatus = () => {
 
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
-      const { data, error } = await query.range(from, to).order("attempts", { ascending: false }).order("modis_updated_at", { ascending: false });
+      query = query.order(sortCol, { ascending: sortDir === "asc" });
+      // Secondary sort for stability
+      if (sortCol !== "modis_updated_at") {
+        query = query.order("modis_updated_at", { ascending: false });
+      }
+      const { data, error } = await query.range(from, to);
       if (error) throw error;
       return (data ?? []) as unknown as SyncRow[];
     },
@@ -292,13 +336,13 @@ const SyncStatus = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8" />
-                    <TableHead>Product</TableHead>
+                    <SortableHead column="title" label="Product" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} />
                     <TableHead>Status</TableHead>
                     <TableHead>Scopes</TableHead>
-                    <TableHead>Laatste sync</TableHead>
-                    <TableHead>Modis wijziging</TableHead>
-                    <TableHead>WooCommerce wijziging</TableHead>
-                    <TableHead className="text-right">Pogingen</TableHead>
+                    <SortableHead column="last_synced_at" label="Laatste sync" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} />
+                    <SortableHead column="modis_updated_at" label="Modis wijziging" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} />
+                    <SortableHead column="last_pushed_at" label="WooCommerce wijziging" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} />
+                    <SortableHead column="attempts" label="Pogingen" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} className="text-right" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
