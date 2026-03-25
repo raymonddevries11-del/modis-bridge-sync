@@ -165,7 +165,7 @@ const SyncStatus = () => {
 
   // ── Data ─────────────────────────────────────────────────────────────────
   const { data: rows, isLoading } = useQuery<SyncRow[]>({
-    queryKey: ["sync-status-rows", tenantId, filter, search, page],
+    queryKey: ["sync-status-rows", tenantId, filter, search, page, sortCol, sortDir],
     enabled: !!tenantId,
     queryFn: async () => {
       let query = supabase.from("v_sync_status" as any).select("*").eq("tenant_id", tenantId!);
