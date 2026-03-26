@@ -973,11 +973,46 @@ function FeedPreview({ tenantId, feedUrl, enabled }: { tenantId: string; feedUrl
     setLoading(true);
     try {
       const response = await fetch(feedUrl);
-      if (!response.ok) throw new Error(await response.text());
-      const xml = await response.text();
-      const itemCount = (xml.match(/<item>/g) || []).length;
-      // Show first 3000 chars as sample
-      setPreviewData({ totalItems: itemCount, sampleXml: xml.substring(0, 3000) });
+      if (!response.ok) {
+        const errText = await response.text().catch(() => `Status ${response.status}`);
+        throw new Error(errText);
+      }
+
+      // Stream-read only enough for preview (first ~50KB) instead of downloading the entire feed
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('Kan feed niet streamen');
+
+      const decoder = new TextDecoder();
+      let collected = '';
+      const PREVIEW_LIMIT = 50_000; // 50KB is plenty for preview + item counting sample
+      let done = false;
+
+      while (!done && collected.length < PREVIEW_LIMIT) {
+        const { value, done: streamDone } = await reader.read();
+        done = streamDone;
+        if (value) {
+          collected += decoder.decode(value, { stream: !done });
+        }
+      }
+
+      // Cancel the rest of the stream — we don't need it
+      reader.cancel().catch(() => {});
+
+      // Count items in collected portion and extrapolate
+      const itemsInSample = (collected.match(/<item>/g) || []).length;
+      const isComplete = done;
+
+      setPreviewData({
+        totalItems: itemsInSample,
+        sampleXml: collected.substring(0, 5000),
+      });
+
+      if (!isComplete) {
+        toast({
+          title: `Preview geladen (${itemsInSample}+ items)`,
+          description: 'De volledige feed bevat mogelijk meer items. Gebruik de feed-URL voor het complete resultaat.',
+        });
+      }
     } catch (err: any) {
       toast({ title: "Fout bij laden preview", description: err.message, variant: "destructive" });
     } finally {
@@ -1005,11 +1040,11 @@ function FeedPreview({ tenantId, feedUrl, enabled }: { tenantId: string; feedUrl
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-green-600" />
-              <span className="font-medium">{previewData.totalItems} productvarianten in de feed</span>
+              <span className="font-medium">{previewData.totalItems}+ productvarianten in de feed (preview)</span>
             </div>
             <pre className="bg-muted p-4 rounded-lg text-xs overflow-x-auto max-h-96 overflow-y-auto">
               {previewData.sampleXml}
-              {previewData.sampleXml.length >= 3000 && '\n\n... (afgekapt)'}
+              {'\n\n... (preview van eerste ~5KB)'}
             </pre>
           </div>
         )}
