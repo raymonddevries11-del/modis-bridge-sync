@@ -57,6 +57,17 @@ function formatGoogleColor(color: any, attrKleur: string | null): string | null 
   return candidates.slice(0, 3).join('/');
 }
 
+function slugifyParam(text: string): string {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/[\s_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 function slugify(text: string): string {
   if (!text) return '';
   return text
