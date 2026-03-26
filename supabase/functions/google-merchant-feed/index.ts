@@ -250,7 +250,7 @@ Deno.serve(async (req) => {
             const { data: products, error } = await supabase
               .from('products')
               .select(`
-                id, sku, title, images, color, attributes, categories, article_group,
+                id, sku, title, images, color, attributes, categories, article_group, product_type,
                 url_key, webshop_text, meta_title, meta_description, tax_code,
                 brand_id, brands!products_brand_id_fkey(name),
                 product_prices(regular, list, currency),
@@ -335,9 +335,9 @@ Deno.serve(async (req) => {
               const catNames = (cats || []).map((c: any) => typeof c === 'object' ? (c.name || '') : String(c)).join(' ');
               const genderText = `${productType} ${catNames}`.toLowerCase();
               let derivedGender = effectiveGender;
-              if (/\bdames\b/i.test(genderText)) {
+              if (/dames/i.test(genderText)) {
                 derivedGender = 'female';
-              } else if (/\bheren\b/i.test(genderText)) {
+              } else if (/heren/i.test(genderText)) {
                 derivedGender = 'male';
               }
 
