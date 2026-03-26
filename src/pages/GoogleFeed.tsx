@@ -1040,11 +1040,11 @@ function FeedPreview({ tenantId, feedUrl, enabled }: { tenantId: string; feedUrl
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-green-600" />
-              <span className="font-medium">{previewData.totalItems} productvarianten in de feed</span>
+              <span className="font-medium">{previewData.totalItems}+ productvarianten in de feed (preview)</span>
             </div>
             <pre className="bg-muted p-4 rounded-lg text-xs overflow-x-auto max-h-96 overflow-y-auto">
               {previewData.sampleXml}
-              {previewData.sampleXml.length >= 3000 && '\n\n... (afgekapt)'}
+              {'\n\n... (preview van eerste ~5KB)'}
             </pre>
           </div>
         )}
