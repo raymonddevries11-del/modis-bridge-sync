@@ -234,6 +234,17 @@ Deno.serve(async (req) => {
 
     const stream = new ReadableStream({
       async start(controller) {
+        let closed = false;
+        const safeEnqueue = (chunk: Uint8Array) => {
+          if (closed) return;
+          try { controller.enqueue(chunk); } catch { closed = true; }
+        };
+        const safeClose = () => {
+          if (closed) return;
+          try { controller.close(); } catch { /* already closed */ }
+          closed = true;
+        };
+
         try {
           // XML header
           const header = `<?xml version="1.0" encoding="UTF-8"?>
@@ -243,10 +254,10 @@ Deno.serve(async (req) => {
     <link>${escapeXml(feedConfig.shop_url || '')}</link>
     <description>${escapeXml(feedConfig.feed_description || '')}</description>
 `;
-          controller.enqueue(encoder.encode(header));
+          safeEnqueue(encoder.encode(header));
 
           // Process products in batches
-          while (true) {
+          while (!closed) {
             const { data: products, error } = await supabase
               .from('products')
               .select(`
@@ -308,7 +319,6 @@ Deno.serve(async (req) => {
 
               if (images.length === 0) {
                 imageIssueCount++;
-                // No image = skip product entirely (Google requires image)
                 continue;
               }
 
@@ -477,23 +487,28 @@ Deno.serve(async (req) => {
 
             // Enqueue batch and release memory
             if (batchXml.length > 0) {
-              controller.enqueue(encoder.encode(batchXml));
+              safeEnqueue(encoder.encode(batchXml));
             }
             batchesProcessed++;
 
-            if (products.length < productBatchSize) break;
+            if (closed || products.length < productBatchSize) break;
             productOffset += productBatchSize;
           }
 
           // XML footer
-          controller.enqueue(encoder.encode(`  </channel>\n</rss>`));
-          controller.close();
+          safeEnqueue(encoder.encode(`  </channel>\n</rss>`));
+          safeClose();
 
           console.log(`Feed streamed: ${totalItems} items in ${batchesProcessed} batches, ${colorIssueCount} color issues, ${imageIssueCount} image issues`);
         } catch (err) {
           console.error('Stream error:', err);
-          controller.error(err);
+          if (!closed) {
+            try { controller.error(err); } catch { /* already closed */ }
+          }
         }
+      },
+      cancel() {
+        // Client disconnected — no action needed
       },
     });
 
