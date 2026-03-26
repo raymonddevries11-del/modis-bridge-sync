@@ -419,7 +419,8 @@ Deno.serve(async (req) => {
                 }
 
                 if (sizeLabel) {
-                  itemXml += `\n      <g:size>${escapeXml(sizeLabel)}</g:size>`;
+                  const cleanSize = sizeLabel.split('=')[0].trim();
+                  itemXml += `\n      <g:size>${escapeXml(cleanSize)}</g:size>`;
                   itemXml += `\n      <g:size_system>EU</g:size_system>`;
                   itemXml += `\n      <g:size_type>${escapeXml(variant.size_type || 'regular')}</g:size_type>`;
                 }
