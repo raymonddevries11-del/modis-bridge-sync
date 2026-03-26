@@ -328,6 +328,21 @@ Deno.serve(async (req) => {
               const colorValue = formattedColor || (isClothingCategory ? 'Meerkleur' : null);
               if (!formattedColor) colorIssueCount++;
 
+              // Derive gender from product_type or categories
+              const articleGroup = product.article_group as any;
+              const productType = articleGroup?.description || articleGroup?.name || '';
+              const cats = product.categories as any[];
+              const catNames = (cats || []).map((c: any) => typeof c === 'object' ? (c.name || '') : String(c)).join(' ');
+              const genderText = `${productType} ${catNames}`.toLowerCase();
+              let derivedGender = effectiveGender;
+              if (/\bdames\b/i.test(genderText)) {
+                derivedGender = 'female';
+              } else if (/\bheren\b/i.test(genderText)) {
+                derivedGender = 'male';
+              }
+
+              const isVariable = product.product_type === 'variable';
+
               const variants = (product.variants as any[]) || [];
               let isFirstVariant = true;
 
@@ -339,13 +354,29 @@ Deno.serve(async (req) => {
                 const sizeLabel = variant.maat_web || variant.size_label;
                 const imageLink = images[0];
 
+                // Build variant URL with attribute params for variable products
+                let variantUrl = productUrl;
+                if (isVariable) {
+                  const params: string[] = [];
+                  const primarySize = sizeLabel ? sizeLabel.split('=')[0].trim() : null;
+                  if (primarySize) {
+                    params.push(`attribute_pa_maat=${encodeURIComponent(slugifyParam(primarySize))}`);
+                  }
+                  if (colorValue) {
+                    params.push(`attribute_pa_kleur=${encodeURIComponent(slugifyParam(colorValue.split('/')[0]))}`);
+                  }
+                  if (params.length > 0) {
+                    variantUrl = `${productUrl}?${params.join('&')}`;
+                  }
+                }
+
                 const aiTitle = aiData?.title;
                 const formulaTitle = buildTitle(product, brandName, sizeLabel);
                 let optimizedTitle: string;
                 if (aiTitle) {
-                  const primarySize = sizeLabel ? sizeLabel.split('=')[0].trim() : null;
-                  optimizedTitle = primarySize && !aiTitle.toLowerCase().includes(`maat ${primarySize.toLowerCase()}`)
-                    ? `${aiTitle} - Maat ${primarySize}` : aiTitle;
+                  const pSize = sizeLabel ? sizeLabel.split('=')[0].trim() : null;
+                  optimizedTitle = pSize && !aiTitle.toLowerCase().includes(`maat ${pSize.toLowerCase()}`)
+                    ? `${aiTitle} - Maat ${pSize}` : aiTitle;
                 } else {
                   optimizedTitle = formulaTitle;
                 }
@@ -354,7 +385,7 @@ Deno.serve(async (req) => {
       <g:id>${escapeXml(itemId)}</g:id>
       <g:title>${escapeXml(optimizedTitle)}</g:title>
       <g:description>${escapeXml(description)}</g:description>
-      <g:link>${escapeXml(productUrl)}</g:link>
+      <g:link>${escapeXml(variantUrl)}</g:link>
       <g:image_link>${escapeXml(imageLink as string)}</g:image_link>`;
 
                 for (let i = 1; i < Math.min(images.length, 10); i++) {
@@ -397,19 +428,14 @@ Deno.serve(async (req) => {
                   itemXml += `\n      <g:color>${escapeXml(colorValue)}</g:color>`;
                 }
 
-                if (effectiveGender) itemXml += `\n      <g:gender>${escapeXml(effectiveGender)}</g:gender>`;
+                if (derivedGender) itemXml += `\n      <g:gender>${escapeXml(derivedGender)}</g:gender>`;
                 if (effectiveAgeGroup) itemXml += `\n      <g:age_group>${escapeXml(effectiveAgeGroup)}</g:age_group>`;
 
-                const articleGroup = product.article_group as any;
-                const productType = articleGroup?.description || articleGroup?.name || null;
                 if (productType) {
                   itemXml += `\n      <g:product_type>${escapeXml(productType)}</g:product_type>`;
-                } else {
-                  const cats = product.categories as any[];
-                  if (cats?.length) {
-                    const catName = typeof cats[0] === 'object' ? cats[0].name : String(cats[0]);
-                    if (catName) itemXml += `\n      <g:product_type>${escapeXml(catName)}</g:product_type>`;
-                  }
+                } else if (cats?.length) {
+                  const catName = typeof cats[0] === 'object' ? cats[0].name : String(cats[0]);
+                  if (catName) itemXml += `\n      <g:product_type>${escapeXml(catName)}</g:product_type>`;
                 }
 
                 const materialValue = effectiveMaterial || (product.attributes as any)?.Materiaal || null;
