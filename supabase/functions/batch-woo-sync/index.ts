@@ -439,6 +439,7 @@ Deno.serve(async (req) => {
           console.error(`Error syncing ${productSku}:`, err.message);
           allResults.push({ sku: productSku, success: false, reason: err.message });
           totalFailed++;
+          failedProductIds.add(product.id);
         }
 
         // ── Inter-product delay ──
