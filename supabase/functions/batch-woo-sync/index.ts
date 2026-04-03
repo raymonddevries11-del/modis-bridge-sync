@@ -201,6 +201,7 @@ Deno.serve(async (req) => {
     let totalSuccess = 0;
     let totalFailed = 0;
     const allResults: any[] = [];
+    const failedProductIds = new Set<string>();
 
     for (const [tenantId, syncs] of byTenant) {
       // ── 2. Load WooCommerce config ──
