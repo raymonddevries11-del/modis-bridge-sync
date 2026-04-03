@@ -446,18 +446,54 @@ Deno.serve(async (req) => {
         await new Promise(r => setTimeout(r, INTER_PRODUCT_DELAY_MS));
       }
 
-      // ── 5. Clear processed items by ID ──
+      // ── 5. Clear processed items — only for SUCCEEDED products ──
       const processedIds = syncs.map(s => s.product_id);
-      const uniqueProductIds = [...new Set(processedIds)];
-      for (let i = 0; i < uniqueProductIds.length; i += 50) {
-        const chunk = uniqueProductIds.slice(i, i + 50);
-        await supabase
-          .from('pending_product_syncs')
-          .delete()
-          .eq('tenant_id', tenantId)
-          .in('product_id', chunk);
+      const succeededIds = [...new Set(processedIds)].filter(id => !failedProductIds.has(id));
+      
+      if (succeededIds.length > 0) {
+        for (let i = 0; i < succeededIds.length; i += 50) {
+          const chunk = succeededIds.slice(i, i + 50);
+          await supabase
+            .from('pending_product_syncs')
+            .delete()
+            .eq('tenant_id', tenantId)
+            .in('product_id', chunk);
+        }
       }
-    }
+
+      // Clear dirty flags for succeeded products
+      if (succeededIds.length > 0) {
+        for (let i = 0; i < succeededIds.length; i += 50) {
+          const chunk = succeededIds.slice(i, i + 50);
+          await supabase
+            .from('products')
+            .update({
+              dirty_price_stock: false,
+              dirty_content: false,
+              dirty_taxonomy: false,
+              dirty_media: false,
+            })
+            .in('id', chunk);
+        }
+      }
+
+      // For failed products: increment attempts, set retry delay
+      const failedIds = [...new Set(processedIds)].filter(id => failedProductIds.has(id));
+      if (failedIds.length > 0) {
+        console.log(`Re-queuing ${failedIds.length} failed products for retry`);
+        for (let i = 0; i < failedIds.length; i += 50) {
+          const chunk = failedIds.slice(i, i + 50);
+          await supabase
+            .from('pending_product_syncs')
+            .update({
+              status: 'PENDING',
+              last_seen_at: new Date().toISOString(),
+              next_retry_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+            })
+            .eq('tenant_id', tenantId)
+            .in('product_id', chunk);
+        }
+      }
 
     // ── 6. Log to changelog ──
     if (totalProcessed > 0) {
