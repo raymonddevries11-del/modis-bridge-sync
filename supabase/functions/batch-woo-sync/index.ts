@@ -289,6 +289,7 @@ Deno.serve(async (req) => {
           if (!Array.isArray(wooProducts) || wooProducts.length === 0) {
             allResults.push({ sku: productSku, success: false, reason: 'Not found in WooCommerce' });
             totalFailed++;
+            failedProductIds.add(product.id);
             continue;
           }
 
