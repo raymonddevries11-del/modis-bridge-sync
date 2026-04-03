@@ -281,6 +281,7 @@ Deno.serve(async (req) => {
           if (!searchResult.ok || !searchResult.json) {
             allResults.push({ sku: productSku, success: false, reason: `Search failed: ${searchResult.status}` });
             totalFailed++;
+            failedProductIds.add(product.id);
             continue;
           }
 
