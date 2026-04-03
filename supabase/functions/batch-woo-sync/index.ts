@@ -494,6 +494,7 @@ Deno.serve(async (req) => {
             .in('product_id', chunk);
         }
       }
+    }
 
     // ── 6. Log to changelog ──
     if (totalProcessed > 0) {
