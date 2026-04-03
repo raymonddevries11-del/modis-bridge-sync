@@ -274,6 +274,7 @@ Deno.serve(async (req) => {
             console.error(`SiteGround bot protection blocking API for ${productSku}`);
             allResults.push({ sku: productSku, success: false, reason: 'SiteGround bot block' });
             totalFailed++;
+            failedProductIds.add(product.id);
             continue;
           }
 
