@@ -234,12 +234,13 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Delete drained rows (by ID for precision)
+    // Mark drained rows as DRAINING instead of deleting —
+    // they will be cleaned up when the job succeeds, or reset if the job fails
     for (let i = 0; i < pendingIdsToDelete.length; i += 200) {
       const chunk = pendingIdsToDelete.slice(i, i + 200);
       await supabase
         .from('pending_product_syncs')
-        .delete()
+        .update({ status: 'DRAINING', locked_at: new Date().toISOString() })
         .in('id', chunk);
     }
 
