@@ -11,17 +11,21 @@ import {
   Rss,
   Send,
   Map,
-  BarChart3,
-  ChevronDown,
   ClipboardCheck,
   Image,
   ScanSearch,
   HeartPulse,
   AlertTriangle,
   ArrowLeftRight,
+  Menu,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { useState } from "react";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 interface NavItem {
   name: string;
@@ -77,7 +81,7 @@ const navGroups: NavGroup[] = [
   },
 ];
 
-export const Sidebar = () => {
+const SidebarContent = ({ onNavigate }: { onNavigate?: () => void }) => {
   const location = useLocation();
   const { signOut } = useAuth();
 
@@ -87,9 +91,9 @@ export const Sidebar = () => {
   };
 
   return (
-    <aside className="w-[260px] min-w-[260px] bg-sidebar border-r border-sidebar-border flex flex-col h-screen">
+    <>
       {/* Brand */}
-      <div className="flex items-center gap-3 h-14 px-5 border-b border-sidebar-border">
+      <div className="flex items-center gap-3 h-14 px-5 border-b border-sidebar-border shrink-0">
         <div className="h-7 w-7 rounded-lg bg-primary flex items-center justify-center">
           <span className="text-primary-foreground text-xs font-bold">M</span>
         </div>
@@ -112,6 +116,7 @@ export const Sidebar = () => {
                   <Link
                     key={item.href}
                     to={item.href}
+                    onClick={onNavigate}
                     className={cn(
                       "flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
                       active
@@ -130,9 +135,10 @@ export const Sidebar = () => {
       </nav>
 
       {/* Footer */}
-      <div className="p-3 border-t border-sidebar-border flex flex-col gap-1">
+      <div className="p-3 border-t border-sidebar-border flex flex-col gap-1 shrink-0">
         <Link
           to="/settings"
+          onClick={onNavigate}
           className={cn(
             "flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
             isActive("/settings")
@@ -144,13 +150,45 @@ export const Sidebar = () => {
           Settings
         </Link>
         <button
-          onClick={signOut}
+          onClick={() => { onNavigate?.(); signOut(); }}
           className="flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium text-sidebar-foreground hover:bg-sidebar-muted hover:text-foreground transition-colors w-full text-left"
         >
           <LogOut className="h-4 w-4" />
           Uitloggen
         </button>
       </div>
+    </>
+  );
+};
+
+export const Sidebar = () => {
+  const isMobile = useIsMobile();
+  const [open, setOpen] = useState(false);
+
+  if (isMobile) {
+    return (
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="fixed top-3 left-3 z-50 md:hidden h-10 w-10 bg-background/80 backdrop-blur-sm border border-border shadow-sm"
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
+        </SheetTrigger>
+        <SheetContent side="left" className="w-[280px] p-0 bg-sidebar text-sidebar-foreground">
+          <div className="flex flex-col h-full">
+            <SidebarContent onNavigate={() => setOpen(false)} />
+          </div>
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  return (
+    <aside className="w-[260px] min-w-[260px] bg-sidebar border-r border-sidebar-border flex flex-col h-screen">
+      <SidebarContent />
     </aside>
   );
 };
