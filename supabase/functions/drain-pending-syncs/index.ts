@@ -7,9 +7,9 @@ const corsHeaders = {
 
 // Batch sizes per scope
 const SCOPE_BATCH_SIZES: Record<string, number> = {
-  PRICE_STOCK: 50,
-  CONTENT: 20,
-  TAXONOMY: 20,
+  PRICE_STOCK: 15,
+  CONTENT: 10,
+  TAXONOMY: 10,
   MEDIA: 3,
   VARIATIONS: 5,
   FULL: 3,
@@ -24,7 +24,7 @@ const SCOPE_WINDOWS: Record<string, number> = {
   VARIATIONS: 60,
 };
 
-const DEFAULT_BATCH_SIZE = 50;
+const DEFAULT_BATCH_SIZE = 25;
 const DEFAULT_WINDOW = 60;
 
 /** Check if a tenant is rate-limited (cooldown active or no tokens) */
