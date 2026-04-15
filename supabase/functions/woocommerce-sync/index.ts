@@ -546,6 +546,78 @@ async function logChangeToChangelog(
   }
 }
 
+const SYNC_SCOPE_PRIORITIES: Record<string, number> = {
+  PRICE_STOCK: 100,
+  CONTENT: 60,
+  TAXONOMY: 50,
+  MEDIA: 40,
+  VARIATIONS: 50,
+  FULL: 100,
+};
+
+function resolveJobSyncScope(job: any): string {
+  const rawScope = job.scope || job.payload?.syncScope || 'FULL';
+  return String(rawScope).toUpperCase();
+}
+
+async function clearPendingSyncRows(
+  supabase: any,
+  tenantId: string,
+  syncScope: string,
+  productIds: string[]
+) {
+  if (productIds.length === 0) return;
+
+  let query = supabase
+    .from('pending_product_syncs')
+    .delete()
+    .eq('tenant_id', tenantId)
+    .in('product_id', productIds);
+
+  if (syncScope !== 'FULL') {
+    query = query.eq('sync_scope', syncScope);
+  }
+
+  const { error } = await query;
+  if (error) {
+    console.error(`Failed to clear pending sync rows for ${syncScope}:`, error);
+  }
+}
+
+async function upsertPendingSyncRows(
+  supabase: any,
+  tenantId: string,
+  syncScope: string,
+  productIds: string[],
+  status: 'PENDING' | 'error',
+  reason: string,
+  nextRetryAt: string | null = null,
+) {
+  if (productIds.length === 0) return;
+
+  const now = new Date().toISOString();
+  const rows = productIds.map((productId) => ({
+    product_id: productId,
+    tenant_id: tenantId,
+    sync_scope: syncScope,
+    priority: SYNC_SCOPE_PRIORITIES[syncScope] || 50,
+    status,
+    reason,
+    last_seen_at: nextRetryAt || now,
+    next_retry_at: nextRetryAt,
+    locked_at: null,
+    locked_by: null,
+    created_at: now,
+  }));
+
+  const { error } = await supabase
+    .from('pending_product_syncs')
+    .upsert(rows, { onConflict: 'tenant_id,product_id,sync_scope' });
+
+  if (error) {
+    console.error(`Failed to upsert pending sync rows for ${syncScope}/${status}:`, error);
+  }
+}
 
 async function processJob(
   job: any,
@@ -578,12 +650,13 @@ async function processJob(
       consumerSecret: tenantConfig.woocommerce_consumer_secret,
     } as WooCommerceConfig;
     const { productIds, variantIds } = job.payload;
+    const syncScope = resolveJobSyncScope(job);
 
     // Process all products internally in sequential batches to avoid creating extra jobs
     const BATCH_SIZE = 5;
     const allProductIds = productIds || [];
     const totalProducts = allProductIds.length;
-    
+
     if (totalProducts === 0 && (!variantIds || variantIds.length === 0)) {
       console.log('No productIds or variantIds in job payload - marking as done');
       await supabase.from('jobs').update({ state: 'done', error: 'No products specified' }).eq('id', job.id);
@@ -595,6 +668,9 @@ async function processJob(
     let totalFailed = 0;
     let totalProcessed = 0;
     const failedProducts: Array<{ sku: string; productId: string; error: string; errorType: string }> = [];
+    const successfulProductIds = new Set<string>();
+    const retryableFailedProductIds = new Set<string>();
+    const permanentFailedProductIds = new Set<string>();
 
     // Helper: write progress to job payload so the UI can show a live progress bar
     const updateProgress = async () => {
@@ -612,7 +688,7 @@ async function processJob(
       const batchIds = totalProducts > 0 ? allProductIds.slice(offset, offset + BATCH_SIZE) : [];
       const batchNum = Math.floor(offset / BATCH_SIZE) + 1;
       const totalBatches = Math.ceil(totalProducts / BATCH_SIZE) || 1;
-      
+
       console.log(`── Batch ${batchNum}/${totalBatches} (${batchIds.length} products) ──`);
 
       // Fetch products for this batch
@@ -662,14 +738,27 @@ async function processJob(
           await syncProductToWooCommerce(product, wooConfig, variantIds, supabase, job.tenant_id);
           totalSynced++;
           totalProcessed++;
+          successfulProductIds.add(product.id);
+          retryableFailedProductIds.delete(product.id);
+          permanentFailedProductIds.delete(product.id);
           await updateProgress();
         } catch (productError: any) {
           totalFailed++;
           totalProcessed++;
+          successfulProductIds.delete(product.id);
           await updateProgress();
           const errMsg = productError instanceof Error ? productError.message : String(productError);
           const errType = classifyWooError(errMsg);
-          
+          const shouldRetryProduct = !['validation', 'auth', 'forbidden'].includes(errType);
+
+          if (shouldRetryProduct) {
+            retryableFailedProductIds.add(product.id);
+            permanentFailedProductIds.delete(product.id);
+          } else {
+            permanentFailedProductIds.add(product.id);
+            retryableFailedProductIds.delete(product.id);
+          }
+
           console.error(`✗ Product ${product.sku} failed (${errType}): ${errMsg}`);
           failedProducts.push({
             sku: product.sku,
@@ -679,7 +768,7 @@ async function processJob(
           });
 
           // Log individual product failure to changelog
-          await logChangeToChangelog(supabase, job.tenant_id, 'WOO_PUSH_FAILED', 
+          await logChangeToChangelog(supabase, job.tenant_id, 'WOO_PUSH_FAILED',
             `Push mislukt voor ${product.sku}: ${errType} — ${errMsg.substring(0, 150)}`,
             {
               productId: product.id,
@@ -687,23 +776,11 @@ async function processJob(
               errorType: errType,
               error: errMsg.substring(0, 500),
               jobId: job.id,
-              retryable: errType !== 'validation',
+              retryable: shouldRetryProduct,
             }
           );
-
-          // Queue retryable failures for automatic retry
-          if (errType !== 'validation') {
-            try {
-              await supabase.from('pending_product_syncs').upsert({
-                product_id: product.id,
-                tenant_id: job.tenant_id,
-                reason: `auto_retry:${errType}`,
-                created_at: new Date().toISOString(),
-              }, { onConflict: 'product_id,reason' });
-            } catch (_e) { /* ignore upsert failures */ }
-          }
         }
-        
+
         // 3s delay between products to respect rate limits
         if (i < products.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 3000));
@@ -717,6 +794,38 @@ async function processJob(
       }
     }
 
+    const succeededIds = [...successfulProductIds].filter(
+      (id) => !retryableFailedProductIds.has(id) && !permanentFailedProductIds.has(id)
+    );
+    const retryIds = [...retryableFailedProductIds];
+    const fatalIds = [...permanentFailedProductIds];
+
+    await clearPendingSyncRows(supabase, job.tenant_id, syncScope, succeededIds);
+
+    if (retryIds.length > 0) {
+      const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      await upsertPendingSyncRows(
+        supabase,
+        job.tenant_id,
+        syncScope,
+        retryIds,
+        'PENDING',
+        `auto_retry:${syncScope.toLowerCase()}`,
+        retryAt,
+      );
+    }
+
+    if (fatalIds.length > 0) {
+      await upsertPendingSyncRows(
+        supabase,
+        job.tenant_id,
+        syncScope,
+        fatalIds,
+        'error',
+        `failed:${syncScope.toLowerCase()}`,
+      );
+    }
+
     console.log(`All batches complete: ${totalSynced} synced, ${totalFailed} failed out of ${totalProducts}`);
 
     // Determine job final state
@@ -725,14 +834,14 @@ async function processJob(
       : null;
 
     // Mark job as done (even with partial failures — failed products are queued for retry)
-    await supabase.from('jobs').update({ 
-      state: totalSynced === 0 && totalFailed > 0 ? 'error' : 'done', 
+    await supabase.from('jobs').update({
+      state: totalSynced === 0 && totalFailed > 0 ? 'error' : 'done',
       error: jobError,
       updated_at: new Date().toISOString(),
     }).eq('id', job.id);
-      
+
     // Log summary to changelog
-    await logChangeToChangelog(supabase, job.tenant_id, 
+    await logChangeToChangelog(supabase, job.tenant_id,
       totalFailed > 0 ? 'SYNC_PARTIAL' : 'SYNC_COMPLETED',
       totalFailed > 0
         ? `WooCommerce sync: ${totalSynced}/${totalProducts} gelukt, ${totalFailed} mislukt`
@@ -742,10 +851,13 @@ async function processJob(
         synced: totalSynced,
         failed: totalFailed,
         jobId: job.id,
+        syncScope,
+        clearedPending: succeededIds.length,
+        requeuedPending: retryIds.length,
         failedProducts: failedProducts.slice(0, 10),
       }
     );
-    
+
     console.log(`Job ${job.id} completed: ${totalSynced} synced, ${totalFailed} failed`);
   } catch (error) {
     console.error(`Job ${job.id} failed:`, error);
@@ -756,16 +868,16 @@ async function processJob(
     const maxRetries = 5;
 
     // Retry transient errors (timeouts, rate limits, network issues)
-    const shouldRetry = attempts < maxRetries && errorType !== 'validation';
+    const shouldRetry = attempts < maxRetries && !['validation', 'auth', 'forbidden'].includes(errorType);
 
     if (shouldRetry) {
       const backoffSeconds = Math.min(Math.pow(2, attempts) * 15, 600);
       console.log(`Retrying job ${job.id} in ${backoffSeconds}s (attempt ${attempts}/${maxRetries}, type: ${errorType})`);
-      
+
       await supabase
         .from('jobs')
-        .update({ 
-          state: 'ready', 
+        .update({
+          state: 'ready',
           error: `Retry ${attempts}/${maxRetries} (${errorType}): ${errorMessage.substring(0, 200)}`,
           updated_at: new Date(Date.now() + backoffSeconds * 1000).toISOString(),
         })
@@ -780,7 +892,7 @@ async function processJob(
         .from('jobs')
         .update({ state: 'error', error: `${errorType}: ${errorMessage}` })
         .eq('id', job.id);
-      
+
       await logChangeToChangelog(supabase, job.tenant_id, 'SYNC_FAILED',
         `WooCommerce sync definitief mislukt (${errorType}) na ${attempts} pogingen`,
         { error: errorMessage, attempts, jobId: job.id, errorType }
