@@ -281,6 +281,38 @@ async function checkQueueHealth(supabase: any, queueSize: number, scaling: Scali
   }
 }
 
+async function triggerPendingDrain() {
+  try {
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/drain-pending-syncs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({}),
+    });
+
+    const responseText = await response.text();
+    let payload: any = {};
+
+    try {
+      payload = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      payload = { raw: responseText };
+    }
+
+    if (!response.ok) {
+      throw new Error(payload?.error || `drain-pending-syncs failed with status ${response.status}`);
+    }
+
+    console.log(`↳ drain-pending-syncs: drained=${payload?.drained ?? 0}, jobs=${payload?.jobs ?? 0}, skipped=${payload?.skipped ?? false}`);
+    return payload;
+  } catch (error) {
+    console.error('Non-fatal: failed to trigger drain-pending-syncs:', error);
+    return null;
+  }
+}
+
 /** Execute a single job — returns true on success */
 async function executeJob(
   supabase: any,
@@ -636,6 +668,8 @@ serve(async (req) => {
       loadScalingConfig(supabase),
     ]);
 
+    const drainResult = chainDepth === 0 ? await triggerPendingDrain() : null;
+
     // Get current queue size for scaling decision
     const { count: queueSize } = await supabase
       .from('jobs')
@@ -647,6 +681,10 @@ serve(async (req) => {
     const isHighLoad = currentQueueSize >= scaling.queueAlertThreshold;
     const batchSize = isHighLoad ? scaling.scaleBatchSize : scaling.normalBatchSize;
     const concurrency = isHighLoad ? Math.min(scaling.concurrency + 1, 5) : scaling.concurrency;
+
+    if (drainResult && ((drainResult.jobs ?? 0) > 0 || (drainResult.drained ?? 0) > 0)) {
+      console.log(`Pending drain activated before scheduling: ${drainResult.drained ?? 0} items, ${drainResult.jobs ?? 0} jobs`);
+    }
 
     if (isHighLoad) {
       console.log(`⚡ High load: ${currentQueueSize} jobs — batch=${batchSize}, concurrency=${concurrency}`);
@@ -690,6 +728,7 @@ serve(async (req) => {
         concurrency,
         chainDepth,
         scaled: isHighLoad,
+        drainResult,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
