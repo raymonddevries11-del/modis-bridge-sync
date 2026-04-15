@@ -1,6 +1,8 @@
 name: SFTP Image Sync
 
 on:
+  schedule:
+    - cron: '0 2 * * *'  # Elke nacht om 02:00 UTC
   workflow_dispatch:
     inputs:
       batch_size:
